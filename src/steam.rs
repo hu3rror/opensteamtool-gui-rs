@@ -1,0 +1,57 @@
+//! Steam 安装路径检测（注册表）与 steam.exe 启动。
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use winreg::enums::*;
+use winreg::{HKEY, RegKey};
+
+/// 按顺序尝试的注册表位置：(hive, 子键路径)。
+const STEAM_REG_PATHS: [(HKEY, &str); 3] = [
+    (HKEY_CURRENT_USER, r"Software\Valve\Steam"),
+    (HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Valve\Steam"),
+    (HKEY_LOCAL_MACHINE, r"SOFTWARE\Valve\Steam"),
+];
+
+/// 检测 Steam 安装路径：按顺序尝试注册表，返回第一个有效且 `exists()` 的路径。
+pub fn detect_steam_path() -> Option<PathBuf> {
+    for (hive, subkey) in STEAM_REG_PATHS {
+        let key = match RegKey::predef(hive).open_subkey(subkey) {
+            Ok(k) => k,
+            Err(_) => continue, // 尝试下一个注册表位置
+        };
+        let value: Result<String, _> = key.get_value("SteamPath");
+        if let Ok(path) = value {
+            let p = PathBuf::from(path);
+            if p.is_dir() {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
+/// 校验 `Steam 目录\steam.exe` 存在，并以 Steam 目录为 cwd 启动。
+pub fn launch_steam(steam_dir: &Path) -> Result<(), String> {
+    let exe = steam_dir.join("steam.exe");
+    if !exe.is_file() {
+        return Err("steam.exe not found".into());
+    }
+    Command::new(&exe)
+        .current_dir(steam_dir)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("spawn steam.exe: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn launch_missing_steam_errors() {
+        let dir = std::env::temp_dir().join(format!("ost_launch_{}", std::process::id()));
+        let err = launch_steam(&dir).unwrap_err();
+        assert!(err.contains("steam.exe"), "err: {err}");
+    }
+}
