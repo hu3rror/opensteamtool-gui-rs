@@ -180,6 +180,14 @@ pub struct App {
     window_visible: bool,
     /// 上次检测到的 Steam 运行状态（边沿检测用）。
     steam_was_running: bool,
+    /// 首次帧后按内容高度自适应窗口（消除底部大留白）。
+    autosized: bool,
+    /// 显示窗口后待发送的 Focus（置顶）命令。
+    pending_focus: bool,
+    /// 最小化时是否自动隐藏到托盘（托盘菜单勾选项）。
+    minimize_to_tray: bool,
+    /// 上一帧是否处于最小化（检测最小化按钮被点击）。
+    was_minimized: bool,
 }
 /// 读取系统中文字体数据（微软雅黑/黑体/宋体，首个可读的生效），无则 None。
 fn read_system_cjk_font() -> Option<egui::FontData> {
@@ -241,6 +249,7 @@ impl App {
             strings.app_title,
             strings.tray_show,
             strings.tray_quit,
+            strings.tray_minimize,
         );
 
         let mut app = Self {
@@ -262,6 +271,10 @@ impl App {
             tray,
             window_visible: true,
             steam_was_running: steam_running,
+            autosized: false,
+            pending_focus: false,
+            minimize_to_tray: true,
+            was_minimized: false,
         };
         app.refresh_steam_running();
         app
@@ -293,12 +306,14 @@ impl App {
         }
     }
 
-    /// 控制窗口显隐；显示时附带聚焦。
+    /// 控制窗口显隐；显示时置 pending_focus，下一帧再发 Focus（刚变可见时 Focus 无效）。
     fn set_window_visible(&mut self, visible: bool) {
         self.window_visible = visible;
         self.ctx.send_viewport_cmd(egui::ViewportCommand::Visible(visible));
         if visible {
-            self.ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            self.pending_focus = true;
+            // 立即唤醒下一帧消费 pending_focus（否则隐藏→可见后 repaint 间隔会拉长）。
+            self.ctx.request_repaint();
         }
     }
 
@@ -310,6 +325,8 @@ impl App {
         while let Some(action) = tray.poll() {
             actions.push(action);
         }
+        // 菜单勾选状态在 poll 后读取（CheckMenuItem 点击后自动翻转）。
+        let minimize_checked = tray.is_minimize_to_tray();
         for action in actions {
             match action {
                 TrayAction::ToggleVisible => self.set_window_visible(!self.window_visible),
@@ -317,6 +334,7 @@ impl App {
                 TrayAction::Quit => {
                     self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
+                TrayAction::ToggleMinimizeToTray => self.minimize_to_tray = minimize_checked,
             }
         }
     }
@@ -374,6 +392,10 @@ impl App {
                         Err(e) => self.notice = Some((false, e)),
                     }
                     self.refresh_steam_running();
+                    // 应用补丁后 Steam 已重启运行：直接隐藏到托盘（不依赖边沿检测）。
+                    if self.steam_running {
+                        self.set_window_visible(false);
+                    }
                 }
                 Msg::Uninstalled(res) => {
                     self.busy = false;
@@ -386,6 +408,11 @@ impl App {
                         Err(e) => self.notice = Some((false, e)),
                     }
                     self.refresh_steam_running();
+                    // 卸载并重启（UninstallAndRestart）后 Steam 已运行 → 隐藏；
+                    // 仅退出并卸载（ExitAndUninstall）Steam 未运行 → 保持显示。
+                    if self.steam_running {
+                        self.set_window_visible(false);
+                    }
                 }
                 Msg::Launched(res) => {
                     self.busy = false;
@@ -395,6 +422,10 @@ impl App {
                         Err(e) => self.notice = Some((false, e)),
                     }
                     self.refresh_steam_running();
+                    // 正常启动成功后 Steam 已运行：直接隐藏到托盘（不依赖边沿检测）。
+                    if self.steam_running {
+                        self.set_window_visible(false);
+                    }
                 }
             }
         }
@@ -765,8 +796,19 @@ impl App {
 }
 
 impl eframe::App for App {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let ctx = ui.ctx().clone();
+    /// 非渲染逻辑：托盘事件 / Steam 状态 / 最小化检测 / 后台消息。
+    ///
+    /// 关键：窗口最小化或隐藏时，eframe 0.36 **不调用 `App::ui`**，只调用本方法
+    /// （见 `run_ui_and_paint` 的 `!show_ui` 分支 → `App::logic`）。因此最小化检测、
+    /// 托盘事件处理与 repaint 续命必须放在这里，否则窗口一最小化逻辑就停摆。
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // 帧首先消费 pending_focus（上帧 set_window_visible(true) 置位）：
+        // 刚变可见时同帧 Focus 无效，须等窗口真正可见后再补发（置顶）。
+        if self.pending_focus {
+            self.pending_focus = false;
+            self.ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+
         // 处理托盘事件（左键/菜单），可能改变窗口显隐。
         self.handle_tray_events();
 
@@ -774,18 +816,55 @@ impl eframe::App for App {
         if self.last_steam_check.elapsed() >= STEAM_REFRESH_INTERVAL {
             self.refresh_steam_running();
         }
-        ctx.request_repaint_after(STEAM_REFRESH_INTERVAL);
 
+        // 隐藏到托盘/最小化时窗口不可见：用短间隔驱动，托盘事件与最小化检测响应快。
+        let repaint_interval = if self.window_visible {
+            STEAM_REFRESH_INTERVAL
+        } else {
+            std::time::Duration::from_millis(100)
+        };
+        ctx.request_repaint_after(repaint_interval);
+
+        // 最小化时自动隐藏到托盘（勾选项开启时）。
+        let minimized = ctx.input(|i| i.viewport().minimized).unwrap_or(false);
+        if minimized && !self.was_minimized && self.minimize_to_tray {
+            // 先取消最小化再隐藏，避免最小化状态残留。
+            self.ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            self.ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            self.window_visible = false;
+        }
+        self.was_minimized = minimized;
+
+        // 后台线程消息处理（忙碌/部署/启动等状态更新）。
         self.handle_messages();
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        // 非渲染逻辑（托盘 / Steam / 最小化 / 消息）已迁至 App::logic：
+        // 窗口最小化或隐藏时 eframe 不调用 ui()，只调用 logic()。
 
         // eframe 0.36：root Ui 无背景色，须用 CentralPanel 填充整个窗口并绘制背景。
+        let mut content_h = 0.0f32;
         egui::CentralPanel::default().show(ui, |ui| {
             self.top_bar(ui);
             self.card1(ui);
             self.card2(ui);
             self.card3(ui);
             self.notice_bar(ui);
+            // 用布局游标测内容底部（min_rect 被 CentralPanel 撑满，不可用）。
+            content_h = ui.cursor().top();
         });
+
+        // 首帧按内容高度自适应窗口（消除底部大留白），只设置一次。
+        if !self.autosized && content_h > 0.0 {
+            self.autosized = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                ui.available_width(),
+                // 上下 inner_margin 各 8 + 底部预留一行 notice（自适应后不留大留白，但 busy/notice 有处可放）。
+                content_h + 36.0,
+            )));
+        }
 
         // 「关闭 Steam 并继续」确认弹窗。
         if let Some(action) = self.confirm {

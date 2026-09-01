@@ -1,8 +1,7 @@
 //! Windows 系统托盘：图标、菜单与事件（左键单击/双击切换显隐，右键菜单显示/退出）。
 
-use tray_icon::menu::{Menu, MenuEvent, MenuItem};
+use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder, TrayIconEvent};
-
 /// 托盘动作，UI 线程在 `App::ui` 中消费。
 pub enum TrayAction {
     /// 左键单击/双击：切换窗口显隐。
@@ -11,6 +10,8 @@ pub enum TrayAction {
     Show,
     /// 菜单「退出」。
     Quit,
+    /// 勾选/取消「最小化时自动隐藏到托盘」。
+    ToggleMinimizeToTray,
 }
 
 pub struct Tray {
@@ -18,6 +19,8 @@ pub struct Tray {
     _menu: Menu,
     show_item: MenuItem,
     quit_item: MenuItem,
+    /// 「最小化时自动隐藏到托盘」勾选项。
+    minimize_item: CheckMenuItem,
 }
 
 impl Tray {
@@ -26,11 +29,14 @@ impl Tray {
         tooltip: &str,
         show_label: &str,
         quit_label: &str,
+        minimize_label: &str,
     ) -> Option<Self> {
         let show_item = MenuItem::new(show_label, true, None);
         let quit_item = MenuItem::new(quit_label, true, None);
+        let minimize_item = CheckMenuItem::new(minimize_label, true, true, None);
         let menu = Menu::new();
         menu.append(&show_item).ok()?;
+        menu.append(&minimize_item).ok()?;
         menu.append(&quit_item).ok()?;
 
         let tray = TrayIconBuilder::new()
@@ -46,7 +52,13 @@ impl Tray {
             _menu: menu,
             show_item,
             quit_item,
+            minimize_item,
         })
+    }
+
+    /// 「最小化时自动隐藏到托盘」是否勾选。
+    pub fn is_minimize_to_tray(&self) -> bool {
+        self.minimize_item.is_checked()
     }
 
     /// 拉取一个待处理的托盘动作（非阻塞）。无事件返回 None。
@@ -69,6 +81,9 @@ impl Tray {
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             if event.id == self.show_item.id() {
                 return Some(TrayAction::Show);
+            }
+            if event.id == self.minimize_item.id() {
+                return Some(TrayAction::ToggleMinimizeToTray);
             }
             if event.id == self.quit_item.id() {
                 return Some(TrayAction::Quit);

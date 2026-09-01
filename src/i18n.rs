@@ -90,6 +90,8 @@ pub struct Strings {
     pub tray_quit: &'static str,
     /// Steam 未运行时「卸载补丁」按钮（无需先退出 Steam）。
     pub btn_uninstall: &'static str,
+    /// 托盘菜单「最小化时自动隐藏到托盘」勾选项。
+    pub tray_minimize: &'static str,
 }
 
 impl Strings {
@@ -152,6 +154,7 @@ impl Strings {
             tray_show: "显示",
             tray_quit: "退出",
             btn_uninstall: "卸载补丁",
+            tray_minimize: "最小化时自动隐藏到托盘",
         }
     }
 
@@ -207,6 +210,7 @@ impl Strings {
             tray_show: "Show",
             tray_quit: "Quit",
             btn_uninstall: "Remove Patch",
+            tray_minimize: "Minimize to tray automatically",
         }
     }
 }
