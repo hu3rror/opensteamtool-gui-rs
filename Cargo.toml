@@ -20,6 +20,7 @@ windows-sys = { version = "0.61", features = ["Win32_Globalization"] }
 serde_json = "1"
 rfd = "0.17"
 image = { version = "0.25", default-features = false, features = ["ico"] }
+tray-icon = "0.24"
 
 [profile.release]
 opt-level = "z"

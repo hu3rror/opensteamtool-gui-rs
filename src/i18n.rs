@@ -86,6 +86,8 @@ pub struct Strings {
     pub busy_launching: &'static str,
     pub busy_downloading: &'static str,
     pub busy_killing: &'static str,
+    pub tray_show: &'static str,
+    pub tray_quit: &'static str,
 }
 
 impl Strings {
@@ -145,6 +147,8 @@ impl Strings {
             busy_launching: "正在启动...",
             busy_downloading: "正在下载...",
             busy_killing: "正在关闭 Steam...",
+            tray_show: "显示",
+            tray_quit: "退出",
         }
     }
 
@@ -197,6 +201,8 @@ impl Strings {
             busy_launching: "Launching...",
             busy_downloading: "Downloading...",
             busy_killing: "Closing Steam...",
+            tray_show: "Show",
+            tray_quit: "Quit",
         }
     }
 }
