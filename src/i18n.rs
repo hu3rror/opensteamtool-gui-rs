@@ -88,6 +88,8 @@ pub struct Strings {
     pub busy_killing: &'static str,
     pub tray_show: &'static str,
     pub tray_quit: &'static str,
+    /// Steam 未运行时「卸载补丁」按钮（无需先退出 Steam）。
+    pub btn_uninstall: &'static str,
 }
 
 impl Strings {
@@ -149,6 +151,7 @@ impl Strings {
             busy_killing: "正在关闭 Steam...",
             tray_show: "显示",
             tray_quit: "退出",
+            btn_uninstall: "卸载补丁",
         }
     }
 
@@ -203,6 +206,7 @@ impl Strings {
             busy_killing: "Closing Steam...",
             tray_show: "Show",
             tray_quit: "Quit",
+            btn_uninstall: "Remove Patch",
         }
     }
 }

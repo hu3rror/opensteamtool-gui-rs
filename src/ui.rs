@@ -565,6 +565,7 @@ impl App {
 
     fn card1(&mut self, ui: &mut egui::Ui) {
         card_frame().show(ui, |ui| {
+            ui.set_width(ui.available_width()); // 卡片撑满窗口宽度，避免堆在左侧
             ui.label(
                 egui::RichText::new(self.strings.card1_title).size(14.0).strong().color(TEXT_INK),
             );
@@ -590,6 +591,7 @@ impl App {
 
     fn card2(&mut self, ui: &mut egui::Ui) {
         card_frame().show(ui, |ui| {
+            ui.set_width(ui.available_width()); // 卡片撑满窗口宽度
             ui.label(
                 egui::RichText::new(self.strings.card2_title).size(14.0).strong().color(TEXT_INK),
             );
@@ -615,8 +617,14 @@ impl App {
                 let ctx = ui.ctx().clone();
                 match self.status {
                     DeployStatus::Applied => {
+                        // Steam 运行中 →「退出 Steam 并卸载补丁」；已退出 → 直接「卸载补丁」。
+                        let uninstall_label = if self.steam_running {
+                            self.strings.btn_exit_and_uninstall
+                        } else {
+                            self.strings.btn_uninstall
+                        };
                         if ui
-                            .add_enabled(!self.busy, primary_button(self.strings.btn_exit_and_uninstall))
+                            .add_enabled(!self.busy, primary_button(uninstall_label))
                             .clicked()
                         {
                             self.request_action(&ctx, Action::ExitAndUninstall);
@@ -655,6 +663,7 @@ impl App {
 
     fn card3(&mut self, ui: &mut egui::Ui) {
         card_frame().show(ui, |ui| {
+            ui.set_width(ui.available_width()); // 卡片撑满窗口宽度
             ui.label(
                 egui::RichText::new(self.strings.card3_title).size(14.0).strong().color(TEXT_INK),
             );
