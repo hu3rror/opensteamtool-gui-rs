@@ -14,26 +14,29 @@ use crate::steam;
 use crate::updater::{self, OnlineInfo, UpdateError};
 use crate::tray::{Tray, TrayAction};
 
-// ---------- kill-ai-slop 约束的浅色主题 ----------
+// ---------- kill-ai-slop 约束的浅色主题 (Apple-inspired refined palette) ----------
 // 单一 accent（Steam 蓝）+ 中性底 + hairline 卡片；无渐变/毛玻璃/发光点。
-const ACCENT: egui::Color32 = egui::Color32::from_rgb(0x1B, 0x6F, 0xD8);
-const PANEL_BG: egui::Color32 = egui::Color32::from_rgb(0xF4, 0xF6, 0xF8);
+const ACCENT: egui::Color32 = egui::Color32::from_rgb(0x00, 0x71, 0xE3); // Apple / Steam Vibrant Blue
+const ACCENT_ACTIVE: egui::Color32 = egui::Color32::from_rgb(0x00, 0x58, 0xB0);
+const PANEL_BG: egui::Color32 = egui::Color32::from_rgb(0xF5, 0xF5, 0xF7); // macOS Light System Gray
 const CARD_BG: egui::Color32 = egui::Color32::from_rgb(0xFF, 0xFF, 0xFF);
-const BORDER: egui::Color32 = egui::Color32::from_rgb(0xE1, 0xE4, 0xE8);
-const TEXT_INK: egui::Color32 = egui::Color32::from_rgb(0x1A, 0x1D, 0x21);
-const TEXT_WEAK: egui::Color32 = egui::Color32::from_rgb(0x6B, 0x72, 0x80);
-const DOT_RUNNING: egui::Color32 = egui::Color32::from_rgb(0x2E, 0xA0, 0x43);
-const DOT_STOPPED: egui::Color32 = egui::Color32::from_rgb(0x9A, 0xA1, 0xA9);
-const ERR_RED: egui::Color32 = egui::Color32::from_rgb(0xC0, 0x39, 0x2B);
+const BORDER: egui::Color32 = egui::Color32::from_rgb(0xE5, 0xE5, 0xEA); // Hairline System Border
+const BORDER_SUBTLE: egui::Color32 = egui::Color32::from_rgb(0xEB, 0xEB, 0xF0);
+const FILL_SECONDARY: egui::Color32 = egui::Color32::from_rgb(0xF2, 0xF2, 0xF7); // System Fill
+const TEXT_INK: egui::Color32 = egui::Color32::from_rgb(0x1D, 0x1D, 0x1F); // Apple Primary Label
+const TEXT_WEAK: egui::Color32 = egui::Color32::from_rgb(0x6E, 0x6E, 0x73); // Apple Secondary Label
+const DOT_RUNNING: egui::Color32 = egui::Color32::from_rgb(0x34, 0xC7, 0x59); // Apple Green
+const DOT_STOPPED: egui::Color32 = egui::Color32::from_rgb(0x8E, 0x8E, 0x93); // Apple Gray
+const ERR_RED: egui::Color32 = egui::Color32::from_rgb(0xFF, 0x3B, 0x30); // Apple Red
 
 fn install_theme(ctx: &egui::Context) {
     let mut visuals = egui::Visuals::light();
     visuals.panel_fill = PANEL_BG;
     visuals.window_fill = CARD_BG;
-    visuals.faint_bg_color = egui::Color32::from_rgb(0xEE, 0xF0, 0xF3);
+    visuals.faint_bg_color = FILL_SECONDARY;
     visuals.extreme_bg_color = CARD_BG;
     visuals.override_text_color = Some(TEXT_INK);
-    let radius = egui::CornerRadius::same(4);
+    let radius = egui::CornerRadius::same(8);
     for w in [
         &mut visuals.widgets.noninteractive,
         &mut visuals.widgets.inactive,
@@ -42,9 +45,21 @@ fn install_theme(ctx: &egui::Context) {
     ] {
         w.corner_radius = radius;
     }
+    visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, BORDER);
     visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, BORDER);
+    visuals.widgets.inactive.bg_fill = CARD_BG;
     visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, ACCENT);
+    visuals.widgets.hovered.bg_fill = FILL_SECONDARY;
+    visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, ACCENT_ACTIVE);
+    visuals.selection.bg_fill = egui::Color32::from_rgb(0xD0, 0xE2, 0xFF);
+    visuals.selection.stroke = egui::Stroke::new(1.0, ACCENT);
+
     ctx.set_visuals(visuals);
+    ctx.all_styles_mut(|s| {
+        s.spacing.item_spacing = egui::vec2(10.0, 10.0);
+        s.spacing.window_margin = egui::Margin::symmetric(20, 18);
+        s.spacing.button_padding = egui::vec2(14.0, 7.0);
+    });
 }
 
 /// 卡片容器：白底 + hairline 边框 + 小圆角。
@@ -52,36 +67,79 @@ fn card_frame() -> Frame {
     Frame::new()
         .fill(CARD_BG)
         .stroke(egui::Stroke::new(1.0, BORDER))
-        .corner_radius(egui::CornerRadius::same(6))
-        .inner_margin(egui::Margin::symmetric(12, 10))
+        .corner_radius(egui::CornerRadius::same(10))
+        .inner_margin(egui::Margin::symmetric(18, 16))
 }
 
 /// 主操作按钮：accent 填充 + 白字。
 fn primary_button(text: &str) -> egui::Button<'static> {
-    egui::Button::new(egui::RichText::new(text).color(egui::Color32::WHITE))
-        .fill(ACCENT)
-        .stroke(egui::Stroke::NONE)
-        .corner_radius(egui::CornerRadius::same(4))
-        .min_size(egui::vec2(0.0, 30.0))
+    egui::Button::new(
+        egui::RichText::new(text)
+            .size(13.0)
+            .strong()
+            .color(egui::Color32::WHITE),
+    )
+    .fill(ACCENT)
+    .stroke(egui::Stroke::NONE)
+    .corner_radius(egui::CornerRadius::same(8))
+    .min_size(egui::vec2(0.0, 34.0))
 }
 
-/// 次操作按钮：透明底 + hairline 边框。
+/// 次操作按钮：透明/浅灰底 + hairline 边框。
 fn secondary_button(text: &str) -> egui::Button<'static> {
-    egui::Button::new(egui::RichText::new(text).color(TEXT_INK))
-        .fill(egui::Color32::TRANSPARENT)
+    egui::Button::new(egui::RichText::new(text).size(13.0).color(TEXT_INK))
+        .fill(FILL_SECONDARY)
         .stroke(egui::Stroke::new(1.0, BORDER))
-        .corner_radius(egui::CornerRadius::same(4))
-        .min_size(egui::vec2(0.0, 30.0))
+        .corner_radius(egui::CornerRadius::same(8))
+        .min_size(egui::vec2(0.0, 34.0))
+}
+
+/// 幽灵/小号操作按钮（如语言切换）。
+fn ghost_button(text: &str) -> egui::Button<'static> {
+    egui::Button::new(egui::RichText::new(text).size(12.0).strong().color(TEXT_WEAK))
+        .fill(FILL_SECONDARY)
+        .stroke(egui::Stroke::new(1.0, BORDER))
+        .corner_radius(egui::CornerRadius::same(7))
+        .min_size(egui::vec2(40.0, 28.0))
 }
 
 /// 真实状态用小圆点 + 词（kill-ai-slop：平色小点，无光晕无脉冲）。
-fn status_dot(ui: &mut egui::Ui, color: egui::Color32, text: &str) {
-    ui.horizontal(|ui| {
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
-        ui.painter().circle_filled(rect.center(), 4.0, color);
-        ui.add_space(6.0);
-        ui.label(text);
-    });
+fn status_badge(ui: &mut egui::Ui, color: egui::Color32, text: &str) {
+    Frame::new()
+        .fill(FILL_SECONDARY)
+        .stroke(egui::Stroke::new(1.0, BORDER_SUBTLE))
+        .corner_radius(egui::CornerRadius::same(7))
+        .inner_margin(egui::Margin::symmetric(10, 6))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(7.0, 7.0), egui::Sense::hover());
+                ui.painter().circle_filled(rect.center(), 3.5, color);
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new(text).size(12.5).color(TEXT_INK));
+            });
+        });
+}
+
+/// 键值展示标签（版本信息卡片用）。
+fn value_tag(ui: &mut egui::Ui, label: &str, value: &str, is_highlight: bool) {
+    Frame::new()
+        .fill(FILL_SECONDARY)
+        .stroke(egui::Stroke::new(1.0, BORDER_SUBTLE))
+        .corner_radius(egui::CornerRadius::same(7))
+        .inner_margin(egui::Margin::symmetric(10, 6))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(label).size(12.0).color(TEXT_WEAK));
+                ui.add_space(6.0);
+                let val_color = if is_highlight { ACCENT } else { TEXT_INK };
+                ui.label(
+                    egui::RichText::new(value)
+                        .size(12.5)
+                        .strong()
+                        .color(val_color),
+                );
+            });
+        });
 }
 
 /// Steam 运行状态缓存刷新间隔。
@@ -110,7 +168,6 @@ enum Action {
     /// 卸载补丁并重启 Steam。
     UninstallAndRestart,
 }
-
 
 /// 后台操作期间显示的忙碌文案类型。
 #[derive(Clone, Copy)]
@@ -189,6 +246,7 @@ pub struct App {
     /// 上一帧是否处于最小化（检测最小化按钮被点击）。
     was_minimized: bool,
 }
+
 /// 读取系统中文字体数据（微软雅黑/黑体/宋体，首个可读的生效），无则 None。
 fn read_system_cjk_font() -> Option<egui::FontData> {
     const CANDIDATES: [(&str, u32); 4] = [
@@ -227,7 +285,6 @@ fn install_cjk_font(ctx: &egui::Context) {
         ],
     ));
 }
-
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -309,7 +366,8 @@ impl App {
     /// 控制窗口显隐；显示时置 pending_focus，下一帧再发 Focus（刚变可见时 Focus 无效）。
     fn set_window_visible(&mut self, visible: bool) {
         self.window_visible = visible;
-        self.ctx.send_viewport_cmd(egui::ViewportCommand::Visible(visible));
+        self.ctx
+            .send_viewport_cmd(egui::ViewportCommand::Visible(visible));
         if visible {
             self.pending_focus = true;
             // 立即唤醒下一帧消费 pending_focus（否则隐藏→可见后 repaint 间隔会拉长）。
@@ -362,6 +420,7 @@ impl App {
             UpdateError::Io(detail) => format!("{}: {detail}", self.strings.err_write_local),
         }
     }
+
     /// 处理后台消息：更新状态与提示。
     fn handle_messages(&mut self) {
         while let Ok(msg) = self.rx.try_recv() {
@@ -467,11 +526,12 @@ impl App {
         if (action == Action::Launch
             || action == Action::ApplyAndLaunch
             || action == Action::UninstallAndRestart)
-            && !steam_path.join("steam.exe").is_file() {
-                self.confirm = None;
-                self.notice = Some((false, self.strings.err_steam_exe_missing.to_string()));
-                return;
-            }
+            && !steam_path.join("steam.exe").is_file()
+        {
+            self.confirm = None;
+            self.notice = Some((false, self.strings.err_steam_exe_missing.to_string()));
+            return;
+        }
 
         self.busy = true;
         self.busy_kind = Some(match action {
@@ -506,7 +566,9 @@ impl App {
                 });
             }
             Action::Launch => {
-                self.spawn(ctx, move || Msg::Launched(steam::launch_steam(Path::new(&steam_dir))));
+                self.spawn(ctx, move || {
+                    Msg::Launched(steam::launch_steam(Path::new(&steam_dir)))
+                });
             }
             Action::ExitAndUninstall => {
                 let s = self.strings;
@@ -585,67 +647,93 @@ impl App {
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(
-                egui::RichText::new(self.strings.app_title).size(17.0).strong().color(TEXT_INK),
+                egui::RichText::new(self.strings.app_title)
+                    .size(16.0)
+                    .strong()
+                    .color(TEXT_INK),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add(secondary_button(self.lang.toggle_label())).clicked() {
+                if ui.add(ghost_button(self.lang.toggle_label())).clicked() {
                     self.toggle_lang();
                 }
             });
         });
-        ui.add_space(4.0);
-        ui.separator();
+        ui.add_space(6.0);
     }
 
     fn card1(&mut self, ui: &mut egui::Ui) {
         card_frame().show(ui, |ui| {
             ui.set_width(ui.available_width()); // 卡片撑满窗口宽度，避免堆在左侧
             ui.label(
-                egui::RichText::new(self.strings.card1_title).size(14.0).strong().color(TEXT_INK),
+                egui::RichText::new(self.strings.card1_title)
+                    .size(13.5)
+                    .strong()
+                    .color(TEXT_INK),
             );
-            ui.add_space(6.0);
+            ui.add_space(10.0);
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(self.strings.steam_path_label).color(TEXT_WEAK));
-                let resp = ui.add(
+                let edit_width = (ui.available_width() - 92.0).max(120.0);
+                let resp = ui.add_sized(
+                    egui::vec2(edit_width, 34.0),
                     egui::TextEdit::singleline(&mut self.steam_path)
-                        .desired_width(ui.available_width() - 90.0),
+                        .margin(egui::Margin::symmetric(10, 7))
+                        .hint_text(self.strings.steam_path_label),
                 );
                 if resp.changed() {
                     self.refresh_status();
                 }
-                if ui.add(secondary_button(self.strings.browse)).clicked()
-                    && let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                        self.steam_path = dir.display().to_string();
-                        self.refresh_status();
-                    }
+                if ui
+                    .add_sized(
+                        egui::vec2(82.0, 34.0),
+                        secondary_button(self.strings.browse),
+                    )
+                    .clicked()
+                    && let Some(dir) = rfd::FileDialog::new().pick_folder()
+                {
+                    self.steam_path = dir.display().to_string();
+                    self.refresh_status();
+                }
             });
         });
-        ui.add_space(6.0);
+        ui.add_space(10.0);
     }
 
     fn card2(&mut self, ui: &mut egui::Ui) {
         card_frame().show(ui, |ui| {
             ui.set_width(ui.available_width()); // 卡片撑满窗口宽度
             ui.label(
-                egui::RichText::new(self.strings.card2_title).size(14.0).strong().color(TEXT_INK),
+                egui::RichText::new(self.strings.card2_title)
+                    .size(13.5)
+                    .strong()
+                    .color(TEXT_INK),
             );
-            ui.add_space(6.0);
+            ui.add_space(10.0);
 
             // 部署状态（真实状态：平色圆点 + 词）。
-            match self.status {
-                DeployStatus::InvalidPath => {
-                    ui.label(egui::RichText::new(self.strings.status_invalid).color(TEXT_WEAK));
+            ui.horizontal(|ui| {
+                match self.status {
+                    DeployStatus::InvalidPath => {
+                        status_badge(ui, ERR_RED, self.strings.status_invalid);
+                    }
+                    DeployStatus::Applied => {
+                        status_badge(ui, DOT_RUNNING, self.strings.status_applied);
+                    }
+                    DeployStatus::NotApplied => {
+                        status_badge(ui, DOT_STOPPED, self.strings.status_not_applied);
+                    }
                 }
-                DeployStatus::Applied => status_dot(ui, DOT_RUNNING, self.strings.status_applied),
-                DeployStatus::NotApplied => status_dot(ui, DOT_STOPPED, self.strings.status_not_applied),
-            }
-            ui.add_space(4.0);
-            if self.steam_running {
-                status_dot(ui, DOT_RUNNING, self.strings.steam_running);
-            } else {
-                status_dot(ui, DOT_STOPPED, self.strings.steam_not_running);
-            }
-            ui.add_space(10.0);
+
+                if self.status != DeployStatus::InvalidPath {
+                    ui.add_space(8.0);
+                    if self.steam_running {
+                        status_badge(ui, DOT_RUNNING, self.strings.steam_running);
+                    } else {
+                        status_badge(ui, DOT_STOPPED, self.strings.steam_not_running);
+                    }
+                }
+            });
+
+            ui.add_space(14.0);
 
             ui.horizontal(|ui| {
                 let ctx = ui.ctx().clone();
@@ -663,8 +751,12 @@ impl App {
                         {
                             self.request_action(&ctx, Action::ExitAndUninstall);
                         }
+                        ui.add_space(4.0);
                         if ui
-                            .add_enabled(!self.busy, secondary_button(self.strings.btn_uninstall_and_restart))
+                            .add_enabled(
+                                !self.busy,
+                                secondary_button(self.strings.btn_uninstall_and_restart),
+                            )
                             .clicked()
                         {
                             self.request_action(&ctx, Action::UninstallAndRestart);
@@ -672,13 +764,20 @@ impl App {
                     }
                     DeployStatus::NotApplied => {
                         if ui
-                            .add_enabled(!self.busy, primary_button(self.strings.btn_apply_and_launch))
+                            .add_enabled(
+                                !self.busy,
+                                primary_button(self.strings.btn_apply_and_launch),
+                            )
                             .clicked()
                         {
                             self.request_action(&ctx, Action::ApplyAndLaunch);
                         }
+                        ui.add_space(4.0);
                         if ui
-                            .add_enabled(!self.busy, secondary_button(self.strings.btn_launch_normal))
+                            .add_enabled(
+                                !self.busy,
+                                secondary_button(self.strings.btn_launch_normal),
+                            )
                             .clicked()
                         {
                             self.request_action(&ctx, Action::Launch);
@@ -687,76 +786,79 @@ impl App {
                     DeployStatus::InvalidPath => {
                         // 无有效路径时禁用操作按钮。
                         ui.add_enabled(false, primary_button(self.strings.btn_apply_and_launch));
+                        ui.add_space(4.0);
                         ui.add_enabled(false, secondary_button(self.strings.btn_launch_normal));
                     }
                 }
             });
         });
-        ui.add_space(6.0);
+        ui.add_space(10.0);
     }
 
     fn card3(&mut self, ui: &mut egui::Ui) {
         card_frame().show(ui, |ui| {
             ui.set_width(ui.available_width()); // 卡片撑满窗口宽度
             ui.label(
-                egui::RichText::new(self.strings.card3_title).size(14.0).strong().color(TEXT_INK),
-            );
-            ui.add_space(6.0);
-
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(self.strings.local_version).color(TEXT_WEAK));
-                ui.add_space(6.0);
-                ui.label(
-                    egui::RichText::new(
-                        self.local_version.as_deref().unwrap_or(self.strings.unknown),
-                    )
+                egui::RichText::new(self.strings.card3_title)
+                    .size(13.5)
                     .strong()
                     .color(TEXT_INK),
-                );
-            });
+            );
+            ui.add_space(10.0);
 
+            let local_ver = self
+                .local_version
+                .as_deref()
+                .unwrap_or(self.strings.unknown);
             let online_version: String = match &self.update_state {
                 UpdateState::Idle => self.strings.unknown.to_string(),
                 UpdateState::Checking => self.strings.checking.to_string(),
                 UpdateState::Checked(Ok(info)) => info.version.clone(),
                 UpdateState::Checked(Err(_)) => self.strings.unknown.to_string(),
             };
+
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(self.strings.online_version).color(TEXT_WEAK));
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new(online_version).strong().color(TEXT_INK));
+                value_tag(ui, self.strings.local_version, local_ver, false);
+                ui.add_space(8.0);
+                let is_new = match &self.update_state {
+                    UpdateState::Checked(Ok(info)) => {
+                        info.version != local_ver && !info.version.is_empty()
+                    }
+                    _ => false,
+                };
+                value_tag(ui, self.strings.online_version, &online_version, is_new);
             });
-            ui.add_space(10.0);
+
+            ui.add_space(14.0);
 
             let ctx = ui.ctx().clone();
             let mut do_check = false;
             let mut do_download: Option<OnlineInfo> = None;
 
             // 先只收集按钮意图，避免借用冲突。
-            {
-                ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(!self.busy, secondary_button(self.strings.btn_check_update))
-                        .clicked()
-                    {
-                        do_check = true;
-                    }
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(!self.busy, secondary_button(self.strings.btn_check_update))
+                    .clicked()
+                {
+                    do_check = true;
+                }
 
-                    if let UpdateState::Checked(Ok(info)) = &self.update_state {
-                        let local = self.local_version.as_deref().unwrap_or("");
-                        if info.version != local && !info.version.is_empty()
-                            && ui
-                                .add_enabled(
-                                    !self.busy,
-                                    primary_button(self.strings.btn_download_and_extract),
-                                )
-                                .clicked()
-                            {
-                                do_download = Some(info.clone());
-                            }
+                if let UpdateState::Checked(Ok(info)) = &self.update_state {
+                    let local = self.local_version.as_deref().unwrap_or("");
+                    if info.version != local
+                        && !info.version.is_empty()
+                        && ui
+                            .add_enabled(
+                                !self.busy,
+                                primary_button(self.strings.btn_download_and_extract),
+                            )
+                            .clicked()
+                    {
+                        do_download = Some(info.clone());
                     }
-                });
-            }
+                }
+            });
 
             if do_check {
                 self.check_update(&ctx);
@@ -765,35 +867,65 @@ impl App {
                 self.download_update(&ctx, info);
             }
 
-            ui.add_space(2.0);
-
             // 线上状态行：已是最新 / 发现新版本 / 错误（错误保留红，其余中性）。
             if let UpdateState::Checked(res) = &self.update_state {
+                ui.add_space(8.0);
                 match res {
                     Ok(info) if self.local_version.as_deref() == Some(info.version.as_str()) => {
-                        ui.label(egui::RichText::new(self.strings.up_to_date).color(TEXT_INK));
+                        ui.label(
+                            egui::RichText::new(format!("●  {}", self.strings.up_to_date))
+                                .size(12.0)
+                                .color(TEXT_WEAK),
+                        );
                     }
                     Ok(_) => {
-                        ui.label(egui::RichText::new(self.strings.new_version).color(ACCENT));
+                        ui.label(
+                            egui::RichText::new(format!("●  {}", self.strings.new_version))
+                                .size(12.0)
+                                .strong()
+                                .color(ACCENT),
+                        );
                     }
                     Err(e) => {
-                        ui.label(egui::RichText::new(self.update_error_text(e)).color(ERR_RED));
+                        ui.label(
+                            egui::RichText::new(format!("●  {}", self.update_error_text(e)))
+                                .size(12.0)
+                                .color(ERR_RED),
+                        );
                     }
                 }
             }
         });
-        ui.add_space(6.0);
+        ui.add_space(10.0);
     }
 
     fn notice_bar(&mut self, ui: &mut egui::Ui) {
         // busy / 成功改中性文字；错误保留红色（kill-ai-slop：收敛语义三连）。
         if let Some(kind) = self.busy_kind {
-            ui.label(egui::RichText::new(kind.label(&self.strings)).color(TEXT_WEAK));
+            ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(7.0, 7.0), egui::Sense::hover());
+                ui.painter().circle_filled(rect.center(), 3.5, ACCENT);
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new(kind.label(&self.strings))
+                        .size(12.5)
+                        .color(TEXT_WEAK),
+                );
+            });
             return;
         }
         if let Some((ok, text)) = &self.notice {
-            let color = if *ok { TEXT_INK } else { ERR_RED };
-            ui.label(egui::RichText::new(text).color(color));
+            let (color, dot_color) = if *ok {
+                (TEXT_INK, DOT_RUNNING)
+            } else {
+                (ERR_RED, ERR_RED)
+            };
+            ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(7.0, 7.0), egui::Sense::hover());
+                ui.painter().circle_filled(rect.center(), 3.5, dot_color);
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new(text).size(12.5).color(color));
+            });
         }
     }
 }
@@ -855,6 +987,7 @@ impl eframe::App for App {
             self.card2(ui);
             self.card3(ui);
             self.notice_bar(ui);
+
             // 用布局游标测内容底部（min_rect 被 CentralPanel 撑满，不可用）。
             content_h = ui.cursor().top();
         });
@@ -863,8 +996,7 @@ impl eframe::App for App {
         if !self.autosized && content_h > 0.0 {
             self.autosized = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
-                ui.available_width(),
-                // 上下 inner_margin 各 8 + 底部预留一行 notice（自适应后不留大留白，但 busy/notice 有处可放）。
+                ui.available_width().max(620.0),
                 content_h + 36.0,
             )));
         }
@@ -876,13 +1008,14 @@ impl eframe::App for App {
             egui::Modal::new(egui::Id::new("confirm_close_steam")).show(&ctx, |ui| {
                 ui.set_width(320.0);
                 ui.heading(self.strings.confirm_title);
-                ui.add_space(6.0);
+                ui.add_space(8.0);
                 ui.label(self.strings.confirm_close_steam);
-                ui.add_space(10.0);
+                ui.add_space(14.0);
                 ui.horizontal(|ui| {
                     if ui.add(primary_button(self.strings.yes)).clicked() {
                         confirmed = true;
                     }
+                    ui.add_space(4.0);
                     if ui.add(secondary_button(self.strings.no)).clicked() {
                         cancelled = true;
                     }
@@ -921,10 +1054,8 @@ mod tests {
             .or_default()
             .push("cjk-test".into());
 
-        let mut fonts = egui::epaint::text::Fonts::new(
-            egui::epaint::text::TextOptions::default(),
-            defs,
-        );
+        let mut fonts =
+            egui::epaint::text::Fonts::new(egui::epaint::text::TextOptions::default(), defs);
         assert!(fonts.has_glyph(&egui::FontId::proportional(14.0), 'X')); // latin sanity
         assert!(fonts.has_glyph(&egui::FontId::proportional(14.0), '中'));
     }
@@ -933,11 +1064,8 @@ mod tests {
     #[test]
     fn default_fonts_lack_cjk_glyph() {
         let defs = egui::FontDefinitions::default();
-        let mut fonts = egui::epaint::text::Fonts::new(
-            egui::epaint::text::TextOptions::default(),
-            defs,
-        );
+        let mut fonts =
+            egui::epaint::text::Fonts::new(egui::epaint::text::TextOptions::default(), defs);
         assert!(!fonts.has_glyph(&egui::FontId::proportional(14.0), '中'));
     }
 }
-
