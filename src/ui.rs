@@ -317,6 +317,15 @@ impl App {
         }
     }
 
+    /// 后台操作完成后若 Steam 已运行（重启/启动类成功），隐藏窗口到托盘。
+    /// 不依赖 `refresh_steam_running` 的 false→true 边沿：Steam 本就运行时边沿不触发。
+    /// 场景区分靠 `steam_running` 本身：退出并卸载（不重启）→ Steam 未运行 → 不隐藏。
+    fn hide_if_steam_running(&mut self) {
+        if self.steam_running {
+            self.set_window_visible(false);
+        }
+    }
+
     /// 处理托盘事件：切换显隐 / 显示 / 退出。
     fn handle_tray_events(&mut self) {
         let Some(tray) = &self.tray else { return };
@@ -393,9 +402,7 @@ impl App {
                     }
                     self.refresh_steam_running();
                     // 应用补丁后 Steam 已重启运行：直接隐藏到托盘（不依赖边沿检测）。
-                    if self.steam_running {
-                        self.set_window_visible(false);
-                    }
+                    self.hide_if_steam_running();
                 }
                 Msg::Uninstalled(res) => {
                     self.busy = false;
@@ -409,10 +416,8 @@ impl App {
                     }
                     self.refresh_steam_running();
                     // 卸载并重启（UninstallAndRestart）后 Steam 已运行 → 隐藏；
-                    // 仅退出并卸载（ExitAndUninstall）Steam 未运行 → 保持显示。
-                    if self.steam_running {
-                        self.set_window_visible(false);
-                    }
+                    // 仅退出并卸载（ExitAndUninstall）Steam 未运行 → 保持显示（见 hide_if_steam_running）。
+                    self.hide_if_steam_running();
                 }
                 Msg::Launched(res) => {
                     self.busy = false;
@@ -423,9 +428,7 @@ impl App {
                     }
                     self.refresh_steam_running();
                     // 正常启动成功后 Steam 已运行：直接隐藏到托盘（不依赖边沿检测）。
-                    if self.steam_running {
-                        self.set_window_visible(false);
-                    }
+                    self.hide_if_steam_running();
                 }
             }
         }
@@ -806,7 +809,7 @@ impl eframe::App for App {
         // 刚变可见时同帧 Focus 无效，须等窗口真正可见后再补发（置顶）。
         if self.pending_focus {
             self.pending_focus = false;
-            self.ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         }
 
         // 处理托盘事件（左键/菜单），可能改变窗口显隐。
@@ -829,8 +832,8 @@ impl eframe::App for App {
         let minimized = ctx.input(|i| i.viewport().minimized).unwrap_or(false);
         if minimized && !self.was_minimized && self.minimize_to_tray {
             // 先取消最小化再隐藏，避免最小化状态残留。
-            self.ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-            self.ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             self.window_visible = false;
         }
         self.was_minimized = minimized;
