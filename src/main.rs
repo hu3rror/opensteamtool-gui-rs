@@ -5,11 +5,11 @@
 mod dll;
 mod i18n;
 mod process;
-mod workflow;
 mod steam;
 mod tray;
-mod updater;
 mod ui;
+mod updater;
+mod workflow;
 
 use eframe::egui;
 
