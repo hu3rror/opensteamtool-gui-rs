@@ -1,5 +1,7 @@
 //! 双语文案与系统语言检测。
 
+use crate::updater::UpdateError;
+use crate::workflow::{Action, BusyKind, Op, Precheck, WorkflowError};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Lang {
     Zh,
@@ -95,6 +97,58 @@ pub struct Strings {
 }
 
 impl Strings {
+    /// 在线更新错误 → 当前语言提示文案。
+    pub fn update_error(&self, e: &UpdateError) -> String {
+        match e {
+            UpdateError::Network(detail) => format!("{}: {detail}", self.err_network),
+            UpdateError::NoZip => self.err_no_zip.to_string(),
+            UpdateError::Parse(_) => self.err_parse_version.to_string(),
+            UpdateError::NoTargetDll => self.err_no_dlls.to_string(),
+            UpdateError::Io(detail) => format!("{}: {detail}", self.err_write_local),
+        }
+    }
+
+    /// 「操作」执行阶段错误 → 当前语言提示文案（按失败步骤取前缀）。
+    pub fn workflow_error_text(&self, e: &WorkflowError) -> String {
+        let prefix = match e.op {
+            Op::CloseSteam => self.err_kill_steam,
+            Op::Deploy => self.err_deploy,
+            Op::Uninstall => self.err_uninstall,
+            Op::Launch => self.err_launch,
+        };
+        format!("{}: {}", prefix, e.message)
+    }
+
+    /// 前置校验错误 → 当前语言提示文案。
+    pub fn precheck_text(&self, precheck: &Precheck) -> String {
+        match precheck {
+            Precheck::NoSteamDir => self.err_no_steam_dir.to_string(),
+            Precheck::NoTargetDlls => self.err_no_dlls.to_string(),
+            Precheck::NoSteamExe => self.err_steam_exe_missing.to_string(),
+        }
+    }
+
+    /// 「操作」成功后 → 当前语言提示文案。
+    pub fn success_text(&self, action: Action) -> &'static str {
+        match action {
+            Action::ApplyAndLaunch => self.ok_deployed,
+            Action::Launch => self.ok_launched,
+            Action::ExitAndUninstall | Action::UninstallAndRestart => self.ok_uninstalled,
+        }
+    }
+
+    /// 忙碌态阶段 → 当前语言提示文案。
+    pub fn busy_label(&self, kind: BusyKind) -> &'static str {
+        match kind {
+            BusyKind::Deploying => self.busy_deploying,
+            BusyKind::Uninstalling => self.busy_uninstalling,
+            BusyKind::Launching => self.busy_launching,
+            BusyKind::Checking => self.checking,
+            BusyKind::Downloading => self.busy_downloading,
+            BusyKind::ClosingSteam => self.busy_killing,
+        }
+    }
+
     pub fn new(lang: Lang) -> Self {
         match lang {
             Lang::Zh => Self::zh(),
@@ -211,6 +265,94 @@ impl Strings {
             tray_quit: "Quit",
             btn_uninstall: "Remove Patch",
             tray_minimize: "Minimize to tray automatically",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_error_maps_both_langs() {
+        let zh = Strings::new(Lang::Zh);
+        let en = Strings::new(Lang::En);
+        for s in [&zh, &en] {
+            assert_eq!(
+                s.update_error(&UpdateError::Network("t".into())),
+                format!("{}: t", s.err_network)
+            );
+            assert_eq!(s.update_error(&UpdateError::NoZip), s.err_no_zip);
+            assert_eq!(
+                s.update_error(&UpdateError::Parse("p".into())),
+                s.err_parse_version
+            );
+            assert_eq!(s.update_error(&UpdateError::NoTargetDll), s.err_no_dlls);
+            assert_eq!(
+                s.update_error(&UpdateError::Io("i".into())),
+                format!("{}: i", s.err_write_local)
+            );
+        }
+    }
+
+    #[test]
+    fn workflow_error_text_prefixes_by_op() {
+        let s = Strings::new(Lang::En);
+        let cases = [
+            (Op::CloseSteam, s.err_kill_steam),
+            (Op::Deploy, s.err_deploy),
+            (Op::Uninstall, s.err_uninstall),
+            (Op::Launch, s.err_launch),
+        ];
+        for (op, prefix) in cases {
+            let e = WorkflowError {
+                op,
+                message: "m".into(),
+            };
+            assert_eq!(s.workflow_error_text(&e), format!("{prefix}: m"));
+        }
+    }
+
+    #[test]
+    fn precheck_text_maps_both_langs() {
+        let zh = Strings::new(Lang::Zh);
+        let en = Strings::new(Lang::En);
+        for s in [&zh, &en] {
+            assert_eq!(s.precheck_text(&Precheck::NoSteamDir), s.err_no_steam_dir);
+            assert_eq!(s.precheck_text(&Precheck::NoTargetDlls), s.err_no_dlls);
+            assert_eq!(
+                s.precheck_text(&Precheck::NoSteamExe),
+                s.err_steam_exe_missing
+            );
+        }
+    }
+
+    #[test]
+    fn success_text_maps_by_action() {
+        let zh = Strings::new(Lang::Zh);
+        let en = Strings::new(Lang::En);
+        for s in [&zh, &en] {
+            assert_eq!(s.success_text(Action::ApplyAndLaunch), s.ok_deployed);
+            assert_eq!(s.success_text(Action::Launch), s.ok_launched);
+            assert_eq!(s.success_text(Action::ExitAndUninstall), s.ok_uninstalled);
+            assert_eq!(
+                s.success_text(Action::UninstallAndRestart),
+                s.ok_uninstalled
+            );
+        }
+    }
+
+    #[test]
+    fn busy_label_maps_by_kind() {
+        let zh = Strings::new(Lang::Zh);
+        let en = Strings::new(Lang::En);
+        for s in [&zh, &en] {
+            assert_eq!(s.busy_label(BusyKind::Deploying), s.busy_deploying);
+            assert_eq!(s.busy_label(BusyKind::Uninstalling), s.busy_uninstalling);
+            assert_eq!(s.busy_label(BusyKind::Launching), s.busy_launching);
+            assert_eq!(s.busy_label(BusyKind::Checking), s.checking);
+            assert_eq!(s.busy_label(BusyKind::Downloading), s.busy_downloading);
+            assert_eq!(s.busy_label(BusyKind::ClosingSteam), s.busy_killing);
         }
     }
 }

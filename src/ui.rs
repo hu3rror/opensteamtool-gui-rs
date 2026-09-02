@@ -96,11 +96,16 @@ fn secondary_button(text: &str) -> egui::Button<'static> {
 
 /// 幽灵/小号操作按钮（如语言切换）。
 fn ghost_button(text: &str) -> egui::Button<'static> {
-    egui::Button::new(egui::RichText::new(text).size(12.0).strong().color(TEXT_WEAK))
-        .fill(FILL_SECONDARY)
-        .stroke(egui::Stroke::new(1.0, BORDER))
-        .corner_radius(egui::CornerRadius::same(7))
-        .min_size(egui::vec2(40.0, 28.0))
+    egui::Button::new(
+        egui::RichText::new(text)
+            .size(12.0)
+            .strong()
+            .color(TEXT_WEAK),
+    )
+    .fill(FILL_SECONDARY)
+    .stroke(egui::Stroke::new(1.0, BORDER))
+    .corner_radius(egui::CornerRadius::same(7))
+    .min_size(egui::vec2(40.0, 28.0))
 }
 
 /// 真实状态用小圆点 + 词（kill-ai-slop：平色小点，无光晕无脉冲）。
@@ -150,31 +155,6 @@ enum Msg {
     Downloaded(Result<(), UpdateError>),
     /// 组合操作完成（成功/失败，携带动作以取成功文案）。
     WorkflowDone(Action, Result<(), workflow::WorkflowError>),
-}
-
-impl BusyKind {
-    /// 当前语言下的忙碌文案。
-    fn label(self, s: &Strings) -> &'static str {
-        match self {
-            BusyKind::Deploying => s.busy_deploying,
-            BusyKind::Uninstalling => s.busy_uninstalling,
-            BusyKind::Launching => s.busy_launching,
-            BusyKind::Checking => s.checking,
-            BusyKind::Downloading => s.busy_downloading,
-            BusyKind::ClosingSteam => s.busy_killing,
-        }
-    }
-}
-
-impl Action {
-    /// 组合操作成功后的提示文案。
-    fn success_text(self, s: &Strings) -> &'static str {
-        match self {
-            Action::ApplyAndLaunch => s.ok_deployed,
-            Action::Launch => s.ok_launched,
-            Action::ExitAndUninstall | Action::UninstallAndRestart => s.ok_uninstalled,
-        }
-    }
 }
 
 /// 线上更新状态。
@@ -381,37 +361,6 @@ impl App {
         self.status = dll::check_status(Path::new(self.steam_path.trim()));
     }
 
-    /// 将更新错误映射为当前语言的提示文案。
-    fn update_error_text(&self, e: &UpdateError) -> String {
-        match e {
-            UpdateError::Network(detail) => format!("{}: {detail}", self.strings.err_network),
-            UpdateError::NoZip => self.strings.err_no_zip.to_string(),
-            UpdateError::Parse(_) => self.strings.err_parse_version.to_string(),
-            UpdateError::NoTargetDll => self.strings.err_no_dlls.to_string(),
-            UpdateError::Io(detail) => format!("{}: {detail}", self.strings.err_write_local),
-        }
-    }
-
-    /// 前置校验错误 → 当前语言的提示文案。
-    fn precheck_text(&self, precheck: &workflow::Precheck) -> String {
-        match precheck {
-            workflow::Precheck::NoSteamDir => self.strings.err_no_steam_dir.to_string(),
-            workflow::Precheck::NoTargetDlls => self.strings.err_no_dlls.to_string(),
-            workflow::Precheck::NoSteamExe => self.strings.err_steam_exe_missing.to_string(),
-        }
-    }
-
-    /// 执行阶段错误 → 当前语言的提示文案（按失败步骤取前缀）。
-    fn workflow_error_text(&self, e: &workflow::WorkflowError) -> String {
-        let prefix = match e.op {
-            workflow::Op::CloseSteam => self.strings.err_kill_steam,
-            workflow::Op::Deploy => self.strings.err_deploy,
-            workflow::Op::Uninstall => self.strings.err_uninstall,
-            workflow::Op::Launch => self.strings.err_launch,
-        };
-        format!("{}: {}", prefix, e.message)
-    }
-
     /// 处理后台消息：更新状态与提示。
     fn handle_messages(&mut self) {
         while let Ok(msg) = self.rx.try_recv() {
@@ -425,7 +374,7 @@ impl App {
                             true,
                             format!("{}: {}", self.strings.new_version, info.version),
                         )),
-                        Err(e) => Some((false, self.update_error_text(e))),
+                        Err(e) => Some((false, self.strings.update_error(e))),
                     };
                     self.update_state = UpdateState::Checked(res);
                 }
@@ -437,7 +386,7 @@ impl App {
                             self.local_version = dll::read_local_version(&dll::dll_dir());
                             self.notice = Some((true, self.strings.ok_downloaded.to_string()));
                         }
-                        Err(e) => self.notice = Some((false, self.update_error_text(&e))),
+                        Err(e) => self.notice = Some((false, self.strings.update_error(&e))),
                     }
                 }
                 Msg::WorkflowDone(action, res) => {
@@ -447,9 +396,9 @@ impl App {
                         Ok(()) => {
                             self.refresh_status();
                             self.notice =
-                                Some((true, action.success_text(&self.strings).to_string()));
+                                Some((true, self.strings.success_text(action).to_string()));
                         }
-                        Err(e) => self.notice = Some((false, self.workflow_error_text(&e))),
+                        Err(e) => self.notice = Some((false, self.strings.workflow_error_text(&e))),
                     }
                     self.steam_running = self.steam_monitor.rescan();
                     // 启动/重启类成功后 Steam 已运行 → 直接隐藏到托盘（不依赖边沿检测）；
@@ -481,7 +430,7 @@ impl App {
             Ok(ops) => ops,
             Err(precheck) => {
                 self.confirm = None;
-                self.notice = Some((false, self.precheck_text(&precheck)));
+                self.notice = Some((false, self.strings.precheck_text(&precheck)));
                 return;
             }
         };
@@ -778,7 +727,7 @@ impl App {
                     }
                     Err(e) => {
                         ui.label(
-                            egui::RichText::new(format!("●  {}", self.update_error_text(e)))
+                            egui::RichText::new(format!("●  {}", self.strings.update_error(e)))
                                 .size(12.0)
                                 .color(ERR_RED),
                         );
@@ -797,7 +746,7 @@ impl App {
                 ui.painter().circle_filled(rect.center(), 3.5, ACCENT);
                 ui.add_space(6.0);
                 ui.label(
-                    egui::RichText::new(kind.label(&self.strings))
+                    egui::RichText::new(self.strings.busy_label(kind))
                         .size(12.5)
                         .color(TEXT_WEAK),
                 );
