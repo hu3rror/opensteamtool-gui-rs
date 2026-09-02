@@ -715,11 +715,11 @@ impl App {
                     DeployStatus::InvalidPath => {
                         status_badge(ui, ERR_RED, self.strings.status_invalid);
                     }
-                    DeployStatus::Applied => {
-                        status_badge(ui, DOT_RUNNING, self.strings.status_applied);
+                    DeployStatus::Deployed => {
+                        status_badge(ui, DOT_RUNNING, self.strings.status_deployed);
                     }
-                    DeployStatus::NotApplied => {
-                        status_badge(ui, DOT_STOPPED, self.strings.status_not_applied);
+                    DeployStatus::NotDeployed => {
+                        status_badge(ui, DOT_STOPPED, self.strings.status_not_deployed);
                     }
                 }
 
@@ -738,7 +738,7 @@ impl App {
             ui.horizontal(|ui| {
                 let ctx = ui.ctx().clone();
                 match self.status {
-                    DeployStatus::Applied => {
+                    DeployStatus::Deployed => {
                         // Steam 运行中 →「退出 Steam 并卸载补丁」；已退出 → 直接「卸载补丁」。
                         let uninstall_label = if self.steam_running {
                             self.strings.btn_exit_and_uninstall
@@ -762,7 +762,7 @@ impl App {
                             self.request_action(&ctx, Action::UninstallAndRestart);
                         }
                     }
-                    DeployStatus::NotApplied => {
+                    DeployStatus::NotDeployed => {
                         if ui
                             .add_enabled(
                                 !self.busy,

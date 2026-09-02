@@ -15,9 +15,9 @@ pub enum DeployStatus {
     /// 路径为空或不是目录。
     InvalidPath,
     /// 三个目标 DLL 全部存在于 Steam 目录。
-    Applied,
-    /// 未应用。
-    NotApplied,
+    Deployed,
+    /// 未部署。
+    NotDeployed,
 }
 
 /// dlls/ 目录：exe 同目录下的 `dlls` 文件夹（便携版）。
@@ -46,9 +46,9 @@ pub fn check_status(steam_dir: &Path) -> DeployStatus {
         .iter()
         .all(|dll| steam_dir.join(dll).is_file())
     {
-        DeployStatus::Applied
+        DeployStatus::Deployed
     } else {
-        DeployStatus::NotApplied
+        DeployStatus::NotDeployed
     }
 }
 
@@ -94,21 +94,21 @@ mod tests {
     }
 
     #[test]
-    fn empty_dir_is_not_applied() {
+    fn empty_dir_is_not_deployed() {
         let dir = std::env::temp_dir().join(format!("ost_test_{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
-        assert_eq!(check_status(&dir), DeployStatus::NotApplied);
+        assert_eq!(check_status(&dir), DeployStatus::NotDeployed);
         fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
-    fn full_dll_set_is_applied() {
-        let dir = std::env::temp_dir().join(format!("ost_applied_{}", std::process::id()));
+    fn full_dll_set_is_deployed() {
+        let dir = std::env::temp_dir().join(format!("ost_deployed_{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         for dll in TARGET_DLLS {
             fs::write(dir.join(dll), b"x").unwrap();
         }
-        assert_eq!(check_status(&dir), DeployStatus::Applied);
+        assert_eq!(check_status(&dir), DeployStatus::Deployed);
         fs::remove_dir_all(&dir).ok();
     }
 }
