@@ -2,18 +2,17 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::time::Instant;
 
 use eframe::egui;
 use egui::Frame;
 
 use crate::dll::{self, DeployStatus};
 use crate::i18n::{Lang, Strings};
-use crate::process;
+use crate::process::{self, SteamEvent, SteamMonitor};
 use crate::steam;
+use crate::tray::{Tray, TrayAction};
 use crate::updater::{self, OnlineInfo, UpdateError};
 use crate::workflow::{self, Action, BusyKind};
-use crate::tray::{Tray, TrayAction};
 
 // ---------- kill-ai-slop 约束的浅色主题 (Apple-inspired refined palette) ----------
 // 单一 accent（Steam 蓝）+ 中性底 + hairline 卡片；无渐变/毛玻璃/发光点。
@@ -143,9 +142,6 @@ fn value_tag(ui: &mut egui::Ui, label: &str, value: &str, is_highlight: bool) {
         });
 }
 
-/// Steam 运行状态缓存刷新间隔。
-const STEAM_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
-
 /// 后台线程 → UI 线程的消息。
 enum Msg {
     /// 后台阶段变化（如 kill Steam 完成后进入部署阶段）。
@@ -194,7 +190,7 @@ pub struct App {
     steam_path: String,
     status: DeployStatus,
     steam_running: bool,
-    last_steam_check: Instant,
+    steam_monitor: SteamMonitor,
     local_version: Option<String>,
     update_state: UpdateState,
     busy: bool,
@@ -212,8 +208,6 @@ pub struct App {
     tray: Option<Tray>,
     /// 窗口当前是否可见（托盘显隐切换用）。
     window_visible: bool,
-    /// 上次检测到的 Steam 运行状态（边沿检测用）。
-    steam_was_running: bool,
     /// 首次帧后按内容高度自适应窗口（消除底部大留白）。
     autosized: bool,
     /// 显示窗口后待发送的 Focus（置顶）命令。
@@ -263,6 +257,19 @@ fn install_cjk_font(ctx: &egui::Context) {
     ));
 }
 
+/// 自动隐身策略（ADR-0001）：Steam 边沿事件 + 当前窗口显隐 → 目标显隐。
+/// Some(true)=显示、Some(false)=隐藏、None=不变。
+fn auto_tray_policy(event: SteamEvent, window_visible: bool) -> Option<bool> {
+    match (event, window_visible) {
+        // 启动 → 隐藏。
+        (SteamEvent::Started, true) => Some(false),
+        // 退出 → 弹出。
+        (SteamEvent::Stopped, false) => Some(true),
+        // 其余：状态与显隐一致，不变。
+        _ => None,
+    }
+}
+
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         install_cjk_font(&cc.egui_ctx);
@@ -276,7 +283,8 @@ impl App {
         let steam_dir = Path::new(&steam_path);
         let status = dll::check_status(steam_dir);
         let local_version = dll::read_local_version(&dll::dll_dir());
-        let steam_running = process::is_steam_running();
+        let steam_monitor = SteamMonitor::new();
+        let steam_running = steam_monitor.is_running();
 
         let tray = Tray::new(
             crate::tray::load_icon(),
@@ -286,13 +294,13 @@ impl App {
             strings.tray_minimize,
         );
 
-        let mut app = Self {
+        let app = Self {
             lang,
             strings,
             steam_path,
             status,
             steam_running,
-            last_steam_check: Instant::now(),
+            steam_monitor,
             local_version,
             update_state: UpdateState::Idle,
             busy: false,
@@ -304,13 +312,11 @@ impl App {
             ctx: cc.egui_ctx.clone(),
             tray,
             window_visible: true,
-            steam_was_running: steam_running,
             autosized: false,
             pending_focus: false,
             minimize_to_tray: true,
             was_minimized: false,
         };
-        app.refresh_steam_running();
         app
     }
 
@@ -328,18 +334,6 @@ impl App {
         });
     }
 
-    fn refresh_steam_running(&mut self) {
-        let was = self.steam_was_running;
-        self.steam_running = process::is_steam_running();
-        self.steam_was_running = self.steam_running;
-        self.last_steam_check = Instant::now();
-        // 边沿检测：Steam 启动 → 自动隐身到托盘；Steam 退出 → 自动弹出。
-        if self.steam_running != was {
-            // 启动（false→true）→ 隐藏到托盘；退出（true→false）→ 弹出。
-            self.set_window_visible(!self.steam_running);
-        }
-    }
-
     /// 控制窗口显隐；显示时置 pending_focus，下一帧再发 Focus（刚变可见时 Focus 无效）。
     fn set_window_visible(&mut self, visible: bool) {
         self.window_visible = visible;
@@ -353,7 +347,7 @@ impl App {
     }
 
     /// 后台操作完成后若 Steam 已运行（重启/启动类成功），隐藏窗口到托盘。
-    /// 不依赖 `refresh_steam_running` 的 false→true 边沿：Steam 本就运行时边沿不触发。
+    /// 不依赖 2s 边沿监视：Steam 本就运行时边沿不触发。
     /// 场景区分靠 `steam_running` 本身：退出并卸载（不重启）→ Steam 未运行 → 不隐藏。
     fn hide_if_steam_running(&mut self) {
         if self.steam_running {
@@ -457,7 +451,7 @@ impl App {
                         }
                         Err(e) => self.notice = Some((false, self.workflow_error_text(&e))),
                     }
-                    self.refresh_steam_running();
+                    self.steam_running = self.steam_monitor.rescan();
                     // 启动/重启类成功后 Steam 已运行 → 直接隐藏到托盘（不依赖边沿检测）；
                     // 仅退出并卸载（ExitAndUninstall）Steam 未运行 → 保持显示。
                     self.hide_if_steam_running();
@@ -843,14 +837,17 @@ impl eframe::App for App {
         // 处理托盘事件（左键/菜单），可能改变窗口显隐。
         self.handle_tray_events();
 
-        // 定时刷新 Steam 运行状态（缓存 + 事件驱动）。
-        if self.last_steam_check.elapsed() >= STEAM_REFRESH_INTERVAL {
-            self.refresh_steam_running();
+        // 定时监视 Steam 运行状态（边沿事件 → 自动隐身策略）。
+        if let Some(event) = self.steam_monitor.tick() {
+            self.steam_running = event == SteamEvent::Started;
+            if let Some(visible) = auto_tray_policy(event, self.window_visible) {
+                self.set_window_visible(visible);
+            }
         }
 
         // 隐藏到托盘/最小化时窗口不可见：用短间隔驱动，托盘事件与最小化检测响应快。
         let repaint_interval = if self.window_visible {
-            STEAM_REFRESH_INTERVAL
+            process::STEAM_REFRESH_INTERVAL
         } else {
             std::time::Duration::from_millis(100)
         };
@@ -963,5 +960,14 @@ mod tests {
         let mut fonts =
             egui::epaint::text::Fonts::new(egui::epaint::text::TextOptions::default(), defs);
         assert!(!fonts.has_glyph(&egui::FontId::proportional(14.0), '中'));
+    }
+
+    /// 自动隐身策略（ADR-0001）：仅在与当前显隐相反时动作。
+    #[test]
+    fn auto_tray_policy_table() {
+        assert_eq!(auto_tray_policy(SteamEvent::Started, true), Some(false));
+        assert_eq!(auto_tray_policy(SteamEvent::Stopped, false), Some(true));
+        assert_eq!(auto_tray_policy(SteamEvent::Started, false), None);
+        assert_eq!(auto_tray_policy(SteamEvent::Stopped, true), None);
     }
 }

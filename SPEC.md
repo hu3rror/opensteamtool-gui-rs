@@ -125,7 +125,7 @@ Rust 修复方案：
 src/
 ├── main.rs          # eframe 入口，App 装配
 ├── steam.rs         # 注册表路径检测、steam.exe 启动
-├── process.rs       # 进程检测/关闭（sysinfo）
+├── process.rs       # 进程检测/监视/关闭（sysinfo）
 ├── dll.rs           # 部署/卸载、本地状态检测
 ├── updater.rs       # GitHub API 检查、下载、解压、version.txt
 ├── workflow.rs      # 操作判定表与执行（plan/execute）
