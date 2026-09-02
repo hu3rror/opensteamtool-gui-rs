@@ -1,0 +1,56 @@
+# 发布：推 v* 标签或手动 → 构建打包 → GitHub Release。
+# 打包复用 tools/build-release.ps1（本地与 CI 同源）。
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Manual only; tag push uses tag name."
+        required: true
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust build cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        run: cargo test
+
+      - name: Resolve version
+        id: ver
+        shell: pwsh
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
+        run: |
+          $v = "$env:DISPATCH_VERSION"
+          if ([string]::IsNullOrWhiteSpace($v)) { $v = "$env:GITHUB_REF_NAME" }
+          if ([string]::IsNullOrWhiteSpace($v)) { $v = 'dev' }
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Build & package (portable zip)
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          & ./tools/build-release.ps1 -Version $v
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.version }}
+          files: opensteamtool-manager-${{ steps.ver.outputs.version }}.zip
+          generate_release_notes: true
