@@ -128,6 +128,8 @@ src/
 ├── process.rs       # 进程检测/关闭（sysinfo）
 ├── dll.rs           # 部署/卸载、本地状态检测
 ├── updater.rs       # GitHub API 检查、下载、解压、version.txt
+├── workflow.rs      # 操作判定表与执行（plan/execute）
+├── tray.rs          # 系统托盘（左键显隐切换、菜单）
 ├── i18n.rs          # 双语文案、系统语言检测
 └── ui.rs            # egui 界面（3 卡片 + 顶栏）
 ```

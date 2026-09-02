@@ -1,6 +1,6 @@
 //! egui 界面：顶栏 + 3 卡片 + 确认弹窗。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Instant;
 
@@ -12,6 +12,7 @@ use crate::i18n::{Lang, Strings};
 use crate::process;
 use crate::steam;
 use crate::updater::{self, OnlineInfo, UpdateError};
+use crate::workflow::{self, Action, BusyKind};
 use crate::tray::{Tray, TrayAction};
 
 // ---------- kill-ai-slop 约束的浅色主题 (Apple-inspired refined palette) ----------
@@ -151,33 +152,8 @@ enum Msg {
     Phase(BusyKind),
     UpdateChecked(Result<OnlineInfo, UpdateError>),
     Downloaded(Result<(), UpdateError>),
-    Deployed(Result<(), String>),
-    Uninstalled(Result<(), String>),
-    Launched(Result<(), String>),
-}
-
-/// 用户触发的操作类型。
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Action {
-    /// 应用补丁并启动 Steam。
-    ApplyAndLaunch,
-    /// 正常启动 Steam。
-    Launch,
-    /// 退出 Steam 并卸载补丁。
-    ExitAndUninstall,
-    /// 卸载补丁并重启 Steam。
-    UninstallAndRestart,
-}
-
-/// 后台操作期间显示的忙碌文案类型。
-#[derive(Clone, Copy)]
-enum BusyKind {
-    Deploying,
-    Uninstalling,
-    Launching,
-    Checking,
-    Downloading,
-    ClosingSteam,
+    /// 组合操作完成（成功/失败，携带动作以取成功文案）。
+    WorkflowDone(Action, Result<(), workflow::WorkflowError>),
 }
 
 impl BusyKind {
@@ -195,12 +171,13 @@ impl BusyKind {
 }
 
 impl Action {
-    /// 需要先关闭 Steam 才能执行的操作。
-    fn needs_close(self) -> bool {
-        matches!(
-            self,
-            Action::ApplyAndLaunch | Action::ExitAndUninstall | Action::UninstallAndRestart
-        )
+    /// 组合操作成功后的提示文案。
+    fn success_text(self, s: &Strings) -> &'static str {
+        match self {
+            Action::ApplyAndLaunch => s.ok_deployed,
+            Action::Launch => s.ok_launched,
+            Action::ExitAndUninstall | Action::UninstallAndRestart => s.ok_uninstalled,
+        }
     }
 }
 
@@ -421,6 +398,26 @@ impl App {
         }
     }
 
+    /// 前置校验错误 → 当前语言的提示文案。
+    fn precheck_text(&self, precheck: &workflow::Precheck) -> String {
+        match precheck {
+            workflow::Precheck::NoSteamDir => self.strings.err_no_steam_dir.to_string(),
+            workflow::Precheck::NoTargetDlls => self.strings.err_no_dlls.to_string(),
+            workflow::Precheck::NoSteamExe => self.strings.err_steam_exe_missing.to_string(),
+        }
+    }
+
+    /// 执行阶段错误 → 当前语言的提示文案（按失败步骤取前缀）。
+    fn workflow_error_text(&self, e: &workflow::WorkflowError) -> String {
+        let prefix = match e.op {
+            workflow::Op::CloseSteam => self.strings.err_kill_steam,
+            workflow::Op::Deploy => self.strings.err_deploy,
+            workflow::Op::Uninstall => self.strings.err_uninstall,
+            workflow::Op::Launch => self.strings.err_launch,
+        };
+        format!("{}: {}", prefix, e.message)
+    }
+
     /// 处理后台消息：更新状态与提示。
     fn handle_messages(&mut self) {
         while let Ok(msg) = self.rx.try_recv() {
@@ -449,44 +446,20 @@ impl App {
                         Err(e) => self.notice = Some((false, self.update_error_text(&e))),
                     }
                 }
-                Msg::Deployed(res) => {
+                Msg::WorkflowDone(action, res) => {
                     self.busy = false;
                     self.busy_kind = None;
                     match res {
                         Ok(()) => {
                             self.refresh_status();
-                            self.notice = Some((true, self.strings.ok_deployed.to_string()));
+                            self.notice =
+                                Some((true, action.success_text(&self.strings).to_string()));
                         }
-                        Err(e) => self.notice = Some((false, e)),
+                        Err(e) => self.notice = Some((false, self.workflow_error_text(&e))),
                     }
                     self.refresh_steam_running();
-                    // 应用补丁后 Steam 已重启运行：直接隐藏到托盘（不依赖边沿检测）。
-                    self.hide_if_steam_running();
-                }
-                Msg::Uninstalled(res) => {
-                    self.busy = false;
-                    self.busy_kind = None;
-                    match res {
-                        Ok(()) => {
-                            self.refresh_status();
-                            self.notice = Some((true, self.strings.ok_uninstalled.to_string()));
-                        }
-                        Err(e) => self.notice = Some((false, e)),
-                    }
-                    self.refresh_steam_running();
-                    // 卸载并重启（UninstallAndRestart）后 Steam 已运行 → 隐藏；
-                    // 仅退出并卸载（ExitAndUninstall）Steam 未运行 → 保持显示（见 hide_if_steam_running）。
-                    self.hide_if_steam_running();
-                }
-                Msg::Launched(res) => {
-                    self.busy = false;
-                    self.busy_kind = None;
-                    match res {
-                        Ok(()) => self.notice = Some((true, self.strings.ok_launched.to_string())),
-                        Err(e) => self.notice = Some((false, e)),
-                    }
-                    self.refresh_steam_running();
-                    // 正常启动成功后 Steam 已运行：直接隐藏到托盘（不依赖边沿检测）。
+                    // 启动/重启类成功后 Steam 已运行 → 直接隐藏到托盘（不依赖边沿检测）；
+                    // 仅退出并卸载（ExitAndUninstall）Steam 未运行 → 保持显示。
                     self.hide_if_steam_running();
                 }
             }
@@ -506,113 +479,36 @@ impl App {
     }
 
     fn start_action(&mut self, ctx: &egui::Context, action: Action, kill_first: bool) {
-        let steam_dir = self.steam_path.trim().to_string();
-        let steam_path = Path::new(&steam_dir);
+        let dll_dir = dll::dll_dir();
+        let steam_dir = PathBuf::from(self.steam_path.trim());
 
-        // 前置校验（本地化错误文案），失败则不进入忙碌状态。
-        if !steam_path.is_dir() {
-            self.confirm = None;
-            self.notice = Some((false, self.strings.err_no_steam_dir.to_string()));
-            return;
-        }
-        if action == Action::ApplyAndLaunch {
-            let dll_dir = dll::dll_dir();
-            if !dll::TARGET_DLLS.iter().all(|d| dll_dir.join(d).is_file()) {
+        // 前置校验（类型化错误 → 本地化文案），失败则不进入忙碌状态。
+        let ops = match workflow::plan(action, kill_first, &steam_dir, &dll_dir) {
+            Ok(ops) => ops,
+            Err(precheck) => {
                 self.confirm = None;
-                self.notice = Some((false, self.strings.err_no_dlls.to_string()));
+                self.notice = Some((false, self.precheck_text(&precheck)));
                 return;
             }
-        }
-        if (action == Action::Launch
-            || action == Action::ApplyAndLaunch
-            || action == Action::UninstallAndRestart)
-            && !steam_path.join("steam.exe").is_file()
-        {
-            self.confirm = None;
-            self.notice = Some((false, self.strings.err_steam_exe_missing.to_string()));
-            return;
-        }
+        };
 
         self.busy = true;
-        self.busy_kind = Some(match action {
-            Action::ApplyAndLaunch => BusyKind::Deploying,
-            Action::Launch => BusyKind::Launching,
-            Action::ExitAndUninstall | Action::UninstallAndRestart => BusyKind::Uninstalling,
-        });
+        self.busy_kind = Some(ops.first().expect("plan never returns empty").phase()); // 同步首阶段，点击即见阶段文案
         self.confirm = None;
-        let dll_dir = dll::dll_dir();
 
-        match action {
-            Action::ApplyAndLaunch => {
-                let s = self.strings;
-                let tx = self.tx.clone();
-                let ctx2 = ctx.clone();
-                self.spawn(ctx, move || {
-                    let res = (|| {
-                        if kill_first {
-                            let _ = tx.send(Msg::Phase(BusyKind::ClosingSteam));
-                            ctx2.request_repaint();
-                            process::kill_steam()
-                                .map_err(|e| format!("{}: {e}", s.err_kill_steam))?;
-                            let _ = tx.send(Msg::Phase(BusyKind::Deploying));
-                            ctx2.request_repaint();
-                        }
-                        dll::deploy(&dll_dir, Path::new(&steam_dir))
-                            .map_err(|e| format!("{}: {e}", s.err_deploy))?;
-                        steam::launch_steam(Path::new(&steam_dir))
-                            .map_err(|e| format!("{}: {e}", s.err_launch))
-                    })();
-                    Msg::Deployed(res)
-                });
-            }
-            Action::Launch => {
-                self.spawn(ctx, move || {
-                    Msg::Launched(steam::launch_steam(Path::new(&steam_dir)))
-                });
-            }
-            Action::ExitAndUninstall => {
-                let s = self.strings;
-                let tx = self.tx.clone();
-                let ctx2 = ctx.clone();
-                self.spawn(ctx, move || {
-                    let res = (|| {
-                        if kill_first {
-                            let _ = tx.send(Msg::Phase(BusyKind::ClosingSteam));
-                            ctx2.request_repaint();
-                            process::kill_steam()
-                                .map_err(|e| format!("{}: {e}", s.err_kill_steam))?;
-                            let _ = tx.send(Msg::Phase(BusyKind::Uninstalling));
-                            ctx2.request_repaint();
-                        }
-                        dll::uninstall(Path::new(&steam_dir))
-                            .map_err(|e| format!("{}: {e}", s.err_uninstall))
-                    })();
-                    Msg::Uninstalled(res)
-                });
-            }
-            Action::UninstallAndRestart => {
-                let s = self.strings;
-                let tx = self.tx.clone();
-                let ctx2 = ctx.clone();
-                self.spawn(ctx, move || {
-                    let res = (|| {
-                        if kill_first {
-                            let _ = tx.send(Msg::Phase(BusyKind::ClosingSteam));
-                            ctx2.request_repaint();
-                            process::kill_steam()
-                                .map_err(|e| format!("{}: {e}", s.err_kill_steam))?;
-                            let _ = tx.send(Msg::Phase(BusyKind::Uninstalling));
-                            ctx2.request_repaint();
-                        }
-                        dll::uninstall(Path::new(&steam_dir))
-                            .map_err(|e| format!("{}: {e}", s.err_uninstall))?;
-                        steam::launch_steam(Path::new(&steam_dir))
-                            .map_err(|e| format!("{}: {e}", s.err_launch))
-                    })();
-                    Msg::Uninstalled(res)
-                });
-            }
-        }
+        let ctx2 = ctx.clone();
+        let tx = self.tx.clone();
+        self.spawn(ctx, move || {
+            let res = workflow::execute(
+                &ops,
+                &workflow::WorkflowCtx { dll_dir, steam_dir },
+                |phase| {
+                    let _ = tx.send(Msg::Phase(phase));
+                    ctx2.request_repaint();
+                },
+            );
+            Msg::WorkflowDone(action, res)
+        });
     }
 
     fn toggle_lang(&mut self) {
