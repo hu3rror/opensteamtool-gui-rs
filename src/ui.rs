@@ -150,7 +150,34 @@ fn card_title(ui: &mut egui::Ui, text: &str) {
 fn status_line(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
     ui.label(egui::RichText::new(text).size(13.0).strong().color(color));
 }
+/// 渲染最近一次结果提示为当前语言文案。
+/// 纯函数（不依赖 App）：切换语言后无需重建 notice，重渲染即得新语言。
+/// 检查更新成功时与本地版本比较：相同 → 「已是最新」，否则 → 「发现可更新版本」。
+fn render_notice(s: &Strings, local_version: Option<&str>, notice: &Notice) -> (bool, String) {
+    match notice {
+        Notice::UpdateChecked(Ok(info)) => {
+            let suffix = if local_version.unwrap_or("") == info.version {
+                s.up_to_date
+            } else {
+                s.new_version
+            };
+            (true, format!("v{} {}", info.version, suffix))
+        }
+        Notice::UpdateChecked(Err(e)) => (false, s.update_error(e)),
+        Notice::Downloaded(Ok(())) => (true, s.ok_downloaded.to_string()),
+        Notice::Downloaded(Err(e)) => (false, s.update_error(e)),
+        Notice::WorkflowDone(action, Ok(())) => (true, s.success_text(*action).to_string()),
+        Notice::WorkflowDone(_, Err(e)) => (false, s.workflow_error_text(e)),
+        Notice::Precheck(p) => (false, s.precheck_text(p)),
+    }
+}
 
+/// 两枚等宽按钮并排时的单按钮宽度：`available` 减去手动 gap 与 egui 自动插入的
+/// item_spacing 后再均分。公式漏掉 item_spacing 会导致按钮行实际占宽超过可用宽度，
+/// 溢出并把下方依赖 `available_width` 撑满的卡片顶到窗口右缘（历史 bug）。
+fn twin_button_width(available: f32, gap: f32, item_spacing: f32) -> f32 {
+    ((available - gap - item_spacing) / 2.0).max(150.0)
+}
 /// 版本信息行：整行单 label（效仿 Python 纯文本，非胶囊标签）。
 fn version_line(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
     ui.label(egui::RichText::new(text).size(12.5).color(color));
@@ -305,6 +332,18 @@ enum UpdateState {
     Checked(Result<OnlineInfo, UpdateError>),
 }
 
+/// 最近一次结果提示的结构化数据。
+/// 渲染时（`notice_bar`）才按当前语言生成文案，切换语言无需重建。
+enum Notice {
+    /// 检查更新结果：成功携带线上版本（与本地版本比较决定最新/可更新文案）。
+    UpdateChecked(Result<OnlineInfo, UpdateError>),
+    /// 下载解压结果。
+    Downloaded(Result<(), UpdateError>),
+    /// 组合操作完成（成功/失败，携带动作以取成功文案）。
+    WorkflowDone(Action, Result<(), workflow::WorkflowError>),
+    /// 前置校验失败（类型化错误 → 本地化文案）。
+    Precheck(workflow::Precheck),
+}
 pub struct App {
     lang: Lang,
     strings: Strings,
@@ -319,8 +358,8 @@ pub struct App {
     busy_kind: Option<BusyKind>,
     /// 待确认「关闭 Steam」的操作。
     confirm: Option<Action>,
-    /// 最近一次结果提示（成功/失败）。
-    notice: Option<(bool, String)>,
+    /// 最近一次结果提示（成功/失败），渲染时按当前语言生成文案。
+    notice: Option<Notice>,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
     /// egui 上下文（托盘/Steam 联动发窗口命令用）。
@@ -514,36 +553,23 @@ impl App {
                 Msg::UpdateChecked(res) => {
                     self.busy = false;
                     self.busy_kind = None;
-                    self.notice = match &res {
-                        Ok(info) => Some((
-                            true,
-                            format!("v{} {}", info.version, self.strings.new_version),
-                        )),
-                        Err(e) => Some((false, self.strings.update_error(e))),
-                    };
+                    self.notice = Some(Notice::UpdateChecked(res.clone()));
                     self.update_state = UpdateState::Checked(res);
                 }
                 Msg::Downloaded(res) => {
                     self.busy = false;
                     self.busy_kind = None;
-                    match res {
-                        Ok(()) => {
-                            self.local_version = dll::read_local_version(&dll::dll_dir());
-                            self.notice = Some((true, self.strings.ok_downloaded.to_string()));
-                        }
-                        Err(e) => self.notice = Some((false, self.strings.update_error(&e))),
+                    self.notice = Some(Notice::Downloaded(res.clone()));
+                    if let Ok(()) = res {
+                        self.local_version = dll::read_local_version(&dll::dll_dir());
                     }
                 }
                 Msg::WorkflowDone(action, res) => {
                     self.busy = false;
                     self.busy_kind = None;
-                    match res {
-                        Ok(()) => {
-                            self.refresh_status();
-                            self.notice =
-                                Some((true, self.strings.success_text(action).to_string()));
-                        }
-                        Err(e) => self.notice = Some((false, self.strings.workflow_error_text(&e))),
+                    self.notice = Some(Notice::WorkflowDone(action, res.clone()));
+                    if let Ok(()) = res {
+                        self.refresh_status();
                     }
                     self.steam_running = self.steam_monitor.rescan();
                     // 启动/重启类成功后 Steam 已运行 → 直接隐藏到托盘（不依赖边沿检测）；
@@ -575,7 +601,7 @@ impl App {
             Ok(ops) => ops,
             Err(precheck) => {
                 self.confirm = None;
-                self.notice = Some((false, self.strings.precheck_text(&precheck)));
+                self.notice = Some(Notice::Precheck(precheck));
                 return;
             }
         };
@@ -697,7 +723,9 @@ impl App {
         let ctx = ui.ctx().clone();
         ui.horizontal(|ui| {
             let gap = 12.0;
-            let w = ((ui.available_width() - gap) / 2.0).max(150.0);
+            // 宽度公式必须扣除 egui 自动插入的 item_spacing（见 twin_button_width），
+            // 否则按钮行实际占宽溢出，把下方卡片（card3 依赖 available_width 撑满）顶到窗口右缘。
+            let w = twin_button_width(ui.available_width(), gap, ui.spacing().item_spacing.x);
             let size = egui::vec2(w, 36.0);
             match self.status {
                 DeployStatus::Deployed => {
@@ -852,6 +880,13 @@ impl App {
         ui.add_space(10.0);
     }
 
+    /// 最近一次结果提示 → 当前语言渲染（切换语言后无需重建 notice，逐帧取当前 strings）。
+    fn notice_text(&self) -> Option<(bool, String)> {
+        self.notice
+            .as_ref()
+            .map(|n| render_notice(&self.strings, self.local_version.as_deref(), n))
+    }
+
     fn notice_bar(&mut self, ui: &mut egui::Ui) {
         // busy / 成功改中性文字；错误保留红色（kill-ai-slop：收敛语义三连）。
         if let Some(kind) = self.busy_kind {
@@ -867,8 +902,8 @@ impl App {
             });
             return;
         }
-        if let Some((ok, text)) = &self.notice {
-            let (color, dot_color) = if *ok {
+        if let Some((ok, text)) = self.notice_text() {
+            let (color, dot_color) = if ok {
                 (TEXT_INK, DOT_RUNNING)
             } else {
                 (ERR_RED, ERR_RED)
@@ -1035,5 +1070,97 @@ mod tests {
         assert_eq!(auto_tray_policy(SteamEvent::Stopped, false), Some(true));
         assert_eq!(auto_tray_policy(SteamEvent::Started, false), None);
         assert_eq!(auto_tray_policy(SteamEvent::Stopped, true), None);
+    }
+
+    /// 检查更新成功且本地已是最新 → 底部提示应显示「已是最新」，而非「发现可更新版本」。
+    #[test]
+    fn update_checked_notice_shows_up_to_date_when_local_matches() {
+        let zh = Strings::new(Lang::Zh);
+        let info = OnlineInfo {
+            version: "1.4.8".into(),
+            zip_url: "https://x/z.zip".into(),
+        };
+        let notice = Notice::UpdateChecked(Ok(info));
+        // 本地版本与线上一致 → up_to_date；不一致 → new_version。
+        let (ok, text) = render_notice(&zh, Some("1.4.8"), &notice);
+        assert!(ok);
+        assert_eq!(
+            text, "v1.4.8 (本地已是最新版)",
+            "已最新不应显示「发现可更新版本」: {text}"
+        );
+        let (_, text) = render_notice(&zh, Some("1.4.7"), &notice);
+        assert_eq!(text, "v1.4.8 (发现可更新版本)");
+    }
+
+    /// 切换语言后，同一 notice 重新渲染即得新语言文案（无需重建 notice）。
+    #[test]
+    fn update_checked_notice_follows_language_switch() {
+        let info = OnlineInfo {
+            version: "1.4.8".into(),
+            zip_url: "https://x/z.zip".into(),
+        };
+        let notice = Notice::UpdateChecked(Ok(info));
+        let zh = render_notice(&Strings::new(Lang::Zh), Some("1.4.8"), &notice);
+        let en = render_notice(&Strings::new(Lang::En), Some("1.4.8"), &notice);
+        assert_eq!(zh, (true, "v1.4.8 (本地已是最新版)".to_string()));
+        assert_eq!(en, (true, "v1.4.8 (Up to date)".to_string()));
+        // 英文界面不应出现中文。
+        assert!(!en.1.contains('本'), "en notice 不应含中文: {}", en.1);
+    }
+
+    /// 其余 notice 分支（下载/工作流/precheck）跨语言映射一致。
+    #[test]
+    fn render_notice_other_branches_both_langs() {
+        for lang in [Lang::Zh, Lang::En] {
+            let s = Strings::new(lang);
+            let e = updater::UpdateError::Network("t".into());
+            assert_eq!(
+                render_notice(&s, None, &Notice::UpdateChecked(Err(e.clone()))),
+                (false, s.update_error(&e))
+            );
+            let wf = workflow::WorkflowError {
+                op: workflow::Op::Launch,
+                message: "m".into(),
+            };
+            assert_eq!(
+                render_notice(&s, None, &Notice::WorkflowDone(workflow::Action::Launch, Ok(()))),
+                (true, s.success_text(workflow::Action::Launch).to_string())
+            );
+            assert_eq!(
+                render_notice(&s, None, &Notice::WorkflowDone(workflow::Action::Launch, Err(wf.clone()))),
+                (false, s.workflow_error_text(&wf))
+            );
+            assert_eq!(
+                render_notice(&s, None, &Notice::Precheck(workflow::Precheck::NoSteamDir)),
+                (false, s.precheck_text(&workflow::Precheck::NoSteamDir))
+            );
+            assert_eq!(
+                render_notice(&s, None, &Notice::Downloaded(Err(e.clone()))),
+                (false, s.update_error(&e))
+            );
+            assert_eq!(
+                render_notice(&s, None, &Notice::Downloaded(Ok(()))),
+                (true, s.ok_downloaded.to_string())
+            );
+        }
+    }
+
+    /// 布局回归：两枚等宽按钮 + 手动 gap + 自动 item_spacing 必须恰好等于可用宽度，
+    /// 不得溢出（历史 bug：溢出把下方 card3 顶到窗口右缘贴边）。
+    #[test]
+    fn twin_button_width_exactly_fills_row() {
+        let gap = 12.0;
+        for available in [500.0, 580.0, 620.0, 800.0, 1000.0] {
+            for item_spacing in [6.0, 8.0, 10.0, 12.0] {
+                let w = twin_button_width(available, gap, item_spacing);
+                let total = w * 2.0 + gap + item_spacing;
+                assert!(
+                    (total - available).abs() < 0.01,
+                    "available={available} gap={gap} spacing={item_spacing} -> w={w}, total={total} 应等于可用宽度"
+                );
+            }
+        }
+        // 极窄窗口：最小宽度兜底（max(150)），允许溢出避免按钮被压扁。
+        assert_eq!(twin_button_width(200.0, 12.0, 10.0), 150.0);
     }
 }
