@@ -97,6 +97,11 @@ fn py_button(
     size: egui::Vec2,
     enabled: bool,
 ) -> egui::Response {
+    // 长文案（如英文 "Download & Extract New Version"）超出固定宽度时会被绘制在
+    // 按钮边界外截断；按文本宽度自适应，最小仍为调用方指定的 size。
+    let font_id = egui::FontId::proportional(13.0);
+    let text_w = ui.painter().layout_no_wrap(text.to_owned(), font_id, style.fg).size().x;
+    let size = egui::vec2(size.x.max(text_w + 28.0), size.y);
     let sense = if enabled {
         egui::Sense::click()
     } else {
@@ -1162,5 +1167,50 @@ mod tests {
         }
         // 极窄窗口：最小宽度兜底（max(150)），允许溢出避免按钮被压扁。
         assert_eq!(twin_button_width(200.0, 12.0, 10.0), 150.0);
+    }
+
+    /// 回归：英文长文案按钮（"Download & Extract New Version"）不能被固定宽度 150px 裁剪，
+    /// 按钮应按文本宽度自适应（历史 bug：首尾字符 "D"/"ion" 被裁出边界）。
+    #[test]
+    fn button_width_expands_for_long_english_text() {
+        let ctx = egui::Context::default();
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(640.0, 520.0),
+            )),
+            ..Default::default()
+        };
+        let mut out = None;
+        let mut full = ctx.run_ui(raw, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let short =
+                    secondary_button(ui, "检查更新", egui::vec2(96.0, 32.0), true).rect.width();
+                let long = primary_button(
+                    ui,
+                    "Download & Extract New Version",
+                    egui::vec2(150.0, 32.0),
+                    true,
+                )
+                .rect
+                .width();
+                let short_en =
+                    secondary_button(ui, "Check Update", egui::vec2(96.0, 32.0), true).rect.width();
+                out = Some((short, long, short_en));
+            });
+        });
+        full.textures_delta.clear();
+        let (short, long, short_en) = out.unwrap();
+        // 短中文文案：保持固定宽度。
+        assert_eq!(short, 96.0, "检查更新 在 96px 内放下即不撑宽");
+        // 英文文案超宽时按钮自适应撑宽，避免字符被裁（"Check Update" 亦曾吃满 96px）。
+        assert!(
+            short_en > 96.0,
+            "Check Update 超出 96px 时应撑宽按钮，实际 {short_en}px"
+        );
+        assert!(
+            long > short_en,
+            "Download & Extract New Version 应比 Check Update 更宽，实际 {long}px"
+        );
     }
 }
