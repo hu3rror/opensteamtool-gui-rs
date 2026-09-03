@@ -1,0 +1,2 @@
+// Windows 资源脚本：把 app.ico 作为应用图标嵌入 exe。
+1 ICON "app.ico"

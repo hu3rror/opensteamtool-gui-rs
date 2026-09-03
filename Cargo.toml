@@ -22,6 +22,8 @@ rfd = "0.17"
 image = { version = "0.25", default-features = false, features = ["ico"] }
 tray-icon = "0.24"
 
+[build-dependencies]
+embed-resource = "3.0"
 [profile.release]
 opt-level = "z"
 lto = "fat"
