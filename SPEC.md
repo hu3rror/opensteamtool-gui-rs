@@ -65,7 +65,7 @@ Rust 侧用 `winreg` crate 等价实现。
 
 Rust 修复方案：
 - 用 `sysinfo` crate 枚举进程检测 `steam.exe`（无子进程开销），单次结果缓存/事件驱动。
-- kill 用 `taskkill` 或 `sysinfo::kill`，轮询间隔可缩短（如 10×0.1s）。
+- kill 用 `sysinfo::kill` 终止整个 Steam 进程组（exe 路径位于 Steam 目录下、排除 `steamservice.exe`），轮询等整组从进程表消失（预算 5s、间隔 100ms，见 ADR-0004）。
 - 检测结果供多个操作复用，避免重复扫描。
 
 流程（与旧版一致）：
@@ -74,6 +74,7 @@ Rust 修复方案：
 ### 2.6 Steam 启动
 
 - 校验 `Steam 目录\steam.exe` 存在，以 Steam 目录为 cwd 启动；不存在报错。
+- spawn 成功不算成功：等待 2s 确认 `steam.exe` 存活，失败重试 1 次后报错（见 ADR-0004）。
 
 ### 2.7 在线检查更新
 
@@ -110,7 +111,7 @@ Rust 修复方案：
 
 - [x] 消除 onefile 解压（换技术栈后天然解决）
 - [x] 进程检测改用 sysinfo（`src/process.rs`），无 tasklist 子进程开销，结果 2s 缓存 + 事件驱动复用
-- [x] kill 后轮询 10×100ms（原 5s），未退出时明确报错
+- [x] kill 整个 Steam 进程组（路径过滤、排除 `steamservice.exe`）后轮询等整组消失（预算 5s、间隔 100ms，原仅 steam.exe + 1s），未退出时明确报错
 - [x] 输入框变更即时刷新状态；Steam 进程状态 2s 定时刷新（事件驱动增量，非全量重建）
 - [x] UI 无加载感、毫秒级首帧（egui 原生窗口，无预热/白屏）
 

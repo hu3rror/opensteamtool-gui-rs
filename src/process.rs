@@ -1,12 +1,16 @@
 //! Steam 进程检测/监视与关闭（sysinfo，无 tasklist 子进程开销）。
 
+use std::ffi::OsStr;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use sysinfo::{ProcessesToUpdate, System};
 
 const STEAM_PROC: &str = "steam.exe";
-/// kill 后轮询：最多 10 次 × 100ms。
-const KILL_POLL_ATTEMPTS: u32 = 10;
+/// 关闭时轮询等待进程组全部消失的总预算（慢磁盘/高负载也大概率够）。
+const KILL_POLL_BUDGET: Duration = Duration::from_secs(5);
+/// 进程组判定中排除的服务进程：以服务形式高权限运行，普通权限杀不掉，且不阻塞 steam.exe 启动。
+const STEAM_EXCLUDED_PROC: &str = "steamservice.exe";
 const KILL_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// Steam 运行状态监视轮询间隔（沿用既有 2s）。
 pub const STEAM_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
@@ -86,20 +90,24 @@ fn refresh(sys: &mut System) -> bool {
         .any(|p| p.name().eq_ignore_ascii_case(STEAM_PROC))
 }
 
-/// 关闭所有 steam.exe 进程并轮询等待退出。
-/// 已无进程在运行时立即成功。
-pub fn kill_steam() -> Result<(), String> {
+/// 关闭所有 Steam 进程组内进程并轮询等待全部退出。
+/// 已无进程组在运行时立即成功。
+pub fn kill_steam(steam_dir: &Path) -> Result<(), String> {
+    // 规范化为绝对路径（用户可能手填相对路径；进程 exe 路径为绝对路径）。
+    let steam_dir = std::path::absolute(steam_dir).unwrap_or_else(|_| steam_dir.to_path_buf());
     let mut sys = System::new();
 
-    if !refresh(&mut sys) {
+    sys.refresh_processes(ProcessesToUpdate::All, true);
+    if !group_running(&sys, &steam_dir) {
         return Ok(()); // 本来就没在运行
     }
 
-    // 收集 PID 后逐个 kill。
+    // 终止进程组内全部进程（排除自身），再轮询等整组消失。
+    let self_pid = sysinfo::Pid::from_u32(std::process::id());
     let pids: Vec<sysinfo::Pid> = sys
         .processes()
         .iter()
-        .filter(|(_, p)| p.name().eq_ignore_ascii_case(STEAM_PROC))
+        .filter(|(pid, p)| **pid != self_pid && is_group_member(p.name(), p.exe(), &steam_dir))
         .map(|(pid, _)| *pid)
         .collect();
 
@@ -109,15 +117,61 @@ pub fn kill_steam() -> Result<(), String> {
         }
     }
 
-    // 轮询等待退出。
-    let deadline = Instant::now() + KILL_POLL_INTERVAL * KILL_POLL_ATTEMPTS;
-    while refresh(&mut sys) {
+    let deadline = Instant::now() + KILL_POLL_BUDGET;
+    loop {
+        sys.refresh_processes(ProcessesToUpdate::All, true);
+        if !group_running(&sys, &steam_dir) {
+            return Ok(());
+        }
         if Instant::now() >= deadline {
-            return Err("steam.exe did not exit in time".into());
+            return Err("Steam processes did not exit in time".into());
         }
         std::thread::sleep(KILL_POLL_INTERVAL);
     }
-    Ok(())
+}
+
+/// 进程组内是否有进程在运行（关闭流程的「Steam 在运行」口径）。
+fn group_running(sys: &System, steam_dir: &Path) -> bool {
+    sys.processes()
+        .values()
+        .any(|p| is_group_member(p.name(), p.exe(), steam_dir))
+}
+
+/// 是否属于 Steam 进程组：exe 路径位于 Steam 目录下的进程，排除 steamservice.exe；
+/// exe 路径不可用时退回主进程名（steam.exe）匹配，避免误杀未知进程。
+fn is_group_member(name: impl AsRef<OsStr>, exe: Option<&Path>, steam_dir: &Path) -> bool {
+    let name = name.as_ref();
+    if name.eq_ignore_ascii_case(STEAM_EXCLUDED_PROC) {
+        return false;
+    }
+    match exe {
+        Some(path) => {
+            // 大小写不敏感 + 目录边界的前缀比较（Windows 路径不区分大小写）。
+            let dir = steam_dir.to_string_lossy().to_lowercase();
+            let dir = dir.trim_end_matches('\\');
+            if is_drive_root(&dir) {
+                return false; // 盘符根目录（如 c:）前缀过宽，会误伤该盘所有进程
+            }
+            let exe = path.to_string_lossy().to_lowercase();
+            exe == dir || exe.starts_with(&format!("{dir}\\"))
+        }
+        None => name.eq_ignore_ascii_case(STEAM_PROC),
+    }
+}
+
+/// 是否为盘符根目录（如 `c:`）：前缀比较会误伤该盘所有进程，判定为不属于进程组。
+fn is_drive_root(dir: &str) -> bool {
+    let b = dir.as_bytes();
+    b.len() == 2 && b[0].is_ascii_alphabetic() && b[1] == b':'
+}
+
+/// 当前是否有 steam.exe 在运行（启动验证口径，同 SteamMonitor）。
+pub fn steam_alive() -> bool {
+    let mut sys = System::new();
+    sys.refresh_processes(ProcessesToUpdate::All, true);
+    sys.processes()
+        .values()
+        .any(|p| p.name().eq_ignore_ascii_case(STEAM_PROC))
 }
 
 #[cfg(test)]
@@ -144,7 +198,89 @@ mod tests {
 
     #[test]
     fn kill_when_not_running_succeeds() {
-        // 未运行时应直接成功，不报错。
-        let _ = kill_steam();
+        // 未运行时应直接成功，不报错（CI 上 temp 目录下无 Steam 进程组）。
+        let _ = kill_steam(&std::env::temp_dir());
+    }
+
+    #[test]
+    fn group_member_path_based() {
+        let steam = Path::new(r"C:\Program Files (x86)\Steam");
+        assert!(is_group_member(
+            "steam.exe",
+            Some(Path::new(r"C:\Program Files (x86)\Steam\steam.exe")),
+            steam,
+        ));
+        assert!(is_group_member(
+            "steamwebhelper.exe",
+            Some(Path::new(r"C:\Program Files (x86)\Steam\steamwebhelper.exe")),
+            steam,
+        ));
+        // 子目录下的进程也算（bin\cef 等）。
+        assert!(is_group_member(
+            "crashhandler.exe",
+            Some(Path::new(r"C:\Program Files (x86)\Steam\bin\cef\crashhandler.exe")),
+            steam,
+        ));
+        // 大小写不敏感。
+        assert!(is_group_member(
+            "steam.exe",
+            Some(Path::new(r"c:\program files (x86)\steam\steam.exe")),
+            steam,
+        ));
+        // Steam 目录外的进程不算（含前缀相似的 Steam1）。
+        assert!(!is_group_member(
+            "steam.exe",
+            Some(Path::new(r"C:\Program Files (x86)\SteamLibrary\steam.exe")),
+            steam,
+        ));
+        assert!(!is_group_member(
+            "notepad.exe",
+            Some(Path::new(r"C:\Windows\System32\notepad.exe")),
+            steam,
+        ));
+        assert!(!is_group_member(
+            "foo.exe",
+            Some(Path::new(r"C:\Program Files (x86)\Steam1\foo.exe")),
+            steam,
+        ));
+    }
+
+    #[test]
+    fn group_member_excludes_service() {
+        let steam = Path::new(r"C:\Program Files (x86)\Steam");
+        assert!(!is_group_member(
+            "steamservice.exe",
+            Some(Path::new(r"C:\Program Files (x86)\Steam\bin\steamservice.exe")),
+            steam,
+        ));
+        assert!(!is_group_member(
+            "STEAMSERVICE.EXE",
+            Some(Path::new(r"C:\Program Files (x86)\Steam\bin\steamservice.exe")),
+            steam,
+        ));
+    }
+
+    #[test]
+    fn group_member_fallback_to_name() {
+        let steam = Path::new(r"C:\Program Files (x86)\Steam");
+        // exe 路径不可用时只认主进程名，避免误杀未知进程。
+        assert!(is_group_member("steam.exe", None, steam));
+        assert!(!is_group_member("steamwebhelper.exe", None, steam));
+    }
+
+    #[test]
+    fn group_member_rejects_drive_root() {
+        // 盘符根目录（C:\）前缀过宽：不应把整盘进程算进组，避免误杀。
+        let root = Path::new(r"C:\");
+        assert!(!is_group_member(
+            "steam.exe",
+            Some(Path::new(r"C:\Windows\System32\notepad.exe")),
+            root,
+        ));
+        assert!(!is_group_member(
+            "steamwebhelper.exe",
+            Some(Path::new(r"C:\Program Files (x86)\Steam\steamwebhelper.exe")),
+            root,
+        ));
     }
 }
