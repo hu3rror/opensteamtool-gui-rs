@@ -97,10 +97,18 @@ fn py_button(
     size: egui::Vec2,
     enabled: bool,
 ) -> egui::Response {
-    let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
+    let sense = if enabled {
+        egui::Sense::click()
+    } else {
+        egui::Sense::hover()
+    };
     let (rect, response) = ui.allocate_exact_size(size, sense);
     if ui.is_rect_visible(rect) {
-        let fill = if enabled && response.hovered() { style.hover } else { style.bg };
+        let fill = if enabled && response.hovered() {
+            style.hover
+        } else {
+            style.bg
+        };
         let stroke = style
             .border
             .map_or(egui::Stroke::NONE, |c| egui::Stroke::new(1.0, c));
@@ -129,7 +137,12 @@ fn card_title(ui: &mut egui::Ui, text: &str) {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(3.0, 13.0), egui::Sense::hover());
         ui.painter().rect_filled(rect, 0.0, ACCENT);
         ui.add_space(8.0);
-        ui.label(egui::RichText::new(text).size(13.5).strong().color(TEXT_INK));
+        ui.label(
+            egui::RichText::new(text)
+                .size(13.5)
+                .strong()
+                .color(TEXT_INK),
+        );
     });
 }
 
@@ -148,7 +161,12 @@ fn deploy_button(ui: &mut egui::Ui, text: &str, size: egui::Vec2, enabled: bool)
     py_button(
         ui,
         text,
-        PyStyle { bg: BTN_DEPLOY_BG, hover: BTN_DEPLOY_HOVER, fg: egui::Color32::WHITE, border: None },
+        PyStyle {
+            bg: BTN_DEPLOY_BG,
+            hover: BTN_DEPLOY_HOVER,
+            fg: egui::Color32::WHITE,
+            border: None,
+        },
         size,
         enabled,
     )
@@ -159,14 +177,24 @@ fn launch_button(ui: &mut egui::Ui, text: &str, size: egui::Vec2, enabled: bool)
     py_button(
         ui,
         text,
-        PyStyle { bg: CARD_BG, hover: BTN_SECONDARY_HOVER, fg: TEXT_SUB, border: Some(ENTRY_BORDER) },
+        PyStyle {
+            bg: CARD_BG,
+            hover: BTN_SECONDARY_HOVER,
+            fg: TEXT_SUB,
+            border: Some(ENTRY_BORDER),
+        },
         size,
         enabled,
     )
 }
 
 /// 浅蓝描边按钮（退出 Steam 并卸载补丁）。
-fn uninstall_a_button(ui: &mut egui::Ui, text: &str, size: egui::Vec2, enabled: bool) -> egui::Response {
+fn uninstall_exit_button(
+    ui: &mut egui::Ui,
+    text: &str,
+    size: egui::Vec2,
+    enabled: bool,
+) -> egui::Response {
     py_button(
         ui,
         text,
@@ -182,29 +210,54 @@ fn uninstall_a_button(ui: &mut egui::Ui, text: &str, size: egui::Vec2, enabled: 
 }
 
 /// 蓝色实心按钮（卸载补丁并重启 Steam）。
-fn uninstall_b_button(ui: &mut egui::Ui, text: &str, size: egui::Vec2, enabled: bool) -> egui::Response {
+fn uninstall_restart_button(
+    ui: &mut egui::Ui,
+    text: &str,
+    size: egui::Vec2,
+    enabled: bool,
+) -> egui::Response {
     py_button(
         ui,
         text,
-        PyStyle { bg: BTN_UNINSTALL_B_BG, hover: BTN_UNINSTALL_B_HOVER, fg: egui::Color32::WHITE, border: None },
+        PyStyle {
+            bg: BTN_UNINSTALL_B_BG,
+            hover: BTN_UNINSTALL_B_HOVER,
+            fg: egui::Color32::WHITE,
+            border: None,
+        },
         size,
         enabled,
     )
 }
 
 /// 主蓝按钮（下载/确认弹窗）。
-fn primary_button(ui: &mut egui::Ui, text: &str, size: egui::Vec2, enabled: bool) -> egui::Response {
+fn primary_button(
+    ui: &mut egui::Ui,
+    text: &str,
+    size: egui::Vec2,
+    enabled: bool,
+) -> egui::Response {
     py_button(
         ui,
         text,
-        PyStyle { bg: ACCENT, hover: ACCENT_ACTIVE, fg: egui::Color32::WHITE, border: None },
+        PyStyle {
+            bg: ACCENT,
+            hover: ACCENT_ACTIVE,
+            fg: egui::Color32::WHITE,
+            border: None,
+        },
         size,
         enabled,
     )
 }
 
 /// 次灰按钮（检查更新/浏览/取消）。
-fn secondary_button(ui: &mut egui::Ui, text: &str, size: egui::Vec2, enabled: bool) -> egui::Response {
+fn secondary_button(
+    ui: &mut egui::Ui,
+    text: &str,
+    size: egui::Vec2,
+    enabled: bool,
+) -> egui::Response {
     py_button(
         ui,
         text,
@@ -224,7 +277,12 @@ fn lang_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
     py_button(
         ui,
         text,
-        PyStyle { bg: CARD_BG, hover: FILL_SECONDARY, fg: ACCENT, border: Some(ENTRY_BORDER) },
+        PyStyle {
+            bg: CARD_BG,
+            hover: FILL_SECONDARY,
+            fg: ACCENT,
+            border: Some(ENTRY_BORDER),
+        },
         egui::vec2(56.0, 26.0),
         true,
     )
@@ -341,8 +399,9 @@ impl App {
         let lang = crate::i18n::detect_system_lang();
         let strings = Strings::new(lang);
         // 窗口标题随语言（zh: OpenSteamTool 一键管理工具 / en: OpenSteamTool Manager）。
-        cc.egui_ctx
-            .send_viewport_cmd(egui::ViewportCommand::Title(strings.window_title.to_owned()));
+        cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Title(
+            strings.window_title.to_owned(),
+        ));
         let steam_path = steam::detect_steam_path()
             .map(|p| p.display().to_string())
             .unwrap_or_default();
@@ -543,8 +602,9 @@ impl App {
     fn toggle_lang(&mut self) {
         self.lang = self.lang.toggle();
         self.strings = Strings::new(self.lang);
-        self.ctx
-            .send_viewport_cmd(egui::ViewportCommand::Title(self.strings.window_title.to_owned()));
+        self.ctx.send_viewport_cmd(egui::ViewportCommand::Title(
+            self.strings.window_title.to_owned(),
+        ));
     }
 
     fn check_update(&mut self, ctx: &egui::Context) {
@@ -647,11 +707,11 @@ impl App {
                     } else {
                         self.strings.btn_uninstall
                     };
-                    if uninstall_a_button(ui, uninstall_label, size, !self.busy).clicked() {
+                    if uninstall_exit_button(ui, uninstall_label, size, !self.busy).clicked() {
                         self.request_action(&ctx, Action::ExitAndUninstall);
                     }
                     ui.add_space(gap);
-                    if uninstall_b_button(
+                    if uninstall_restart_button(
                         ui,
                         self.strings.btn_uninstall_and_restart,
                         size,
@@ -663,11 +723,14 @@ impl App {
                     }
                 }
                 DeployStatus::NotDeployed => {
-                    if deploy_button(ui, self.strings.btn_apply_and_launch, size, !self.busy).clicked() {
+                    if deploy_button(ui, self.strings.btn_apply_and_launch, size, !self.busy)
+                        .clicked()
+                    {
                         self.request_action(&ctx, Action::ApplyAndLaunch);
                     }
                     ui.add_space(gap);
-                    if launch_button(ui, self.strings.btn_launch_normal, size, !self.busy).clicked() {
+                    if launch_button(ui, self.strings.btn_launch_normal, size, !self.busy).clicked()
+                    {
                         self.request_action(&ctx, Action::Launch);
                     }
                 }
@@ -693,15 +756,25 @@ impl App {
             let all_local_exist = dll::TARGET_DLLS.iter().all(|d| dll_dir.join(d).is_file());
             let (local_text, local_color) = match &self.local_version {
                 Some(v) => (
-                    format!("{}v{}", self.strings.local_version, v.trim_start_matches('v')),
+                    format!(
+                        "{}v{}",
+                        self.strings.local_version,
+                        v.trim_start_matches('v')
+                    ),
                     TEXT_INK,
                 ),
                 None if all_local_exist => (
-                    format!("{}{}", self.strings.local_version, self.strings.local_ver_ready_no_record),
+                    format!(
+                        "{}{}",
+                        self.strings.local_version, self.strings.local_ver_ready_no_record
+                    ),
                     TEXT_SUB,
                 ),
                 None => (
-                    format!("{}{}", self.strings.local_version, self.strings.local_ver_missing),
+                    format!(
+                        "{}{}",
+                        self.strings.local_version, self.strings.local_ver_missing
+                    ),
                     TEXT_WEAK,
                 ),
             };
@@ -896,11 +969,13 @@ impl eframe::App for App {
                 ui.label(self.strings.confirm_close_steam);
                 ui.add_space(14.0);
                 ui.horizontal(|ui| {
-                    if primary_button(ui, self.strings.yes, egui::vec2(72.0, 30.0), true).clicked() {
+                    if primary_button(ui, self.strings.yes, egui::vec2(72.0, 30.0), true).clicked()
+                    {
                         confirmed = true;
                     }
                     ui.add_space(4.0);
-                    if secondary_button(ui, self.strings.no, egui::vec2(72.0, 30.0), true).clicked() {
+                    if secondary_button(ui, self.strings.no, egui::vec2(72.0, 30.0), true).clicked()
+                    {
                         cancelled = true;
                     }
                 });
