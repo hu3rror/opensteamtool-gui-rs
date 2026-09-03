@@ -14,27 +14,36 @@ use crate::tray::{Tray, TrayAction};
 use crate::updater::{self, OnlineInfo, UpdateError};
 use crate::workflow::{self, Action, BusyKind};
 
-// ---------- kill-ai-slop 约束的浅色主题 (Apple-inspired refined palette) ----------
-// 单一 accent（Steam 蓝）+ 中性底 + hairline 卡片；无渐变/毛玻璃/发光点。
-const ACCENT: egui::Color32 = egui::Color32::from_rgb(0x00, 0x71, 0xE3); // Apple / Steam Vibrant Blue
-const ACCENT_ACTIVE: egui::Color32 = egui::Color32::from_rgb(0x00, 0x58, 0xB0);
-const PANEL_BG: egui::Color32 = egui::Color32::from_rgb(0xF5, 0xF5, 0xF7); // macOS Light System Gray
-const CARD_BG: egui::Color32 = egui::Color32::from_rgb(0xFF, 0xFF, 0xFF);
-const BORDER: egui::Color32 = egui::Color32::from_rgb(0xE5, 0xE5, 0xEA); // Hairline System Border
-const BORDER_SUBTLE: egui::Color32 = egui::Color32::from_rgb(0xEB, 0xEB, 0xF0);
-const FILL_SECONDARY: egui::Color32 = egui::Color32::from_rgb(0xF2, 0xF2, 0xF7); // System Fill
-const TEXT_INK: egui::Color32 = egui::Color32::from_rgb(0x1D, 0x1D, 0x1F); // Apple Primary Label
-const TEXT_WEAK: egui::Color32 = egui::Color32::from_rgb(0x6E, 0x6E, 0x73); // Apple Secondary Label
-const DOT_RUNNING: egui::Color32 = egui::Color32::from_rgb(0x34, 0xC7, 0x59); // Apple Green
-const DOT_STOPPED: egui::Color32 = egui::Color32::from_rgb(0x8E, 0x8E, 0x93); // Apple Gray
-const ERR_RED: egui::Color32 = egui::Color32::from_rgb(0xFF, 0x3B, 0x30); // Apple Red
-
+// ---------- 效仿 Python 版外观（opensteamtool-gui-py THEME 色板） ----------
+// 蓝 accent（#0f6cbd）+ 中性灰底 + hairline 卡片；无渐变/毛玻璃/发光点。
+const ACCENT: egui::Color32 = egui::Color32::from_rgb(0x0F, 0x6C, 0xBD); // accent_bar / btn_primary_bg
+const ACCENT_ACTIVE: egui::Color32 = egui::Color32::from_rgb(0x11, 0x5E, 0xA3); // btn_primary_hover
+const PANEL_BG: egui::Color32 = egui::Color32::from_rgb(0xF8, 0xF9, 0xFA); // bg_app
+const CARD_BG: egui::Color32 = egui::Color32::from_rgb(0xFF, 0xFF, 0xFF); // card_bg
+const BORDER: egui::Color32 = egui::Color32::from_rgb(0xE2, 0xE8, 0xF0); // card_border
+const ENTRY_BORDER: egui::Color32 = egui::Color32::from_rgb(0xCB, 0xD5, 0xE1); // entry_border
+const FILL_SECONDARY: egui::Color32 = egui::Color32::from_rgb(0xF8, 0xFA, 0xFC); // entry_bg / btn_secondary_bg
+const TEXT_INK: egui::Color32 = egui::Color32::from_rgb(0x0F, 0x17, 0x2A); // text_main
+const TEXT_SUB: egui::Color32 = egui::Color32::from_rgb(0x33, 0x41, 0x55); // text_sub
+const TEXT_WEAK: egui::Color32 = egui::Color32::from_rgb(0x64, 0x74, 0x8B); // text_muted
+const STATUS_INSTALLED: egui::Color32 = egui::Color32::from_rgb(0x15, 0x80, 0x3D); // status_installed 绿
+const BTN_DEPLOY_BG: egui::Color32 = egui::Color32::from_rgb(0x16, 0xA3, 0x4A); // btn_deploy_b_bg 绿
+const BTN_DEPLOY_HOVER: egui::Color32 = egui::Color32::from_rgb(0x15, 0x80, 0x3D);
+const BTN_SECONDARY_HOVER: egui::Color32 = egui::Color32::from_rgb(0xE2, 0xE8, 0xF0);
+const BTN_UNINSTALL_A_BG: egui::Color32 = egui::Color32::from_rgb(0xF0, 0xF9, 0xFF); // 退出并卸载（浅蓝描边）
+const BTN_UNINSTALL_A_FG: egui::Color32 = egui::Color32::from_rgb(0x02, 0x84, 0xC7);
+const BTN_UNINSTALL_A_BORDER: egui::Color32 = egui::Color32::from_rgb(0x7D, 0xD3, 0xFC);
+const BTN_UNINSTALL_A_HOVER: egui::Color32 = egui::Color32::from_rgb(0xE0, 0xF2, 0xFE);
+const BTN_UNINSTALL_B_BG: egui::Color32 = egui::Color32::from_rgb(0x02, 0x84, 0xC7); // 卸载并重启（蓝）
+const BTN_UNINSTALL_B_HOVER: egui::Color32 = egui::Color32::from_rgb(0x03, 0x69, 0xA1);
+const DOT_RUNNING: egui::Color32 = STATUS_INSTALLED; // 成功/进行中圆点
+const ERR_RED: egui::Color32 = egui::Color32::from_rgb(0xDC, 0x26, 0x26); // 错误红
 fn install_theme(ctx: &egui::Context) {
     let mut visuals = egui::Visuals::light();
     visuals.panel_fill = PANEL_BG;
     visuals.window_fill = CARD_BG;
     visuals.faint_bg_color = FILL_SECONDARY;
-    visuals.extreme_bg_color = CARD_BG;
+    visuals.extreme_bg_color = FILL_SECONDARY; // TextEdit 底色（Python entry_bg #f8fafc）
     visuals.override_text_color = Some(TEXT_INK);
     let radius = egui::CornerRadius::same(8);
     for w in [
@@ -45,8 +54,8 @@ fn install_theme(ctx: &egui::Context) {
     ] {
         w.corner_radius = radius;
     }
-    visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, BORDER);
-    visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, BORDER);
+    visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, ENTRY_BORDER);
+    visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, ENTRY_BORDER);
     visuals.widgets.inactive.bg_fill = CARD_BG;
     visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, ACCENT);
     visuals.widgets.hovered.bg_fill = FILL_SECONDARY;
@@ -71,80 +80,154 @@ fn card_frame() -> Frame {
         .inner_margin(egui::Margin::symmetric(18, 16))
 }
 
-/// 主操作按钮：accent 填充 + 白字。
-fn primary_button(text: &str) -> egui::Button<'static> {
-    egui::Button::new(
-        egui::RichText::new(text)
-            .size(13.0)
-            .strong()
-            .color(egui::Color32::WHITE),
+/// Python 风格按钮的样式参数（底色 / hover 色 / 文字色 / 描边）。
+struct PyStyle {
+    bg: egui::Color32,
+    hover: egui::Color32,
+    fg: egui::Color32,
+    border: Option<egui::Color32>,
+}
+
+/// Python 风格按钮：手动绘制底/描边/文字，hover 换色（效仿 tkinter <Enter>/<Leave>）。
+/// `enabled=false` 时文字弱化为 muted 且不响应点击。
+fn py_button(
+    ui: &mut egui::Ui,
+    text: &str,
+    style: PyStyle,
+    size: egui::Vec2,
+    enabled: bool,
+) -> egui::Response {
+    let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
+    let (rect, response) = ui.allocate_exact_size(size, sense);
+    if ui.is_rect_visible(rect) {
+        let fill = if enabled && response.hovered() { style.hover } else { style.bg };
+        let stroke = style
+            .border
+            .map_or(egui::Stroke::NONE, |c| egui::Stroke::new(1.0, c));
+        ui.painter().rect(
+            rect,
+            egui::CornerRadius::same(8),
+            fill,
+            stroke,
+            egui::StrokeKind::Inside,
+        );
+        let color = if enabled { style.fg } else { TEXT_WEAK };
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            text,
+            egui::FontId::proportional(13.0),
+            color,
+        );
+    }
+    response
+}
+
+/// 卡片标题：3px 蓝色 accent bar + 标题（Python 版样式）。
+fn card_title(ui: &mut egui::Ui, text: &str) {
+    ui.horizontal(|ui| {
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(3.0, 13.0), egui::Sense::hover());
+        ui.painter().rect_filled(rect, 0.0, ACCENT);
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new(text).size(13.5).strong().color(TEXT_INK));
+    });
+}
+
+/// 状态行：纯文字 + 颜色（效仿 Python，无圆点徽章）。
+fn status_line(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
+    ui.label(egui::RichText::new(text).size(13.0).strong().color(color));
+}
+
+/// 版本信息行：整行单 label（效仿 Python 纯文本，非胶囊标签）。
+fn version_line(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
+    ui.label(egui::RichText::new(text).size(12.5).color(color));
+}
+
+/// 绿色主按钮（应用补丁并启动 Steam）。
+fn deploy_button(ui: &mut egui::Ui, text: &str, size: egui::Vec2, enabled: bool) -> egui::Response {
+    py_button(
+        ui,
+        text,
+        PyStyle { bg: BTN_DEPLOY_BG, hover: BTN_DEPLOY_HOVER, fg: egui::Color32::WHITE, border: None },
+        size,
+        enabled,
     )
-    .fill(ACCENT)
-    .stroke(egui::Stroke::NONE)
-    .corner_radius(egui::CornerRadius::same(8))
-    .min_size(egui::vec2(0.0, 34.0))
 }
 
-/// 次操作按钮：透明/浅灰底 + hairline 边框。
-fn secondary_button(text: &str) -> egui::Button<'static> {
-    egui::Button::new(egui::RichText::new(text).size(13.0).color(TEXT_INK))
-        .fill(FILL_SECONDARY)
-        .stroke(egui::Stroke::new(1.0, BORDER))
-        .corner_radius(egui::CornerRadius::same(8))
-        .min_size(egui::vec2(0.0, 34.0))
-}
-
-/// 幽灵/小号操作按钮（如语言切换）。
-fn ghost_button(text: &str) -> egui::Button<'static> {
-    egui::Button::new(
-        egui::RichText::new(text)
-            .size(12.0)
-            .strong()
-            .color(TEXT_WEAK),
+/// 白色次按钮（正常启动 Steam）。
+fn launch_button(ui: &mut egui::Ui, text: &str, size: egui::Vec2, enabled: bool) -> egui::Response {
+    py_button(
+        ui,
+        text,
+        PyStyle { bg: CARD_BG, hover: BTN_SECONDARY_HOVER, fg: TEXT_SUB, border: Some(ENTRY_BORDER) },
+        size,
+        enabled,
     )
-    .fill(FILL_SECONDARY)
-    .stroke(egui::Stroke::new(1.0, BORDER))
-    .corner_radius(egui::CornerRadius::same(7))
-    .min_size(egui::vec2(40.0, 28.0))
 }
 
-/// 真实状态用小圆点 + 词（kill-ai-slop：平色小点，无光晕无脉冲）。
-fn status_badge(ui: &mut egui::Ui, color: egui::Color32, text: &str) {
-    Frame::new()
-        .fill(FILL_SECONDARY)
-        .stroke(egui::Stroke::new(1.0, BORDER_SUBTLE))
-        .corner_radius(egui::CornerRadius::same(7))
-        .inner_margin(egui::Margin::symmetric(10, 6))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let (rect, _) = ui.allocate_exact_size(egui::vec2(7.0, 7.0), egui::Sense::hover());
-                ui.painter().circle_filled(rect.center(), 3.5, color);
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new(text).size(12.5).color(TEXT_INK));
-            });
-        });
+/// 浅蓝描边按钮（退出 Steam 并卸载补丁）。
+fn uninstall_a_button(ui: &mut egui::Ui, text: &str, size: egui::Vec2, enabled: bool) -> egui::Response {
+    py_button(
+        ui,
+        text,
+        PyStyle {
+            bg: BTN_UNINSTALL_A_BG,
+            hover: BTN_UNINSTALL_A_HOVER,
+            fg: BTN_UNINSTALL_A_FG,
+            border: Some(BTN_UNINSTALL_A_BORDER),
+        },
+        size,
+        enabled,
+    )
 }
 
-/// 键值展示标签（版本信息卡片用）。
-fn value_tag(ui: &mut egui::Ui, label: &str, value: &str, is_highlight: bool) {
-    Frame::new()
-        .fill(FILL_SECONDARY)
-        .stroke(egui::Stroke::new(1.0, BORDER_SUBTLE))
-        .corner_radius(egui::CornerRadius::same(7))
-        .inner_margin(egui::Margin::symmetric(10, 6))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(label).size(12.0).color(TEXT_WEAK));
-                ui.add_space(6.0);
-                let val_color = if is_highlight { ACCENT } else { TEXT_INK };
-                ui.label(
-                    egui::RichText::new(value)
-                        .size(12.5)
-                        .strong()
-                        .color(val_color),
-                );
-            });
-        });
+/// 蓝色实心按钮（卸载补丁并重启 Steam）。
+fn uninstall_b_button(ui: &mut egui::Ui, text: &str, size: egui::Vec2, enabled: bool) -> egui::Response {
+    py_button(
+        ui,
+        text,
+        PyStyle { bg: BTN_UNINSTALL_B_BG, hover: BTN_UNINSTALL_B_HOVER, fg: egui::Color32::WHITE, border: None },
+        size,
+        enabled,
+    )
+}
+
+/// 主蓝按钮（下载/确认弹窗）。
+fn primary_button(ui: &mut egui::Ui, text: &str, size: egui::Vec2, enabled: bool) -> egui::Response {
+    py_button(
+        ui,
+        text,
+        PyStyle { bg: ACCENT, hover: ACCENT_ACTIVE, fg: egui::Color32::WHITE, border: None },
+        size,
+        enabled,
+    )
+}
+
+/// 次灰按钮（检查更新/浏览/取消）。
+fn secondary_button(ui: &mut egui::Ui, text: &str, size: egui::Vec2, enabled: bool) -> egui::Response {
+    py_button(
+        ui,
+        text,
+        PyStyle {
+            bg: FILL_SECONDARY,
+            hover: BTN_SECONDARY_HOVER,
+            fg: TEXT_SUB,
+            border: Some(ENTRY_BORDER),
+        },
+        size,
+        enabled,
+    )
+}
+
+/// 语言切换按钮：白底 + 蓝字 + 描边（Python btn_lang 样式）。
+fn lang_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    py_button(
+        ui,
+        text,
+        PyStyle { bg: CARD_BG, hover: FILL_SECONDARY, fg: ACCENT, border: Some(ENTRY_BORDER) },
+        egui::vec2(56.0, 26.0),
+        true,
+    )
 }
 
 /// 后台线程 → UI 线程的消息。
@@ -257,6 +340,9 @@ impl App {
         let (tx, rx) = mpsc::channel();
         let lang = crate::i18n::detect_system_lang();
         let strings = Strings::new(lang);
+        // 窗口标题随语言（zh: OpenSteamTool 一键管理工具 / en: OpenSteamTool Manager）。
+        cc.egui_ctx
+            .send_viewport_cmd(egui::ViewportCommand::Title(strings.window_title.to_owned()));
         let steam_path = steam::detect_steam_path()
             .map(|p| p.display().to_string())
             .unwrap_or_default();
@@ -372,7 +458,7 @@ impl App {
                     self.notice = match &res {
                         Ok(info) => Some((
                             true,
-                            format!("{}: {}", self.strings.new_version, info.version),
+                            format!("v{} {}", info.version, self.strings.new_version),
                         )),
                         Err(e) => Some((false, self.strings.update_error(e))),
                     };
@@ -457,6 +543,8 @@ impl App {
     fn toggle_lang(&mut self) {
         self.lang = self.lang.toggle();
         self.strings = Strings::new(self.lang);
+        self.ctx
+            .send_viewport_cmd(egui::ViewportCommand::Title(self.strings.window_title.to_owned()));
     }
 
     fn check_update(&mut self, ctx: &egui::Context) {
@@ -492,7 +580,7 @@ impl App {
                     .color(TEXT_INK),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add(ghost_button(self.lang.toggle_label())).clicked() {
+                if lang_button(ui, self.lang.toggle_label()).clicked() {
                     self.toggle_lang();
                 }
             });
@@ -503,12 +591,7 @@ impl App {
     fn card1(&mut self, ui: &mut egui::Ui) {
         card_frame().show(ui, |ui| {
             ui.set_width(ui.available_width()); // 卡片撑满窗口宽度，避免堆在左侧
-            ui.label(
-                egui::RichText::new(self.strings.card1_title)
-                    .size(13.5)
-                    .strong()
-                    .color(TEXT_INK),
-            );
+            card_title(ui, self.strings.card1_title);
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 let edit_width = (ui.available_width() - 92.0).max(120.0);
@@ -521,12 +604,7 @@ impl App {
                 if resp.changed() {
                     self.refresh_status();
                 }
-                if ui
-                    .add_sized(
-                        egui::vec2(82.0, 34.0),
-                        secondary_button(self.strings.browse),
-                    )
-                    .clicked()
+                if secondary_button(ui, self.strings.browse, egui::vec2(82.0, 34.0), true).clicked()
                     && let Some(dir) = rfd::FileDialog::new().pick_folder()
                 {
                     self.steam_path = dir.display().to_string();
@@ -540,96 +618,66 @@ impl App {
     fn card2(&mut self, ui: &mut egui::Ui) {
         card_frame().show(ui, |ui| {
             ui.set_width(ui.available_width()); // 卡片撑满窗口宽度
-            ui.label(
-                egui::RichText::new(self.strings.card2_title)
-                    .size(13.5)
-                    .strong()
-                    .color(TEXT_INK),
-            );
+            card_title(ui, self.strings.card2_title);
             ui.add_space(10.0);
 
-            // 部署状态（真实状态：平色圆点 + 词）。
-            ui.horizontal(|ui| {
-                match self.status {
-                    DeployStatus::InvalidPath => {
-                        status_badge(ui, ERR_RED, self.strings.status_invalid);
-                    }
-                    DeployStatus::Deployed => {
-                        status_badge(ui, DOT_RUNNING, self.strings.status_deployed);
-                    }
-                    DeployStatus::NotDeployed => {
-                        status_badge(ui, DOT_STOPPED, self.strings.status_not_deployed);
-                    }
-                }
+            // 部署状态：纯文字 + 颜色（效仿 Python，无圆点徽章）。
+            let (text, color) = match self.status {
+                DeployStatus::InvalidPath => (self.strings.status_invalid, TEXT_WEAK),
+                DeployStatus::Deployed => (self.strings.status_deployed, STATUS_INSTALLED),
+                DeployStatus::NotDeployed => (self.strings.status_not_deployed, TEXT_WEAK),
+            };
+            status_line(ui, text, color);
+        });
+        ui.add_space(10.0);
+    }
 
-                if self.status != DeployStatus::InvalidPath {
-                    ui.add_space(8.0);
-                    if self.steam_running {
-                        status_badge(ui, DOT_RUNNING, self.strings.steam_running);
+    /// 独立操作区：两大按钮等宽并排（效仿 Python action_frame，位于卡片 2 与卡片 3 之间）。
+    fn action_area(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        ui.horizontal(|ui| {
+            let gap = 12.0;
+            let w = ((ui.available_width() - gap) / 2.0).max(150.0);
+            let size = egui::vec2(w, 36.0);
+            match self.status {
+                DeployStatus::Deployed => {
+                    // Steam 运行中 →「退出 Steam 并卸载补丁」；已退出 → 直接「卸载补丁」。
+                    let uninstall_label = if self.steam_running {
+                        self.strings.btn_exit_and_uninstall
                     } else {
-                        status_badge(ui, DOT_STOPPED, self.strings.steam_not_running);
+                        self.strings.btn_uninstall
+                    };
+                    if uninstall_a_button(ui, uninstall_label, size, !self.busy).clicked() {
+                        self.request_action(&ctx, Action::ExitAndUninstall);
+                    }
+                    ui.add_space(gap);
+                    if uninstall_b_button(
+                        ui,
+                        self.strings.btn_uninstall_and_restart,
+                        size,
+                        !self.busy,
+                    )
+                    .clicked()
+                    {
+                        self.request_action(&ctx, Action::UninstallAndRestart);
                     }
                 }
-            });
-
-            ui.add_space(14.0);
-
-            ui.horizontal(|ui| {
-                let ctx = ui.ctx().clone();
-                match self.status {
-                    DeployStatus::Deployed => {
-                        // Steam 运行中 →「退出 Steam 并卸载补丁」；已退出 → 直接「卸载补丁」。
-                        let uninstall_label = if self.steam_running {
-                            self.strings.btn_exit_and_uninstall
-                        } else {
-                            self.strings.btn_uninstall
-                        };
-                        if ui
-                            .add_enabled(!self.busy, primary_button(uninstall_label))
-                            .clicked()
-                        {
-                            self.request_action(&ctx, Action::ExitAndUninstall);
-                        }
-                        ui.add_space(4.0);
-                        if ui
-                            .add_enabled(
-                                !self.busy,
-                                secondary_button(self.strings.btn_uninstall_and_restart),
-                            )
-                            .clicked()
-                        {
-                            self.request_action(&ctx, Action::UninstallAndRestart);
-                        }
+                DeployStatus::NotDeployed => {
+                    if deploy_button(ui, self.strings.btn_apply_and_launch, size, !self.busy).clicked() {
+                        self.request_action(&ctx, Action::ApplyAndLaunch);
                     }
-                    DeployStatus::NotDeployed => {
-                        if ui
-                            .add_enabled(
-                                !self.busy,
-                                primary_button(self.strings.btn_apply_and_launch),
-                            )
-                            .clicked()
-                        {
-                            self.request_action(&ctx, Action::ApplyAndLaunch);
-                        }
-                        ui.add_space(4.0);
-                        if ui
-                            .add_enabled(
-                                !self.busy,
-                                secondary_button(self.strings.btn_launch_normal),
-                            )
-                            .clicked()
-                        {
-                            self.request_action(&ctx, Action::Launch);
-                        }
-                    }
-                    DeployStatus::InvalidPath => {
-                        // 无有效路径时禁用操作按钮。
-                        ui.add_enabled(false, primary_button(self.strings.btn_apply_and_launch));
-                        ui.add_space(4.0);
-                        ui.add_enabled(false, secondary_button(self.strings.btn_launch_normal));
+                    ui.add_space(gap);
+                    if launch_button(ui, self.strings.btn_launch_normal, size, !self.busy).clicked() {
+                        self.request_action(&ctx, Action::Launch);
                     }
                 }
-            });
+                DeployStatus::InvalidPath => {
+                    // 无有效路径时禁用操作按钮。
+                    deploy_button(ui, self.strings.btn_apply_and_launch, size, false);
+                    ui.add_space(gap);
+                    launch_button(ui, self.strings.btn_launch_normal, size, false);
+                }
+            }
         });
         ui.add_space(10.0);
     }
@@ -637,37 +685,54 @@ impl App {
     fn card3(&mut self, ui: &mut egui::Ui) {
         card_frame().show(ui, |ui| {
             ui.set_width(ui.available_width()); // 卡片撑满窗口宽度
-            ui.label(
-                egui::RichText::new(self.strings.card3_title)
-                    .size(13.5)
-                    .strong()
-                    .color(TEXT_INK),
-            );
+            card_title(ui, self.strings.card3_title);
             ui.add_space(10.0);
 
-            let local_ver = self
-                .local_version
-                .as_deref()
-                .unwrap_or(self.strings.unknown);
-            let online_version: String = match &self.update_state {
-                UpdateState::Idle => self.strings.unknown.to_string(),
-                UpdateState::Checking => self.strings.checking.to_string(),
-                UpdateState::Checked(Ok(info)) => info.version.clone(),
-                UpdateState::Checked(Err(_)) => self.strings.unknown.to_string(),
+            // 本地版本行：v + 版本 / 已本地就绪 (未记录版本) / 未下载 (dlls 文件夹缺失文件)。
+            let dll_dir = dll::dll_dir();
+            let all_local_exist = dll::TARGET_DLLS.iter().all(|d| dll_dir.join(d).is_file());
+            let (local_text, local_color) = match &self.local_version {
+                Some(v) => (
+                    format!("{}v{}", self.strings.local_version, v.trim_start_matches('v')),
+                    TEXT_INK,
+                ),
+                None if all_local_exist => (
+                    format!("{}{}", self.strings.local_version, self.strings.local_ver_ready_no_record),
+                    TEXT_SUB,
+                ),
+                None => (
+                    format!("{}{}", self.strings.local_version, self.strings.local_ver_missing),
+                    TEXT_WEAK,
+                ),
             };
+            version_line(ui, &local_text, local_color);
+            ui.add_space(6.0);
 
-            ui.horizontal(|ui| {
-                value_tag(ui, self.strings.local_version, local_ver, false);
-                ui.add_space(8.0);
-                let is_new = match &self.update_state {
-                    UpdateState::Checked(Ok(info)) => {
-                        info.version != local_ver && !info.version.is_empty()
-                    }
-                    _ => false,
-                };
-                value_tag(ui, self.strings.online_version, &online_version, is_new);
-            });
-
+            // 线上版本行：未知 / 正在检查更新 / v+版本+后缀 / 检查失败。
+            let prefix = self.strings.online_version;
+            let (online_text, online_color) = match &self.update_state {
+                UpdateState::Idle => (format!("{}{}", prefix, self.strings.unknown), TEXT_SUB),
+                UpdateState::Checking => (format!("{}{}", prefix, self.strings.checking), TEXT_SUB),
+                UpdateState::Checked(Ok(info)) => {
+                    let local = self.local_version.as_deref().unwrap_or("");
+                    let suffix = if local == info.version {
+                        self.strings.up_to_date
+                    } else {
+                        self.strings.new_version
+                    };
+                    (format!("{}v{} {}", prefix, info.version, suffix), TEXT_SUB)
+                }
+                UpdateState::Checked(Err(e)) => (
+                    format!(
+                        "{}{} ({})",
+                        prefix,
+                        self.strings.online_check_fail,
+                        self.strings.update_error(e),
+                    ),
+                    ERR_RED,
+                ),
+            };
+            version_line(ui, &online_text, online_color);
             ui.add_space(14.0);
 
             let ctx = ui.ctx().clone();
@@ -676,9 +741,13 @@ impl App {
 
             // 先只收集按钮意图，避免借用冲突。
             ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(!self.busy, secondary_button(self.strings.btn_check_update))
-                    .clicked()
+                if secondary_button(
+                    ui,
+                    self.strings.btn_check_update,
+                    egui::vec2(96.0, 32.0),
+                    !self.busy,
+                )
+                .clicked()
                 {
                     do_check = true;
                 }
@@ -687,12 +756,13 @@ impl App {
                     let local = self.local_version.as_deref().unwrap_or("");
                     if info.version != local
                         && !info.version.is_empty()
-                        && ui
-                            .add_enabled(
-                                !self.busy,
-                                primary_button(self.strings.btn_download_and_extract),
-                            )
-                            .clicked()
+                        && primary_button(
+                            ui,
+                            self.strings.btn_download_and_extract,
+                            egui::vec2(150.0, 32.0),
+                            !self.busy,
+                        )
+                        .clicked()
                     {
                         do_download = Some(info.clone());
                     }
@@ -704,35 +774,6 @@ impl App {
             }
             if let Some(info) = do_download {
                 self.download_update(&ctx, info);
-            }
-
-            // 线上状态行：已是最新 / 发现新版本 / 错误（错误保留红，其余中性）。
-            if let UpdateState::Checked(res) = &self.update_state {
-                ui.add_space(8.0);
-                match res {
-                    Ok(info) if self.local_version.as_deref() == Some(info.version.as_str()) => {
-                        ui.label(
-                            egui::RichText::new(format!("●  {}", self.strings.up_to_date))
-                                .size(12.0)
-                                .color(TEXT_WEAK),
-                        );
-                    }
-                    Ok(_) => {
-                        ui.label(
-                            egui::RichText::new(format!("●  {}", self.strings.new_version))
-                                .size(12.0)
-                                .strong()
-                                .color(ACCENT),
-                        );
-                    }
-                    Err(e) => {
-                        ui.label(
-                            egui::RichText::new(format!("●  {}", self.strings.update_error(e)))
-                                .size(12.0)
-                                .color(ERR_RED),
-                        );
-                    }
-                }
             }
         });
         ui.add_space(10.0);
@@ -827,6 +868,7 @@ impl eframe::App for App {
             self.top_bar(ui);
             self.card1(ui);
             self.card2(ui);
+            self.action_area(ui);
             self.card3(ui);
             self.notice_bar(ui);
 
@@ -854,11 +896,11 @@ impl eframe::App for App {
                 ui.label(self.strings.confirm_close_steam);
                 ui.add_space(14.0);
                 ui.horizontal(|ui| {
-                    if ui.add(primary_button(self.strings.yes)).clicked() {
+                    if primary_button(ui, self.strings.yes, egui::vec2(72.0, 30.0), true).clicked() {
                         confirmed = true;
                     }
                     ui.add_space(4.0);
-                    if ui.add(secondary_button(self.strings.no)).clicked() {
+                    if secondary_button(ui, self.strings.no, egui::vec2(72.0, 30.0), true).clicked() {
                         cancelled = true;
                     }
                 });
