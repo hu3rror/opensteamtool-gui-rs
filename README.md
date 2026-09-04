@@ -13,6 +13,7 @@ A native Windows tool that deploys, removes, and updates OpenSteamTool patches f
 - **Tray**: left-click toggles visibility; menu has Show, "Minimize to tray automatically", Quit
 - **Bilingual UI**: Chinese or English, chosen by system locale, switchable at runtime
 - **Settings dialog**: edit the upstream `opensteamtool.toml` (Steam dir) with a validated TOML editor; starts from the bundled example template when the file is missing
+- **OnlineFix launch preset**: toggle the `-onlinefix` launch option for a game in `localconfig.vdf` from the settings dialog (auto-backup before writing, Steam must be closed); one-click copy of the argument
 
 ## Usage
 
@@ -65,6 +66,7 @@ Deploy, Uninstall, Local Version, Online Version, Action, Auto-tray, Minimize-to
 src/
 ├── main.rs       # eframe entry point
 ├── config_editor.rs # opensteamtool.toml read/validate/atomic-write (settings dialog)
+├── onlinefix.rs # localconfig.vdf LaunchOptions edits (OnlineFix preset: VDF parser + backup)
 ├── ui.rs         # egui UI (3 cards + tray + auto-tray wiring)
 ├── workflow.rs   # action planning and step execution (plan/execute)
 ├── dll.rs        # target DLL deploy/uninstall, local status

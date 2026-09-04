@@ -84,6 +84,18 @@ _Avoid_: 设置编辑器
 配置编辑器内内置的上游 `opensteamtool.example.toml` 快照，一键载入作为编辑起点（文件不存在时的引导入口）。
 _Avoid_: 示例配置
 
+**OnlineFix 启动预设（OnlineFix Preset）**:
+把 `-onlinefix` 写入指定游戏 AppID 的「启动选项」的持久设置（改 `localconfig.vdf`，Steam 原生读取）；上游据此把该游戏的 AppID 重写为 480（`kOnlineFixAppId`）实现在线修复。
+_Avoid_: 联机修复、在线模式
+
+**启动选项（Launch Options）**:
+`localconfig.vdf` 中 `Apps/<appid>` 块下的 `LaunchOptions` 键值，即 Steam 游戏属性里的「启动选项」。
+_Avoid_: 启动参数、命令行参数（「参数」指 `-onlinefix` 本身）
+
+**VDF 备份（VDF Backup）**:
+修改 `localconfig.vdf` 前生成的时间戳副本（`localconfig.vdf.bak-<unix秒>`），用于异常回滚。
+_Avoid_: 备份文件
+
 ## Rules
 
 - 术语 `部署/卸载` 只用于补丁 DLL 相对 Steam 目录的操作，不与「启动/退出 Steam」混用。
@@ -97,3 +109,5 @@ _Avoid_: 示例配置
 - 「启动 Steam」的成功判定是 spawn 后确认 `steam.exe` 存活（2s 窗口，失败重试 1 次），不是 spawn 本身。
 - 「Steam 进程组」的判定路径必须是实际 Steam 安装目录：路径前缀匹配会把该目录下所有进程计入组内，用宽目录（如系统临时目录）作判定路径会误伤无关进程。
 - 「配置编辑器」编辑的是上游配置文件 `<Steam>/opensteamtool.toml`，与工具自身运行参数无关；保存即显式创建文件（与上游「无文件时不自动创建」的行为区分——那是用户未显式操作的情形）。
+- 「OnlineFix 启动预设」只允许在 Steam 未运行时修改（`localconfig.vdf` 会被 Steam 退出时回写覆盖）；每次写盘前必先生成「VDF 备份」。
+- 「启动选项」的读写走 `localconfig.vdf`（Steam 原生读取）；「复制参数」只是把 `-onlinefix` 文本给到剪贴板，不写任何文件。

@@ -13,6 +13,7 @@ Windows 原生工具，管理 OpenSteamTool 补丁的部署/卸载与在线更�
 - **托盘**：左键切换显隐，菜单含「显示」「最小化时自动隐藏到托盘」「退出」
 - **中英文切换**：按系统语言自动选择，可手动切换
 - **设置对话框**：编辑 Steam 目录下的上游配置文件 `opensteamtool.toml`（保存前 TOML 语法校验）；文件缺失时可从内置示例模板一键开始
+- **OnlineFix 启动预设**：设置对话框内直接为指定游戏写入/移除 `-onlinefix` 启动选项（写 `localconfig.vdf`，自动备份、需先关 Steam）；支持一键复制参数
 
 ## 使用
 
@@ -65,6 +66,7 @@ git push origin v1.0.0
 src/
 ├── main.rs       # eframe 入口
 ├── config_editor.rs # opensteamtool.toml 读取/校验/原子写入（设置对话框）
+├── onlinefix.rs # localconfig.vdf 启动选项读写（OnlineFix 预设：VDF 解析/备份）
 ├── ui.rs         # egui 界面（3 卡片 + 托盘 + 自动隐身接线）
 ├── workflow.rs   # 「操作」判定表与顺序执行（plan/execute）
 ├── dll.rs        # 目标 DLL 部署/卸载、本地状态检测

@@ -5,6 +5,7 @@
 mod config_editor;
 mod dll;
 mod i18n;
+mod onlinefix;
 mod process;
 mod steam;
 mod tray;

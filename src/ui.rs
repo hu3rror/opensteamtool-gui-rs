@@ -7,6 +7,7 @@ use eframe::egui;
 use egui::Frame;
 
 use crate::config_editor;
+use crate::onlinefix;
 use crate::dll::{self, DeployStatus};
 use crate::i18n::{Lang, Strings};
 use crate::process::{self, SteamEvent, SteamMonitor};
@@ -350,6 +351,16 @@ enum Notice {
     /// 前置校验失败（类型化错误 → 本地化文案）。
     Precheck(workflow::Precheck),
 }
+
+/// OnlineFix 预设区状态行（选中账号 × AppID 的当前状态）。
+enum OnlineFixStatus {
+    Enabled,
+    Disabled,
+    /// 刚点击「复制参数」（短暂显示）。
+    Copied,
+    Error(String),
+}
+
 pub struct App {
     lang: Lang,
     strings: Strings,
@@ -393,6 +404,18 @@ pub struct App {
     config_err: Option<String>,
     /// 最近一次保存成功（短暂显示「已保存」，再次编辑即清除）。
     config_saved: bool,
+
+    /// OnlineFix 预设区：可用账号（userdata 扫描，对话框打开时刷新）。
+    of_accounts: Vec<PathBuf>,
+    of_account_idx: usize,
+    /// 手动输入/候选取用的 AppID。
+    of_appid: String,
+    /// Lua config 扫描的候选 AppID。
+    of_candidates: Vec<u32>,
+    /// 当前选中 (账号, AppID) 的在线修复状态。
+    of_status: Option<OnlineFixStatus>,
+    /// 上次计算状态时的 (账号 idx, AppID)，避免每帧重读 VDF。
+    of_status_key: Option<(usize, String)>,
 }
 
 /// 读取系统中文字体数据（微软雅黑/黑体/宋体，首个可读的生效），无则 None。
@@ -502,6 +525,12 @@ impl App {
             config_loaded: false,
             config_err: None,
             config_saved: false,
+            of_accounts: Vec::new(),
+            of_account_idx: 0,
+            of_appid: String::new(),
+            of_candidates: Vec::new(),
+            of_status: None,
+            of_status_key: None,
         }
     }
 
@@ -684,6 +713,13 @@ impl App {
         self.config_loaded = false;
         self.config_err = None;
         self.config_saved = false;
+        // OnlineFix 区：按当前 Steam 路径刷新账号与 AppID 候选。
+        let steam_dir = Path::new(self.steam_path.trim());
+        self.of_accounts = onlinefix::account_vdf_paths(steam_dir);
+        self.of_account_idx = self.of_account_idx.min(self.of_accounts.len().saturating_sub(1));
+        self.of_candidates = onlinefix::scan_lua_appids(steam_dir);
+        self.of_status = None;
+        self.of_status_key = None;
     }
 
     /// 首次渲染时把磁盘内容载入编辑器缓冲（避免每帧重读覆盖用户编辑）。
@@ -729,6 +765,86 @@ impl App {
         }
     }
 
+    /// 账号展示名：`userdata/<id>/config/localconfig.vdf` → `<id>`。
+    fn of_account_name(vdf: &Path) -> String {
+        vdf.parent()
+            .and_then(|c| c.parent())
+            .and_then(|u| u.file_name())
+            .and_then(|n| n.to_str())
+            .map(|s| s.to_owned())
+            .unwrap_or_else(|| vdf.display().to_string())
+    }
+
+    /// 重算 OnlineFix 状态（仅当选中的 (账号, AppID) 变化时读盘）。
+    fn refresh_of_status(&mut self) {
+        let key = (self.of_account_idx, self.of_appid.trim().to_owned());
+        if self.of_status_key.as_ref() == Some(&key) {
+            return;
+        }
+        self.of_status_key = Some(key.clone());
+        let Ok(appid) = key.1.parse::<u32>() else {
+            return; // 输入未成形：不显示状态。
+        };
+        let Some(vdf) = self.of_accounts.get(key.0).cloned() else {
+            return;
+        };
+        self.of_status = Some(match onlinefix::is_onlinefix(&vdf, appid) {
+            Ok(true) => OnlineFixStatus::Enabled,
+            Ok(false) => OnlineFixStatus::Disabled,
+            Err(e) => OnlineFixStatus::Error(self.strings.onlinefix_error(&e)),
+        });
+    }
+
+    /// 启用 OnlineFix（写入 -onlinefix）；成功在界面内直接更新状态，键置空待下帧复读。
+    fn of_enable(&mut self) {
+        let Some(appid) = self.of_appid.trim().parse::<u32>().ok() else {
+            self.of_status = Some(OnlineFixStatus::Error(self.strings.err_of_invalid_appid.to_string()));
+            self.of_status_key = None;
+            return;
+        };
+        let Some(vdf) = self.of_accounts.get(self.of_account_idx).cloned() else {
+            return;
+        };
+        match onlinefix::set_onlinefix(&vdf, appid) {
+            Ok(()) => {
+                self.of_status = Some(OnlineFixStatus::Enabled);
+                self.of_status_key = None;
+            }
+            Err(e) => {
+                self.of_status = Some(OnlineFixStatus::Error(self.strings.onlinefix_error(&e)));
+                self.of_status_key = None;
+            }
+        }
+    }
+
+    /// 停用 OnlineFix（移除 -onlinefix）。
+    fn of_disable(&mut self) {
+        let Some(appid) = self.of_appid.trim().parse::<u32>().ok() else {
+            self.of_status = Some(OnlineFixStatus::Error(self.strings.err_of_invalid_appid.to_string()));
+            self.of_status_key = None;
+            return;
+        };
+        let Some(vdf) = self.of_accounts.get(self.of_account_idx).cloned() else {
+            return;
+        };
+        match onlinefix::clear_onlinefix(&vdf, appid) {
+            Ok(()) => {
+                self.of_status = Some(OnlineFixStatus::Disabled);
+                self.of_status_key = None;
+            }
+            Err(e) => {
+                self.of_status = Some(OnlineFixStatus::Error(self.strings.onlinefix_error(&e)));
+                self.of_status_key = None;
+            }
+        }
+    }
+
+    /// 复制 `-onlinefix` 参数到剪贴板。
+    fn of_copy(&mut self, ctx: &egui::Context) {
+        ctx.copy_text(onlinefix::ONLINEFIX_ARG.to_owned());
+        self.of_status = Some(OnlineFixStatus::Copied);
+    }
+
     /// 设置对话框主体（模态；Steam 路径无效时仅提示 + 关闭）。
     fn settings_dialog(&mut self, ctx: &egui::Context) {
         if !self.settings_open {
@@ -746,8 +862,13 @@ impl App {
         let mut save_clicked = false;
         let mut close_clicked = false;
         let mut template_clicked = false;
+        let mut enable_clicked = false;
+        let mut disable_clicked = false;
+        let mut copy_clicked = false;
 
         egui::Modal::new(egui::Id::new("settings_dialog")).show(ctx, |ui| {
+            // 内容变长后允许纵向滚动，避免超出窗口高度。
+            egui::ScrollArea::vertical().max_height(460.0).show(ui, |ui| {
             ui.set_width(560.0);
             ui.heading(self.strings.settings_title);
             ui.add_space(8.0);
@@ -809,6 +930,92 @@ impl App {
                     }
                 });
             });
+
+            ui.add_space(14.0);
+            ui.separator();
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new(self.strings.of_title).strong().color(TEXT_INK));
+            ui.add_space(6.0);
+
+            if self.steam_running {
+                status_line(ui, self.strings.of_steam_running, TEXT_WEAK);
+            } else if self.of_accounts.is_empty() {
+                status_line(ui, self.strings.of_no_account, TEXT_WEAK);
+            } else {
+                // 账号选择。
+                ui.horizontal(|ui| {
+                    ui.label(self.strings.of_account_label);
+                    let label = App::of_account_name(&self.of_accounts[self.of_account_idx]);
+                    egui::ComboBox::from_id_salt("of_account")
+                        .selected_text(label)
+                        .width(150.0)
+                        .show_ui(ui, |ui| {
+                            for (i, vdf) in self.of_accounts.iter().enumerate() {
+                                let selected = self.of_account_idx == i;
+                                let name = App::of_account_name(vdf);
+                                if ui.selectable_label(selected, name).clicked() {
+                                    self.of_account_idx = i;
+                                    self.of_status_key = None;
+                                }
+                            }
+                        });
+                });
+                // AppID 输入 + Lua 候选。
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(self.strings.of_appid_label);
+                    let resp = ui.add(
+                        egui::TextEdit::singleline(&mut self.of_appid)
+                            .desired_width(96.0)
+                            .hint_text("0"),
+                    );
+                    if resp.changed() {
+                        self.of_status_key = None;
+                    }
+                    if !self.of_candidates.is_empty() {
+                        ui.add_space(8.0);
+                        for &id in &self.of_candidates {
+                            if ui.small_button(id.to_string()).clicked() {
+                                self.of_appid = id.to_string();
+                                self.of_status_key = None;
+                            }
+                        }
+                    }
+                });
+                ui.add_space(6.0);
+                // 状态行（先刷新再渲染）。
+                self.refresh_of_status();
+                if let Some(status) = &self.of_status {
+                    match status {
+                        OnlineFixStatus::Enabled => {
+                            status_line(ui, self.strings.of_status_enabled, STATUS_INSTALLED);
+                        }
+                        OnlineFixStatus::Disabled => {
+                            status_line(ui, self.strings.of_status_disabled, TEXT_WEAK);
+                        }
+                        OnlineFixStatus::Copied => {
+                            status_line(ui, self.strings.of_copied, STATUS_INSTALLED);
+                        }
+                        OnlineFixStatus::Error(msg) => {
+                            status_line(ui, msg, ERR_RED);
+                        }
+                    }
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if primary_button(ui, self.strings.of_btn_enable, egui::vec2(120.0, 30.0), true).clicked() {
+                        enable_clicked = true;
+                    }
+                    if secondary_button(ui, self.strings.of_btn_disable, egui::vec2(120.0, 30.0), true).clicked() {
+                        disable_clicked = true;
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if secondary_button(ui, self.strings.of_btn_copy, egui::vec2(84.0, 30.0), true).clicked() {
+                            copy_clicked = true;
+                        }
+                    });
+                });
+            }
+            });
         });
 
         if save_clicked {
@@ -819,6 +1026,15 @@ impl App {
             self.config_loaded = true;
             self.config_err = None;
             self.config_saved = false;
+        }
+        if enable_clicked {
+            self.of_enable();
+        }
+        if disable_clicked {
+            self.of_disable();
+        }
+        if copy_clicked {
+            self.of_copy(ctx);
         }
         if close_clicked {
             self.settings_open = false;

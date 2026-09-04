@@ -1,6 +1,7 @@
 //! 双语文案与系统语言检测。
 
 use crate::config_editor::ConfigError;
+use crate::onlinefix::VdfError;
 use crate::updater::UpdateError;
 use crate::workflow::{Action, BusyKind, Op, Precheck, WorkflowError};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -111,6 +112,21 @@ pub struct Strings {
     pub ok_config_saved: &'static str,
     pub err_config_load: &'static str,
     pub err_config_save: &'static str,
+    /// OnlineFix 启动预设（PR-2）。
+    pub of_title: &'static str,
+    pub of_steam_running: &'static str,
+    pub of_no_account: &'static str,
+    pub of_account_label: &'static str,
+    pub of_appid_label: &'static str,
+    pub of_status_enabled: &'static str,
+    pub of_status_disabled: &'static str,
+    pub of_btn_enable: &'static str,
+    pub of_btn_disable: &'static str,
+    pub of_btn_copy: &'static str,
+    pub of_copied: &'static str,
+    pub err_of_op: &'static str,
+    pub err_of_invalid_appid: &'static str,
+    pub of_err_root_chain: &'static str,
 }
 
 impl Strings {
@@ -150,6 +166,17 @@ impl Strings {
         match lang {
             Lang::Zh => format!("{}（第 {} 行，第 {} 列）：{}", self.err_config_parse, e.line, e.col, e.message),
             Lang::En => format!("{} (line {}, column {}): {}", self.err_config_parse, e.line, e.col, e.message),
+        }
+    }
+
+    /// OnlineFix 写入/读取错误 → 当前语言提示文案。
+    pub fn onlinefix_error(&self, e: &VdfError) -> String {
+        match e {
+            VdfError::Io(detail) => format!("{}: {detail}", self.err_of_op),
+            VdfError::Structure(code) => match *code {
+                "missing_root_chain" => self.of_err_root_chain.to_string(),
+                other => format!("{}: structure {other}", self.err_of_op),
+            },
         }
     }
     /// 「操作」成功后 → 当前语言提示文案。
@@ -247,6 +274,20 @@ impl Strings {
             ok_config_saved: "已保存",
             err_config_load: "读取配置失败",
             err_config_save: "保存失败",
+            of_title: "OnlineFix 启动预设",
+            of_steam_running: "Steam 正在运行：请先关闭 Steam 再修改启动参数",
+            of_no_account: "未找到账号配置（userdata/*/config/localconfig.vdf）",
+            of_account_label: "账号：",
+            of_appid_label: "游戏 AppID：",
+            of_status_enabled: "该游戏已启用 -onlinefix",
+            of_status_disabled: "该游戏未启用 -onlinefix",
+            of_btn_enable: "启用 OnlineFix",
+            of_btn_disable: "停用 OnlineFix",
+            of_btn_copy: "复制参数",
+            of_copied: "已复制 -onlinefix",
+            err_of_op: "OnlineFix 操作失败",
+            err_of_invalid_appid: "AppID 无效，请输入数字",
+            of_err_root_chain: "localconfig.vdf 结构异常（缺少 UserLocalConfigStore 根块）",
         }
     }
 
@@ -317,6 +358,20 @@ impl Strings {
             ok_config_saved: "Saved",
             err_config_load: "Failed to read config",
             err_config_save: "Save failed",
+            of_title: "OnlineFix Launch Preset",
+            of_steam_running: "Steam is running — close Steam before changing launch options",
+            of_no_account: "No account config found (userdata/*/config/localconfig.vdf)",
+            of_account_label: "Account: ",
+            of_appid_label: "Game App ID: ",
+            of_status_enabled: "-onlinefix enabled for this game",
+            of_status_disabled: "-onlinefix not enabled",
+            of_btn_enable: "Enable OnlineFix",
+            of_btn_disable: "Disable OnlineFix",
+            of_btn_copy: "Copy Argument",
+            of_copied: "Copied -onlinefix",
+            err_of_op: "OnlineFix operation failed",
+            err_of_invalid_appid: "Invalid App ID — enter a number",
+            of_err_root_chain: "localconfig.vdf is malformed (missing UserLocalConfigStore root)",
         }
     }
 }
