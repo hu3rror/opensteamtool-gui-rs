@@ -28,6 +28,11 @@ jobs:
 
       - name: Rust build cache
         uses: Swatinem/rust-cache@v2
+        with:
+          # 与 cache-warm.yml 共用 key（覆盖 job-id 差异），tag 发布时命中 main 的缓存
+          shared-key: release
+          # 只在 main 保存：tag 上保存的缓存其他 ref 读不到，纯浪费存储
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Run tests
         run: cargo test

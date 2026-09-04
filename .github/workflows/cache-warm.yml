@@ -1,0 +1,36 @@
+# 缓存预热：在默认分支（main）上构建 release，把 rust 缓存保存到 refs/heads/main。
+# GitHub 缓存按 ref 隔离，tag 与 tag 之间互不可见；只有默认分支的缓存可被
+# 其他 ref（含 v* tag）恢复。release.yml 的发布 job 用相同 shared-key 即可命中。
+name: cache-warm
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    # 每日预热，防止缓存因 7 天未使用被淘汰
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  warm:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # key 必须与 release.yml 一致（shared-key: release 覆盖 job-id 差异）
+      - name: Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release
+
+      - name: Build release (warm cache)
+        run: cargo build --release
