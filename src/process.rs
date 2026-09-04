@@ -198,8 +198,12 @@ mod tests {
 
     #[test]
     fn kill_when_not_running_succeeds() {
-        // 未运行时应直接成功，不报错（CI 上 temp 目录下无 Steam 进程组）。
-        let _ = kill_steam(&std::env::temp_dir());
+        // 未运行时应直接成功，不报错。
+        // 注意：不能用 temp_dir() 当 steam_dir——CI 上 temp 目录下
+        // 运行着 runner 的辅助进程，会被进程组逻辑误杀（v0.2.3 回归，
+        // 曾导致 GitHub Actions runner 失联）。用不存在且唯一的目录。
+        let dir = std::env::temp_dir().join(format!("ost_kill_test_{}", std::process::id()));
+        let _ = kill_steam(&dir);
     }
 
     #[test]
