@@ -208,6 +208,14 @@ fn edit_vdf(
     if let Some(idx) = launch_idx {
         if next.is_empty() {
             doc.remove_line(idx); // 选项清空 → 删除该行。
+            // 若 AppID 块因此变空（无任何有效内容），连块移除：
+            // 还原「set 时为缺失块新建的块」，使 set/clear 逐字节对称。
+            if !create_chain
+                && let Some(block) = doc.find_child_block(root, appid.to_string().as_bytes())
+                && doc.block_is_empty(block)
+            {
+                doc.remove_block(block);
+            }
         } else {
             doc.rewrite_value(idx, &next);
         }
@@ -415,9 +423,10 @@ struct Doc {
     trailing_newline: bool,
 }
 
-/// 定位到的块：开括号/闭括号行号 + 本块前导 tab 数。
+/// 定位到的块：键行/开括号/闭括号行号 + 本块前导 tab 数。
 #[derive(Clone, Copy)]
 struct Block {
+    key_line: usize,
     open: usize,
     close: usize,
     indent: usize,
@@ -486,6 +495,7 @@ impl Doc {
                     }
                     let close = self.match_close(open)?;
                     return Some(Block {
+                        key_line: i,
                         open,
                         close,
                         indent,
@@ -586,6 +596,16 @@ impl Doc {
     /// 删除一行（clear 清空选项行时用）。
     fn remove_line(&mut self, line_idx: usize) {
         self.lines.remove(line_idx);
+    }
+
+    /// 块内是否无任何有效内容（空行/注释除外）。
+    fn block_is_empty(&self, block: Block) -> bool {
+        (block.open + 1..block.close).all(|i| classify(&self.lines[i]).is_none())
+    }
+
+    /// 整块移除：键行 + 开闭括号及其间所有行。
+    fn remove_block(&mut self, block: Block) {
+        self.lines.drain(block.key_line..=block.close);
     }
 
     /// 序列化并原子写盘（临时文件 + rename；写前调用方已备份）。
@@ -766,6 +786,30 @@ mod tests {
         assert_eq!(read_launch_options(&vdf, 1361510).unwrap(), None);
         let _ = fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn set_creates_block_then_clear_restores_byte_identical() {
+        let dir = tmp_dir("symmetry");
+        let vdf = dir.join("localconfig.vdf");
+        // 文件里没有该 AppID 块（真实场景：Lua 解锁、从未启动的游戏）。
+        fs::write(&vdf, sample_vdf(None)).unwrap();
+        let original = fs::read(&vdf).unwrap();
+
+        set_onlinefix(&vdf, 9999).unwrap();
+        assert_eq!(
+            read_launch_options(&vdf, 9999).unwrap().as_deref(),
+            Some("-onlinefix")
+        );
+
+        clear_onlinefix(&vdf, 9999).unwrap();
+        assert_eq!(
+            fs::read(&vdf).unwrap(),
+            original,
+            "set 新建的块在 clear 后应连块移除，逐字节还原"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
 
     #[test]
     fn set_creates_apps_chain_when_missing() {

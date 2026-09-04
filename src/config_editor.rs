@@ -252,7 +252,10 @@ mod tests {
         );
 
         write_atomic(&path, "url = \"opensteamtool\"\n").unwrap();
-        assert_eq!(fs::read_to_string(&path).unwrap(), "url = \"opensteamtool\"\n");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "url = \"opensteamtool\"\n"
+        );
 
         // 清理临时目录。
         let _ = fs::remove_dir_all(&dir);
