@@ -6,6 +6,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use eframe::egui;
 use egui::Frame;
 
+use crate::config_editor;
 use crate::dll::{self, DeployStatus};
 use crate::i18n::{Lang, Strings};
 use crate::process::{self, SteamEvent, SteamMonitor};
@@ -381,6 +382,17 @@ pub struct App {
     minimize_to_tray: bool,
     /// 上一帧是否处于最小化（检测最小化按钮被点击）。
     was_minimized: bool,
+
+    /// 设置对话框是否打开（PR-1：TOML 配置编辑器；PR-2 挂载 OnlineFix 预设）。
+    settings_open: bool,
+    /// 编辑器缓冲：磁盘内容载入后在此编辑，保存前不落盘。
+    config_text: String,
+    /// 缓冲是否已从磁盘加载（避免每帧重读覆盖用户编辑）。
+    config_loaded: bool,
+    /// 最近一次校验/写入失败的本地化错误文案（None = 无错误）。
+    config_err: Option<String>,
+    /// 最近一次保存成功（短暂显示「已保存」，再次编辑即清除）。
+    config_saved: bool,
 }
 
 /// 读取系统中文字体数据（微软雅黑/黑体/宋体，首个可读的生效），无则 None。
@@ -463,7 +475,7 @@ impl App {
             strings.tray_minimize,
         );
 
-        let app = Self {
+        Self {
             lang,
             strings,
             steam_path,
@@ -485,8 +497,12 @@ impl App {
             pending_focus: false,
             minimize_to_tray: true,
             was_minimized: false,
-        };
-        app
+            settings_open: false,
+            config_text: String::new(),
+            config_loaded: false,
+            config_err: None,
+            config_saved: false,
+        }
     }
 
     /// 后台线程执行任务，完成后发消息并请求重绘。
@@ -660,6 +676,154 @@ impl App {
         });
     }
 
+    // ---------- 设置对话框（PR-1：TOML 配置编辑器） ----------
+
+    /// 打开设置：置位并标记缓冲待加载（下次渲染时从磁盘读入）。
+    fn open_settings(&mut self) {
+        self.settings_open = true;
+        self.config_loaded = false;
+        self.config_err = None;
+        self.config_saved = false;
+    }
+
+    /// 首次渲染时把磁盘内容载入编辑器缓冲（避免每帧重读覆盖用户编辑）。
+    fn ensure_config_loaded(&mut self) {
+        if self.config_loaded {
+            return;
+        }
+        self.config_loaded = true;
+        let path = config_editor::target_path(Path::new(self.steam_path.trim()));
+        match std::fs::read_to_string(&path) {
+            Ok(text) => self.config_text = text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // 文件不存在：留空缓冲，由 UI 显示「从示例模板创建」引导。
+                self.config_text.clear();
+            }
+            Err(e) => {
+                self.config_text.clear();
+                self.config_err = Some(format!("{}: {e}", self.strings.err_config_load));
+            }
+        }
+    }
+
+    /// 保存：先校验（错误带行列定位），通过后原子写入。
+    fn save_config(&mut self) {
+        match config_editor::validate(&self.config_text) {
+            Err(e) => {
+                self.config_err = Some(self.strings.config_error_text(self.lang, &e));
+                self.config_saved = false;
+            }
+            Ok(()) => {
+                let path = config_editor::target_path(Path::new(self.steam_path.trim()));
+                match config_editor::write_atomic(&path, &self.config_text) {
+                    Ok(()) => {
+                        self.config_err = None;
+                        self.config_saved = true;
+                    }
+                    Err(e) => {
+                        self.config_err = Some(format!("{}: {e}", self.strings.err_config_save));
+                        self.config_saved = false;
+                    }
+                }
+            }
+        }
+    }
+
+    /// 设置对话框主体（模态；Steam 路径无效时仅提示 + 关闭）。
+    fn settings_dialog(&mut self, ctx: &egui::Context) {
+        if !self.settings_open {
+            return;
+        }
+
+        let steam_dir = Path::new(self.steam_path.trim());
+        let steam_ok = dll::check_status(steam_dir) != DeployStatus::InvalidPath;
+        let target = config_editor::target_path(steam_dir);
+        if steam_ok {
+            self.ensure_config_loaded();
+        }
+        let file_exists = steam_ok && target.exists();
+
+        let mut save_clicked = false;
+        let mut close_clicked = false;
+        let mut template_clicked = false;
+
+        egui::Modal::new(egui::Id::new("settings_dialog")).show(ctx, |ui| {
+            ui.set_width(560.0);
+            ui.heading(self.strings.settings_title);
+            ui.add_space(8.0);
+
+            if !steam_ok {
+                ui.label(egui::RichText::new(self.strings.settings_no_steam_dir).color(TEXT_SUB));
+                ui.add_space(14.0);
+                if primary_button(ui, self.strings.btn_close, egui::vec2(80.0, 30.0), true).clicked() {
+                    close_clicked = true;
+                }
+                return;
+            }
+
+            status_line(
+                ui,
+                &format!("{}{}", self.strings.settings_target, target.display()),
+                TEXT_WEAK,
+            );
+            ui.add_space(8.0);
+
+            // 编辑器：等宽字体，滚动区，高度固定。
+            let editor = egui::ScrollArea::vertical()
+                .max_height(320.0)
+                .show(ui, |ui| {
+                    ui.add_sized(
+                        egui::vec2(ui.available_width(), 300.0),
+                        egui::TextEdit::multiline(&mut self.config_text)
+                            .code_editor()
+                            .desired_width(f32::INFINITY),
+                    )
+                });
+            if editor.inner.changed() {
+                self.config_saved = false; // 编辑清除「已保存」提示。
+            }
+            ui.add_space(6.0);
+
+            // 状态行：错误（红）/ 已保存（绿）/ 文件缺失引导（弱灰）。
+            if let Some(err) = &self.config_err {
+                status_line(ui, err, ERR_RED);
+            } else if self.config_saved {
+                status_line(ui, self.strings.ok_config_saved, STATUS_INSTALLED);
+            } else if !file_exists {
+                status_line(ui, self.strings.settings_file_missing, TEXT_WEAK);
+            }
+            ui.add_space(10.0);
+
+            ui.horizontal(|ui| {
+                if secondary_button(ui, self.strings.btn_load_template, egui::vec2(150.0, 30.0), true).clicked()
+                {
+                    template_clicked = true;
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if primary_button(ui, self.strings.btn_save, egui::vec2(80.0, 30.0), true).clicked() {
+                        save_clicked = true;
+                    }
+                    ui.add_space(6.0);
+                    if secondary_button(ui, self.strings.btn_close, egui::vec2(80.0, 30.0), true).clicked() {
+                        close_clicked = true;
+                    }
+                });
+            });
+        });
+
+        if save_clicked {
+            self.save_config();
+        }
+        if template_clicked {
+            self.config_text = config_editor::EXAMPLE_TEMPLATE.to_owned();
+            self.config_loaded = true;
+            self.config_err = None;
+            self.config_saved = false;
+        }
+        if close_clicked {
+            self.settings_open = false;
+        }
+    }
     // ---------- UI ----------
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
@@ -673,6 +837,10 @@ impl App {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if lang_button(ui, self.lang.toggle_label()).clicked() {
                     self.toggle_lang();
+                }
+                // 设置按钮（RTL 布局中位于语言按钮左侧；样式与语言按钮一致）。
+                if lang_button(ui, self.strings.btn_settings).clicked() {
+                    self.open_settings();
                 }
             });
         });
@@ -1026,6 +1194,9 @@ impl eframe::App for App {
                 self.confirm = None;
             }
         }
+
+        // 设置对话框（PR-1：TOML 配置编辑器）。
+        self.settings_dialog(&ctx);
     }
 }
 

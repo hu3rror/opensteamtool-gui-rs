@@ -72,6 +72,18 @@ _Avoid_: Steam 相关进程（模糊）
 「关闭 Steam」的成功态：Steam 进程组内所有进程从进程表消失（轮询预算 5s）；超时视为关闭失败。
 _Avoid_: 关闭成功（易与 spawn 成功混淆）
 
+**设置对话框（Settings Dialog）**:
+顶栏「设置」按钮打开的模态对话框，当前承载「配置编辑器」，后续挂载 OnlineFix 启动预设等非主流程设置。
+_Avoid_: 设置窗口、选项框
+
+**配置编辑器（Config Editor）**:
+编辑 `<Steam>/opensteamtool.toml`（上游 OpenSteamTool 配置文件）的文本编辑器：载入现有内容、保存前 TOML 语法校验（错误带行列定位）、原子写入。
+_Avoid_: 设置编辑器
+
+**示例模板（Example Template）**:
+配置编辑器内内置的上游 `opensteamtool.example.toml` 快照，一键载入作为编辑起点（文件不存在时的引导入口）。
+_Avoid_: 示例配置
+
 ## Rules
 
 - 术语 `部署/卸载` 只用于补丁 DLL 相对 Steam 目录的操作，不与「启动/退出 Steam」混用。
@@ -84,3 +96,4 @@ _Avoid_: 关闭成功（易与 spawn 成功混淆）
 - UI「Steam 正在运行」判定只看 `steam.exe`（2s 轮询，快而便宜）；「关闭 Steam」用「Steam 进程组」判定（路径过滤，彻底），两套口径不同属有意为之。
 - 「启动 Steam」的成功判定是 spawn 后确认 `steam.exe` 存活（2s 窗口，失败重试 1 次），不是 spawn 本身。
 - 「Steam 进程组」的判定路径必须是实际 Steam 安装目录：路径前缀匹配会把该目录下所有进程计入组内，用宽目录（如系统临时目录）作判定路径会误伤无关进程。
+- 「配置编辑器」编辑的是上游配置文件 `<Steam>/opensteamtool.toml`，与工具自身运行参数无关；保存即显式创建文件（与上游「无文件时不自动创建」的行为区分——那是用户未显式操作的情形）。

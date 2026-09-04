@@ -2633,6 +2633,7 @@ dependencies = [
  "rfd",
  "serde_json",
  "sysinfo",
+ "toml_edit 0.25.13+spec-1.1.0",
  "tray-icon",
  "ureq",
  "windows-sys 0.61.2",
@@ -3735,6 +3736,7 @@ dependencies = [
  "indexmap",
  "toml_datetime 1.1.1+spec-1.1.0",
  "toml_parser",
+ "toml_writer",
  "winnow 1.0.4",
 ]
 

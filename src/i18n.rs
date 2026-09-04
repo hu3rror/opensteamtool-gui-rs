@@ -1,5 +1,6 @@
 //! 双语文案与系统语言检测。
 
+use crate::config_editor::ConfigError;
 use crate::updater::UpdateError;
 use crate::workflow::{Action, BusyKind, Op, Precheck, WorkflowError};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -96,6 +97,20 @@ pub struct Strings {
     pub btn_uninstall: &'static str,
     /// 托盘菜单「最小化时自动隐藏到托盘」勾选项。
     pub tray_minimize: &'static str,
+    pub btn_settings: &'static str,
+    pub settings_title: &'static str,
+    /// 「目标文件：」前缀（设置对话框显示正在编辑的路径）。
+    pub settings_target: &'static str,
+    pub settings_no_steam_dir: &'static str,
+    pub settings_file_missing: &'static str,
+    pub btn_load_template: &'static str,
+    pub btn_save: &'static str,
+    pub btn_close: &'static str,
+    /// 校验错误前缀（行列定位由 config_error_text 拼接）。
+    pub err_config_parse: &'static str,
+    pub ok_config_saved: &'static str,
+    pub err_config_load: &'static str,
+    pub err_config_save: &'static str,
 }
 
 impl Strings {
@@ -130,6 +145,13 @@ impl Strings {
         }
     }
 
+    /// TOML 配置校验错误 → 当前语言提示文案（带行列定位）。
+    pub fn config_error_text(&self, lang: Lang, e: &ConfigError) -> String {
+        match lang {
+            Lang::Zh => format!("{}（第 {} 行，第 {} 列）：{}", self.err_config_parse, e.line, e.col, e.message),
+            Lang::En => format!("{} (line {}, column {}): {}", self.err_config_parse, e.line, e.col, e.message),
+        }
+    }
     /// 「操作」成功后 → 当前语言提示文案。
     pub fn success_text(&self, action: Action) -> &'static str {
         match action {
@@ -213,6 +235,18 @@ impl Strings {
             tray_quit: "退出",
             btn_uninstall: "卸载补丁",
             tray_minimize: "最小化时自动隐藏到托盘",
+            btn_settings: "设置",
+            settings_title: "设置",
+            settings_target: "目标文件：",
+            settings_no_steam_dir: "请先指定有效的 Steam 安装路径，再编辑配置",
+            settings_file_missing: "文件不存在，保存后创建；也可从示例模板开始",
+            btn_load_template: "从示例模板创建",
+            btn_save: "保存",
+            btn_close: "关闭",
+            err_config_parse: "配置格式错误",
+            ok_config_saved: "已保存",
+            err_config_load: "读取配置失败",
+            err_config_save: "保存失败",
         }
     }
 
@@ -271,6 +305,18 @@ impl Strings {
             tray_quit: "Quit",
             btn_uninstall: "Remove Patch",
             tray_minimize: "Minimize to tray automatically",
+            btn_settings: "Settings",
+            settings_title: "Settings",
+            settings_target: "Target file: ",
+            settings_no_steam_dir: "Set a valid Steam install path to edit the config",
+            settings_file_missing: "File does not exist — save to create it, or start from the example template",
+            btn_load_template: "Load Example Template",
+            btn_save: "Save",
+            btn_close: "Close",
+            err_config_parse: "Invalid config",
+            ok_config_saved: "Saved",
+            err_config_load: "Failed to read config",
+            err_config_save: "Save failed",
         }
     }
 }

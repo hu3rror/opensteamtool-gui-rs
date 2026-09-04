@@ -12,6 +12,7 @@ A native Windows tool that deploys, removes, and updates OpenSteamTool patches f
 - **Steam-aware window**: hides to the system tray when Steam starts, restores on exit; hides automatically after launch operations
 - **Tray**: left-click toggles visibility; menu has Show, "Minimize to tray automatically", Quit
 - **Bilingual UI**: Chinese or English, chosen by system locale, switchable at runtime
+- **Settings dialog**: edit the upstream `opensteamtool.toml` (Steam dir) with a validated TOML editor; starts from the bundled example template when the file is missing
 
 ## Usage
 
@@ -63,6 +64,7 @@ Deploy, Uninstall, Local Version, Online Version, Action, Auto-tray, Minimize-to
 ```text
 src/
 ├── main.rs       # eframe entry point
+├── config_editor.rs # opensteamtool.toml read/validate/atomic-write (settings dialog)
 ├── ui.rs         # egui UI (3 cards + tray + auto-tray wiring)
 ├── workflow.rs   # action planning and step execution (plan/execute)
 ├── dll.rs        # target DLL deploy/uninstall, local status

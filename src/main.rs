@@ -2,6 +2,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod config_editor;
 mod dll;
 mod i18n;
 mod process;
