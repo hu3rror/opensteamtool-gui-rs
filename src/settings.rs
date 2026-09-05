@@ -33,6 +33,9 @@ pub struct ConfigEditorState {
     pub err: Option<ConfigEditError>,
     /// 最近一次保存成功（短暂显示「已保存」，再次编辑即清除）。
     pub saved: bool,
+    /// 是否含未保存的编辑（编辑置位；载入/保存成功/载入模板后清除）。
+    /// 用于「从示例模板创建」覆盖前的确认判断。
+    pub dirty: bool,
 }
 
 impl ConfigEditorState {
@@ -42,6 +45,7 @@ impl ConfigEditorState {
             loaded: false,
             err: None,
             saved: false,
+            dirty: false,
         }
     }
 
@@ -50,6 +54,7 @@ impl ConfigEditorState {
         self.loaded = false;
         self.err = None;
         self.saved = false;
+        self.dirty = false;
     }
 
     /// 首次渲染时读盘（只一次）。文件不存在 → 清空缓冲（UI 显示「从示例模板创建」引导）；
@@ -67,6 +72,7 @@ impl ConfigEditorState {
                 self.err = Some(ConfigEditError::Load(e.to_string()));
             }
         }
+        self.dirty = false; // 读盘/清空后与磁盘一致。
     }
 
     /// 保存：先校验（错误带行列定位），通过后原子写入。
@@ -80,6 +86,7 @@ impl ConfigEditorState {
                 Ok(()) => {
                     self.err = None;
                     self.saved = true;
+                    self.dirty = false;
                 }
                 Err(e) => {
                     self.err = Some(ConfigEditError::Save(e.to_string()));
@@ -89,15 +96,17 @@ impl ConfigEditorState {
         }
     }
 
-    /// 编辑器内容变更 → 清除「已保存」提示。
+    /// 编辑器内容变更 → 清除「已保存」提示、标记未保存编辑。
     pub fn mark_edited(&mut self) {
         self.saved = false;
+        self.dirty = true;
     }
 
     /// 从上游示例模板填充（文件缺失时的引导入口）。
     pub fn fill_template(&mut self) {
         self.text = config_editor::EXAMPLE_TEMPLATE.to_owned();
         self.loaded = true;
+        self.dirty = false;
         self.err = None;
         self.saved = false;
     }
@@ -293,6 +302,7 @@ mod tests {
         st.ensure_loaded(&path);
         assert_eq!(st.text, "url = \"opensteamtool\"\n");
         assert!(st.err.is_none());
+        assert!(!st.dirty); // 载入后与磁盘一致。
         // 再调不重读：磁盘已改也不覆盖缓冲（避免每帧重读）。
         std::fs::write(&path, "other = 1\n").unwrap();
         st.ensure_loaded(&path);
@@ -329,6 +339,7 @@ mod tests {
         st.save(&path);
         assert!(st.err.is_none());
         assert!(st.saved);
+        assert!(!st.dirty); // 保存成功后无未保存修改。
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             "url = \"opensteamtool\"\n"
@@ -338,11 +349,12 @@ mod tests {
     }
 
     #[test]
-    fn mark_edited_clears_saved() {
+    fn mark_edited_clears_saved_and_sets_dirty() {
         let mut st = ConfigEditorState::new();
         st.saved = true;
         st.mark_edited();
         assert!(!st.saved);
+        assert!(st.dirty);
     }
 
     #[test]
@@ -352,6 +364,7 @@ mod tests {
         assert!(st.text.contains("[manifest]"));
         assert!(st.err.is_none());
         assert!(!st.saved);
+        assert!(!st.dirty); // 载入模板后无未保存修改。
     }
 
     // ---- OnlineFixState ----

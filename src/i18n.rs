@@ -107,6 +107,9 @@ pub struct Strings {
     pub settings_no_steam_dir: &'static str,
     pub settings_file_missing: &'static str,
     pub btn_load_template: &'static str,
+    pub btn_undo: &'static str,
+    /// 「从示例模板创建」覆盖确认弹窗文案（仅存在未保存修改时出现）。
+    pub confirm_template_overwrite: &'static str,
     pub btn_save: &'static str,
     pub btn_close: &'static str,
     /// 校验错误前缀（行列定位由 config_error_text 拼接）。
@@ -273,6 +276,8 @@ impl Strings {
             settings_no_steam_dir: "请先指定有效的 Steam 安装路径，再编辑配置",
             settings_file_missing: "文件不存在，保存后创建；也可从示例模板开始",
             btn_load_template: "从示例模板创建",
+            btn_undo: "撤销",
+            confirm_template_overwrite: "从示例模板创建将覆盖当前编辑内容，是否继续？",
             btn_save: "保存",
             btn_close: "关闭",
             err_config_parse: "配置格式错误",
@@ -359,6 +364,8 @@ impl Strings {
             settings_no_steam_dir: "Set a valid Steam install path to edit the config",
             settings_file_missing: "File does not exist — save to create it, or start from the example template",
             btn_load_template: "Load Example Template",
+            btn_undo: "Undo",
+            confirm_template_overwrite: "Loading the example template will overwrite your current edits. Continue?",
             btn_save: "Save",
             btn_close: "Close",
             err_config_parse: "Invalid config",
