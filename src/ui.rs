@@ -7,6 +7,7 @@ use std::sync::Arc;
 use eframe::egui;
 use egui::Frame;
 
+use crate::compat;
 use crate::config_editor;
 use crate::onlinefix;
 use crate::dll::{self, DeployStatus};
@@ -43,6 +44,7 @@ const BTN_UNINSTALL_B_BG: egui::Color32 = egui::Color32::from_rgb(0x02, 0x84, 0x
 const BTN_UNINSTALL_B_HOVER: egui::Color32 = egui::Color32::from_rgb(0x03, 0x69, 0xA1);
 const DOT_RUNNING: egui::Color32 = STATUS_INSTALLED; // 成功/进行中圆点
 const ERR_RED: egui::Color32 = egui::Color32::from_rgb(0xDC, 0x26, 0x26); // 错误红
+const STATUS_WARN: egui::Color32 = egui::Color32::from_rgb(0xB4, 0x53, 0x09); // 琥珀（上游已适配未缓存）
 
 /// 设置对话框非滚动行的固定高度占用（标题+页签行+顶部固定行+底部固定行+页脚+窗口边距）。
 /// 数值保守偏大：低估会让页脚越界（Modal 是 Area 不约束屏幕），过估只浪费一点滚动区。
@@ -306,6 +308,10 @@ enum Msg {
     Downloaded(Result<(), UpdateError>),
     /// 组合操作完成（成功/失败，携带动作以取成功文案）。
     WorkflowDone(Action, Result<(), workflow::WorkflowError>),
+    /// Steam 核心兼容性体检完成（探测链路无失败路径，直接携带报告）。
+    Compat(compat::OverallHealthReport),
+    /// 缓存预热完成（成功/失败）。
+    CompatPrecached(Result<(), String>),
 }
 
 /// 线上更新状态。
@@ -335,6 +341,103 @@ enum SettingsTab {
     Config,
     /// OnlineFix 启动预设。
     OnlineFix,
+}
+
+/// Steam 核心兼容性小节：体检状态 + 明细展示 + 预热进行中标记。
+struct CompatUiState {
+    /// 最近一次体检报告；`None` + `checking` = 骨架态。
+    report: Option<compat::OverallHealthReport>,
+    /// 体检/预热进行中（显示 Checking / 禁用按钮）。
+    checking: bool,
+    /// 明细展开开关。
+    details_open: bool,
+    /// 预热进行中（按钮显示「正在缓存...」）。
+    precaching: bool,
+    /// 预热失败文案（就地显示，不弹窗）。
+    precache_error: Option<String>,
+    /// 预热成功提示（重体检后保留至下次预热/路径变更）。
+    precache_done: bool,
+}
+
+impl CompatUiState {
+    fn checking() -> Self {
+        Self {
+            report: None,
+            checking: true,
+            details_open: false,
+            precaching: false,
+            precache_error: None,
+            precache_done: false,
+        }
+    }
+
+    fn ready(report: compat::OverallHealthReport) -> Self {
+        Self {
+            report: Some(report),
+            checking: false,
+            details_open: false,
+            precaching: false,
+            precache_error: None,
+            precache_done: false,
+        }
+    }
+}
+
+/// 汇总徽标分类（SPEC.md §7.7 状态视觉）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum CompatSummary {
+    Checking,
+    Ready,
+    Online,
+    Pending,
+    Missing,
+    Network,
+}
+
+/// 汇总分类（纯函数，测试友好）：优先级 检查中 > 缺文件 > 上游未适配 > 网络错误 > 未缓存 > 全就绪。
+fn compat_summary(checking: bool, report: Option<&compat::OverallHealthReport>) -> CompatSummary {
+    if checking {
+        return CompatSummary::Checking;
+    }
+    let Some(r) = report else {
+        return CompatSummary::Checking;
+    };
+    let st = [
+        &r.steamclient_pattern.status,
+        &r.steamui_pattern.status,
+        &r.steamclient_ipc.status,
+    ];
+    use compat::ProbeStatus::*;
+    if st.iter().any(|s| matches!(s, FileNotFound)) {
+        return CompatSummary::Missing;
+    }
+    if st.iter().any(|s| matches!(s, IncompatiblePending)) {
+        return CompatSummary::Pending;
+    }
+    if st.iter().any(|s| matches!(s, NetworkError(_))) {
+        return CompatSummary::Network;
+    }
+    if r.has_missing_cache {
+        return CompatSummary::Online;
+    }
+    CompatSummary::Ready
+}
+
+/// 待预热目标（RemoteAvailable{cached:false} 且已有哈希），供「一键缓存签名」。
+fn precache_targets(report: &compat::OverallHealthReport) -> Vec<(compat::ProbeTarget, String)> {
+    [
+        &report.steamclient_pattern,
+        &report.steamui_pattern,
+        &report.steamclient_ipc,
+    ]
+    .iter()
+    .filter_map(|r| match &r.status {
+        compat::ProbeStatus::RemoteAvailable { cached: false } => {
+            r.sha256.clone().map(|sha| (r.target, sha))
+        }
+        _ => None,
+    })
+    .collect()
 }
 pub struct App {
     lang: Lang,
@@ -383,6 +486,10 @@ pub struct App {
     undo_pending: bool,
     /// 配置编辑器文本域的实测 widget id（每帧渲染时从 Response 捕获；撤销聚焦用）。
     editor_id: Option<egui::Id>,
+    /// Steam 核心兼容性小节状态。
+    compat: CompatUiState,
+    /// 上次体检的 Steam 路径（防抖：路径未变不重复体检）。
+    compat_path: String,
 }
 
 /// 读取系统中文字体数据（微软雅黑/黑体/宋体，首个可读的生效），无则 None。
@@ -451,6 +558,8 @@ impl App {
         let steam_path = steam::detect_steam_path()
             .map(|p| p.display().to_string())
             .unwrap_or_default();
+        // 首次体检用的路径快照（Self 构造后闭包 move，避免与字段借用冲突）。
+        let probe_path = steam_path.clone();
         let steam_dir = Path::new(&steam_path);
         let status = dll::check_status(steam_dir);
         let local_version = dll::read_local_version(&dll::dll_dir());
@@ -465,7 +574,7 @@ impl App {
             strings.tray_minimize,
         );
 
-        Self {
+        let app = Self {
             lang,
             strings,
             steam_path,
@@ -494,7 +603,14 @@ impl App {
             settings_tab: SettingsTab::Config,
             undo_pending: false,
             editor_id: None,
-        }
+            compat: CompatUiState::checking(),
+            compat_path: probe_path.clone(),
+        };
+        // 启动即触发首次体检（初始 checking 骨架态，零白屏）。
+        app.spawn(&cc.egui_ctx, move || {
+            Msg::Compat(compat::probe_all(Path::new(&probe_path)))
+        });
+        app
     }
 
     /// 后台线程执行任务，完成后发消息并请求重绘。
@@ -588,6 +704,30 @@ impl App {
                     // 启动/重启类成功后 Steam 已运行 → 直接隐藏到托盘（不依赖边沿检测）；
                     // 仅退出并卸载（ExitAndUninstall）Steam 未运行 → 保持显示。
                     self.hide_if_steam_running();
+                }
+                Msg::Compat(report) => {
+                    // 保留预热成功提示（ready 构造会重置，预热后重体检不应丢提示）。
+                    let done = self.compat.precache_done;
+                    self.compat = CompatUiState::ready(report);
+                    self.compat.precache_done = done;
+                }
+                Msg::CompatPrecached(res) => {
+                    self.compat.precaching = false;
+                    match res {
+                        Ok(()) => {
+                            self.compat.precache_done = true;
+                            // 预热成功 → 重跑体检刷新本地缓存状态。
+                            self.compat.checking = true;
+                            self.compat.report = None;
+                            self.compat.precache_error = None;
+                            let path = self.steam_path.trim().to_string();
+                            let ctx = self.ctx.clone();
+                            self.spawn(&ctx, move || {
+                                Msg::Compat(compat::probe_all(Path::new(&path)))
+                            });
+                        }
+                        Err(e) => self.compat.precache_error = Some(e),
+                    }
                 }
             }
         }
@@ -1015,16 +1155,202 @@ impl App {
                 );
                 if resp.changed() {
                     self.refresh_status();
+                    let ctx = self.ctx.clone();
+                    self.maybe_start_compat_probe(&ctx);
                 }
                 if styled_button(ui, self.strings.browse, ButtonStyle::Secondary, egui::vec2(82.0, 34.0), true).clicked()
                     && let Some(dir) = rfd::FileDialog::new().pick_folder()
                 {
                     self.steam_path = dir.display().to_string();
                     self.refresh_status();
+                    let ctx = self.ctx.clone();
+                    self.maybe_start_compat_probe(&ctx);
                 }
             });
+            self.compat_section(ui);
         });
         ui.add_space(10.0);
+    }
+
+    /// 路径变化时触发体检（防抖：与上次体检路径相同则跳过，防逐字符起线程）。
+    fn maybe_start_compat_probe(&mut self, ctx: &egui::Context) {
+        let path = self.steam_path.trim().to_string();
+        if path == self.compat_path {
+            return;
+        }
+        self.compat_path = path.clone();
+        self.compat = CompatUiState::checking();
+        self.spawn(ctx, move || Msg::Compat(compat::probe_all(Path::new(&path))));
+    }
+
+    /// 一键预热：后台线程逐个下载未缓存签名，完成后触发体检刷新（SPEC.md §7.7）。
+    fn start_precache_all(&mut self, ctx: &egui::Context) {
+        let Some(report) = &self.compat.report else {
+            return;
+        };
+        let targets = precache_targets(report);
+        if targets.is_empty() {
+            return;
+        }
+        let steam_path = self.steam_path.trim().to_string();
+        let ctx = ctx.clone();
+        self.compat.precaching = true;
+        self.compat.precache_error = None;
+        self.compat.precache_done = false;
+        self.spawn(&ctx, move || {
+            let res = targets.into_iter().try_for_each(|(target, sha)| {
+                compat::precache(Path::new(&steam_path), target, &sha)
+                    .map_err(|e| e.to_string())
+            });
+            Msg::CompatPrecached(res)
+        });
+    }
+
+    /// Card 1 底部「Steam 核心兼容性」小节：汇总徽标 + 明细/预热按钮。
+    fn compat_section(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(10.0);
+        ui.separator();
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new(self.strings.compat_title).strong());
+        ui.add_space(6.0);
+
+        let summary = compat_summary(self.compat.checking, self.compat.report.as_ref());
+        let (text, color) = self.compat_summary_text(summary);
+        ui.horizontal(|ui| {
+            status_line(ui, text, color);
+            if summary == CompatSummary::Online && !self.compat.checking {
+                let label = if self.compat.precaching {
+                    self.strings.compat_precaching
+                } else {
+                    self.strings.compat_btn_precache
+                };
+                if styled_button(
+                    ui,
+                    label,
+                    ButtonStyle::Secondary,
+                    egui::vec2(132.0, 28.0),
+                    !self.compat.precaching,
+                )
+                .clicked()
+                {
+                    let ctx = self.ctx.clone();
+                    self.start_precache_all(&ctx);
+                }
+            }
+            if !self.compat.checking {
+                if ui.button(self.strings.compat_btn_details).clicked() {
+                    self.compat.details_open = !self.compat.details_open;
+                }
+            }
+        });
+        match summary {
+            CompatSummary::Ready => {
+                ui.label(
+                    egui::RichText::new(self.strings.compat_tip_ready)
+                        .size(12.0)
+                        .color(TEXT_SUB),
+                )
+                .on_hover_text(self.strings.compat_tip_ready);
+            }
+            CompatSummary::Pending => {
+                ui.label(
+                    egui::RichText::new(self.strings.compat_tip_pending)
+                        .size(12.0)
+                        .color(TEXT_SUB),
+                )
+                .on_hover_text(self.strings.compat_tip_pending);
+            }
+            _ => {}
+        }
+        if self.compat.details_open {
+            if let Some(report) = self.compat.report.clone() {
+                self.compat_details(ui, &report);
+            }
+        }
+        if let Some(err) = &self.compat.precache_error {
+            ui.label(
+                egui::RichText::new(
+                    self.strings.compat_precache_failed.replace("{err}", err),
+                )
+                .size(12.0)
+                .color(ERR_RED),
+            );
+        }
+        if self.compat.precache_done {
+            ui.label(
+                egui::RichText::new(self.strings.compat_precache_done)
+                    .size(12.0)
+                    .color(STATUS_INSTALLED),
+            );
+        }
+    }
+
+    /// 汇总徽标文案与颜色（SPEC.md §7.7 状态视觉）。
+    fn compat_summary_text(&self, summary: CompatSummary) -> (&'static str, egui::Color32) {
+        match summary {
+            CompatSummary::Checking => (self.strings.compat_checking, TEXT_WEAK),
+            CompatSummary::Ready => (self.strings.compat_status_ready, STATUS_INSTALLED),
+            CompatSummary::Online => (self.strings.compat_status_online, STATUS_WARN),
+            CompatSummary::Pending => (self.strings.compat_status_pending, ERR_RED),
+            CompatSummary::Missing => (self.strings.compat_status_missing, TEXT_WEAK),
+            CompatSummary::Network => (self.strings.compat_status_network, TEXT_WEAK),
+        }
+    }
+
+    /// 单项探针状态文案与颜色（详情明细行）。
+    fn compat_status_of(&self, status: &compat::ProbeStatus) -> (&'static str, egui::Color32) {
+        use compat::ProbeStatus::*;
+        match status {
+            Checking => (self.strings.compat_checking, TEXT_WEAK),
+            RemoteAvailable { cached: true } => (self.strings.compat_status_ready, STATUS_INSTALLED),
+            RemoteAvailable { cached: false } => (self.strings.compat_status_online, STATUS_WARN),
+            CompatibleOffline => (self.strings.compat_status_offline, STATUS_INSTALLED),
+            IncompatiblePending => (self.strings.compat_status_pending, ERR_RED),
+            NetworkError(_) => (self.strings.compat_status_network, TEXT_WEAK),
+            FileNotFound => (self.strings.compat_status_missing, TEXT_WEAK),
+        }
+    }
+
+    /// 明细行：DLL + 类型 + SHA-256 前 12 位 + 状态。
+    fn compat_details(&mut self, ui: &mut egui::Ui, report: &compat::OverallHealthReport) {
+        ui.add_space(6.0);
+        for (probe, kind) in [
+            (&report.steamclient_pattern, "Pattern"),
+            (&report.steamui_pattern, "Pattern"),
+            (&report.steamclient_ipc, "IPC"),
+        ] {
+            let row = self
+                .strings
+                .compat_row_dll
+                .replace("{dll}", probe.target.relative_dll())
+                .replace("{kind}", kind);
+            let sha = probe
+                .sha256
+                .as_deref()
+                .map(|s| &s[..s.len().min(12)])
+                .unwrap_or("—");
+            let (stext, scolor) = self.compat_status_of(&probe.status);
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(row).size(12.5).color(TEXT_SUB));
+                ui.monospace(egui::RichText::new(sha).size(12.0).color(TEXT_WEAK));
+                status_line(ui, stext, scolor);
+            });
+        }
+        // 详情内「一键缓存签名」：有未缓存项时提供（SPEC.md §7.7）。
+        if !precache_targets(report).is_empty() && !self.compat.precaching {
+            let ctx = self.ctx.clone();
+            if styled_button(
+                ui,
+                self.strings.compat_btn_precache_all,
+                ButtonStyle::Secondary,
+                egui::vec2(150.0, 26.0),
+                true,
+            )
+            .clicked()
+            {
+                self.start_precache_all(&ctx);
+            }
+        }
     }
 
     fn card2(&mut self, ui: &mut egui::Ui) {
@@ -1540,5 +1866,147 @@ mod tests {
             long > short_en,
             "Download & Extract New Version 应比 Check Update 更宽，实际 {long}px"
         );
+    }
+
+    // ---- Steam 核心兼容性（T5）----
+
+    /// 构造探针报告样本（cache_path 占位，summary 判定不依赖它）。
+    fn probe_report(target: compat::ProbeTarget, status: compat::ProbeStatus, sha: Option<&str>) -> compat::ProbeReport {
+        compat::ProbeReport {
+            target,
+            sha256: sha.map(String::from),
+            status,
+            cache_path: PathBuf::from("F:/Steam/opensteamtool"),
+        }
+    }
+
+    fn report_with(
+        statuses: [compat::ProbeStatus; 3],
+        has_missing_cache: bool,
+    ) -> compat::OverallHealthReport {
+        compat::OverallHealthReport {
+            steamclient_pattern: probe_report(
+                compat::ProbeTarget::PatternSteamClient,
+                statuses[0].clone(),
+                Some("abc"),
+            ),
+            steamui_pattern: probe_report(
+                compat::ProbeTarget::PatternSteamUi,
+                statuses[1].clone(),
+                Some("abc"),
+            ),
+            steamclient_ipc: probe_report(
+                compat::ProbeTarget::IpcSteamClient,
+                statuses[2].clone(),
+                Some("abc"),
+            ),
+            is_all_compatible: !has_missing_cache,
+            has_missing_cache,
+        }
+    }
+
+    use compat::ProbeStatus as S;
+
+    /// 检查中 / 无报告 → Checking（骨架态）。
+    #[test]
+    fn compat_summary_checking_when_in_progress() {
+        assert_eq!(compat_summary(true, None), CompatSummary::Checking);
+        assert_eq!(compat_summary(false, None), CompatSummary::Checking);
+    }
+
+    /// 任一 DLL 缺失 → Missing（最高优先级）。
+    #[test]
+    fn compat_summary_missing_when_dll_absent() {
+        let r = report_with(
+            [
+                S::FileNotFound,
+                S::RemoteAvailable { cached: true },
+                S::RemoteAvailable { cached: true },
+            ],
+            false,
+        );
+        assert_eq!(compat_summary(false, Some(&r)), CompatSummary::Missing);
+    }
+
+    /// 上游未适配 → Pending（优先于 Network/Online）。
+    #[test]
+    fn compat_summary_pending_beats_network_and_online() {
+        let r = report_with(
+            [
+                S::IncompatiblePending,
+                S::NetworkError("x".into()),
+                S::RemoteAvailable { cached: false },
+            ],
+            true,
+        );
+        assert_eq!(compat_summary(false, Some(&r)), CompatSummary::Pending);
+    }
+
+    /// 网络错误（无 Pending）→ Network。
+    #[test]
+    fn compat_summary_network_when_unreachable() {
+        let r = report_with(
+            [
+                S::NetworkError("timeout".into()),
+                S::CompatibleOffline,
+                S::RemoteAvailable { cached: true },
+            ],
+            false,
+        );
+        assert_eq!(compat_summary(false, Some(&r)), CompatSummary::Network);
+    }
+
+    /// 存在未缓存项 → Online（提示预热）。
+    #[test]
+    fn compat_summary_online_when_missing_cache() {
+        let r = report_with(
+            [
+                S::RemoteAvailable { cached: false },
+                S::RemoteAvailable { cached: true },
+                S::RemoteAvailable { cached: true },
+            ],
+            true,
+        );
+        assert_eq!(compat_summary(false, Some(&r)), CompatSummary::Online);
+    }
+
+    /// 全缓存就绪（在线或离线）→ Ready。
+    #[test]
+    fn compat_summary_ready_when_all_cached() {
+        let online = report_with(
+            [
+                S::RemoteAvailable { cached: true },
+                S::RemoteAvailable { cached: true },
+                S::RemoteAvailable { cached: true },
+            ],
+            false,
+        );
+        assert_eq!(compat_summary(false, Some(&online)), CompatSummary::Ready);
+        let offline = report_with(
+            [
+                S::CompatibleOffline,
+                S::CompatibleOffline,
+                S::CompatibleOffline,
+            ],
+            false,
+        );
+        assert_eq!(compat_summary(false, Some(&offline)), CompatSummary::Ready);
+    }
+
+    /// 待预热目标：仅收集 RemoteAvailable{cached:false} 且带哈希的项。
+    #[test]
+    fn precache_targets_picks_uncached_available() {
+        let r = report_with(
+            [
+                S::RemoteAvailable { cached: false },
+                S::RemoteAvailable { cached: true },
+                S::IncompatiblePending,
+            ],
+            true,
+        );
+        let targets = precache_targets(&r);
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].0, compat::ProbeTarget::PatternSteamClient);
+        assert_eq!(targets[0].1, "abc");
     }
 }

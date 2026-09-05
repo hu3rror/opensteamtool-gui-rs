@@ -134,6 +134,24 @@ pub struct Strings {
     pub of_err_root_chain: &'static str,
     /// 上游限制提示：同一时间仅一个 onlinefix 游戏可运行。
     pub of_single_limit: &'static str,
+    /// Steam 核心兼容性（SPEC.md §7.8）。
+    pub compat_title: &'static str,
+    pub compat_checking: &'static str,
+    pub compat_status_ready: &'static str,
+    pub compat_status_online: &'static str,
+    pub compat_status_offline: &'static str,
+    pub compat_status_pending: &'static str,
+    pub compat_status_missing: &'static str,
+    pub compat_status_network: &'static str,
+    pub compat_btn_precache: &'static str,
+    pub compat_btn_details: &'static str,
+    pub compat_btn_precache_all: &'static str,
+    pub compat_precaching: &'static str,
+    pub compat_precache_done: &'static str,
+    pub compat_precache_failed: &'static str,
+    pub compat_tip_pending: &'static str,
+    pub compat_tip_ready: &'static str,
+    pub compat_row_dll: &'static str,
 }
 
 impl Strings {
@@ -299,6 +317,23 @@ impl Strings {
             err_of_invalid_appid: "AppID 无效，请输入数字",
             of_err_root_chain: "localconfig.vdf 结构异常（缺少 UserLocalConfigStore 根块）",
             of_single_limit: "注意：同一时间仅一个 onlinefix 游戏可运行",
+            compat_title: "Steam 核心兼容性",
+            compat_checking: "正在检查兼容性...",
+            compat_status_ready: "完美兼容 (已缓存)",
+            compat_status_online: "上游已适配 (未缓存)",
+            compat_status_offline: "离线可用 (使用本地缓存)",
+            compat_status_pending: "上游尚未适配此版本",
+            compat_status_missing: "未找到核心 DLL",
+            compat_status_network: "网络不可用",
+            compat_btn_precache: "预热离线缓存",
+            compat_btn_details: "详细信息",
+            compat_btn_precache_all: "一键缓存签名",
+            compat_precaching: "正在缓存...",
+            compat_precache_done: "缓存已就绪",
+            compat_precache_failed: "缓存预热失败：{err}",
+            compat_tip_pending: "Steam 版本已更新，上游尚未发布适配签名，请等待更新。",
+            compat_tip_ready: "核心特征码与 IPC 规约已全部就绪并离线缓存。",
+            compat_row_dll: "{dll}（{kind}）",
         }
     }
 
@@ -387,6 +422,23 @@ impl Strings {
             err_of_invalid_appid: "Invalid App ID — enter a number",
             of_err_root_chain: "localconfig.vdf is malformed (missing UserLocalConfigStore root)",
             of_single_limit: "Note: only one onlinefix game can run at a time",
+            compat_title: "Steam Core Compatibility",
+            compat_checking: "Checking compatibility...",
+            compat_status_ready: "Fully Compatible",
+            compat_status_online: "Supported (Not Cached)",
+            compat_status_offline: "Compatible (Offline Cache)",
+            compat_status_pending: "Unsupported (Pending)",
+            compat_status_missing: "DLLs Not Found",
+            compat_status_network: "Network Unavailable",
+            compat_btn_precache: "Pre-cache Signatures",
+            compat_btn_details: "Details",
+            compat_btn_precache_all: "Pre-cache All Signatures",
+            compat_precaching: "Downloading...",
+            compat_precache_done: "Cache pre-warmed",
+            compat_precache_failed: "Pre-cache failed: {err}",
+            compat_tip_pending: "Steam has been updated. Please wait for upstream signatures.",
+            compat_tip_ready: "Core signatures & IPC specs ready and cached offline.",
+            compat_row_dll: "{dll} ({kind})",
         }
     }
 }
