@@ -222,6 +222,11 @@ URL 占位符统一为 `{channel}` / `{component}` / `{sha256}`，解析顺序�
 - **Pending Upstream**：任意探针 404 且本地无缓存。
 - **Error / Missing**：Steam 路径错误或核心 DLL 缺失。
 
+
+**快速体检短路（增强）**：`probe_all`（启动/路径变更入口）在 `Cached == true` 时跳过
+镜像链探测，直接判定为 `CompatibleOffline`——有缓存的机器启动即绿、`Checking` 一闪而过；
+网络适配状态由 `probe_all_refresh` 后台异步补齐（存在短路项即触发一次全量网络探测，
+短路项升级为 `RemoteAvailable{cached:true}` 或维持 `CompatibleOffline`，汇总徽章不受影响）。
 ### 7.6 模块设计（`src/compat.rs`）
 
 `main.rs` 注册 `mod compat;`。核心数据结构（与既有 `UpdateError::Network` 风格一致）：

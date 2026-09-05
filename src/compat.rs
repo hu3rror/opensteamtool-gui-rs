@@ -219,11 +219,16 @@ fn probe_urls(head: impl Fn(&str) -> RemoteOutcome, urls: &[String]) -> RemoteOu
 }
 
 /// 单项目探针：本地（DLL 存在 → 哈希 → 缓存命中）→ 远程（镜像链 HEAD）→ 报告。
+///
+/// `network=false`（快速体检）时本地缓存命中即短路为 `CompatibleOffline`，
+/// 免网络探测——有缓存的机器启动即绿、`Checking` 一闪而过；网络适配状态由
+/// `probe_all_refresh` 后台补齐（SPEC.md §7.5 增强）。
 fn probe_one(
     steam_dir: &Path,
     target: ProbeTarget,
     template: Option<&str>,
     head: impl Fn(&str) -> RemoteOutcome,
+    network: bool,
 ) -> ProbeReport {
     let dll_path = steam_dir.join(target.relative_dll());
     let Some(sha) = sha256_of_file(&dll_path).ok() else {
@@ -236,7 +241,12 @@ fn probe_one(
     };
     let cached = is_cached(steam_dir, target, &sha);
     let urls = build_urls(template, target, &sha);
-    let status = decide(cached, probe_urls(&head, &urls));
+    let status = if cached && !network {
+        // 短路：本地缓存齐全，跳过镜像链探测（判定为「离线可用」）。
+        ProbeStatus::CompatibleOffline
+    } else {
+        decide(cached, probe_urls(&head, &urls))
+    };
     ProbeReport {
         target,
         sha256: Some(sha.clone()),
@@ -250,10 +260,11 @@ fn probe_all_with(
     steam_dir: &Path,
     template: Option<&str>,
     head: impl Fn(&str) -> RemoteOutcome,
+    network: bool,
 ) -> OverallHealthReport {
-    let steamclient_pattern = probe_one(steam_dir, ProbeTarget::PatternSteamClient, template, &head);
-    let steamui_pattern = probe_one(steam_dir, ProbeTarget::PatternSteamUi, template, &head);
-    let steamclient_ipc = probe_one(steam_dir, ProbeTarget::IpcSteamClient, template, &head);
+    let steamclient_pattern = probe_one(steam_dir, ProbeTarget::PatternSteamClient, template, &head, network);
+    let steamui_pattern = probe_one(steam_dir, ProbeTarget::PatternSteamUi, template, &head, network);
+    let steamclient_ipc = probe_one(steam_dir, ProbeTarget::IpcSteamClient, template, &head, network);
     let reports = [&steamclient_pattern, &steamui_pattern, &steamclient_ipc];
     // Fully Compatible：每项均已适配且本地缓存齐全（SPEC.md §7.5）。
     let is_all_compatible = reports.iter().all(|r| {
@@ -275,14 +286,19 @@ fn probe_all_with(
     }
 }
 
-/// 单次后台体检：读自定义镜像模板（无则官方链路）+ 真实探针 agent。
-///
-/// T3 暴露给 T5（UI 集成）的入口，T5 接入前保持 allow。
-#[allow(dead_code)]
+/// 快速体检（启动/路径变更入口）：缓存命中项免网络，立即出绿（短路为 `CompatibleOffline`）。
 pub fn probe_all(steam_dir: &Path) -> OverallHealthReport {
     let template = crate::config_editor::remote_url_template(steam_dir);
     let agent = probe_agent();
-    probe_all_with(steam_dir, template.as_deref(), |url| head_probe(&agent, url))
+    probe_all_with(steam_dir, template.as_deref(), |url| head_probe(&agent, url), false)
+}
+
+/// 全量体检（后台网络刷新）：对快速体检中的短路项补查镜像链 HEAD，
+/// 更新明细与 tooltip 的网络适配状态（徽章不变，始终绿）。
+pub fn probe_all_refresh(steam_dir: &Path) -> OverallHealthReport {
+    let template = crate::config_editor::remote_url_template(steam_dir);
+    let agent = probe_agent();
+    probe_all_with(steam_dir, template.as_deref(), |url| head_probe(&agent, url), true)
 }
 
 /// 预热下载错误，UI 层据此映射双语文案。
@@ -573,7 +589,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ost_compat_nodll_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        let report = probe_all_with(&dir, None, |_| RemoteOutcome::Found);
+        let report = probe_all_with(&dir, None, |_| RemoteOutcome::Found, true);
         assert_eq!(report.steamclient_pattern.status, ProbeStatus::FileNotFound);
         assert_eq!(report.steamui_pattern.status, ProbeStatus::FileNotFound);
         assert_eq!(report.steamclient_ipc.status, ProbeStatus::FileNotFound);
@@ -589,7 +605,7 @@ mod tests {
         write_cache(&dir, ProbeTarget::PatternSteamClient, &sc_sha);
         write_cache(&dir, ProbeTarget::PatternSteamUi, &ui_sha);
         write_cache(&dir, ProbeTarget::IpcSteamClient, &sc_sha);
-        let report = probe_all_with(&dir, None, |_| RemoteOutcome::NotFound404);
+        let report = probe_all_with(&dir, None, |_| RemoteOutcome::NotFound404, true);
         assert_eq!(report.steamclient_pattern.status, ProbeStatus::CompatibleOffline);
         assert_eq!(report.steamui_pattern.status, ProbeStatus::CompatibleOffline);
         assert_eq!(report.steamclient_ipc.status, ProbeStatus::CompatibleOffline);
@@ -602,7 +618,7 @@ mod tests {
     #[test]
     fn probe_available_online_with_missing_cache() {
         let (dir, _, _) = fake_steam_dir("online");
-        let report = probe_all_with(&dir, None, |_| RemoteOutcome::Found);
+        let report = probe_all_with(&dir, None, |_| RemoteOutcome::Found, true);
         assert_eq!(
             report.steamclient_pattern.status,
             ProbeStatus::RemoteAvailable { cached: false }
@@ -616,12 +632,43 @@ mod tests {
     #[test]
     fn probe_network_error_when_not_cached() {
         let (dir, _, _) = fake_steam_dir("nerr");
-        let report = probe_all_with(&dir, None, |_| RemoteOutcome::Error("timeout".into()));
+        let report = probe_all_with(&dir, None, |_| RemoteOutcome::Error("timeout".into()), true);
         assert!(matches!(
             report.steamclient_pattern.status,
             ProbeStatus::NetworkError(_)
         ));
         assert!(!report.is_all_compatible);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 快速体检短路：全缓存 + network=false → 三 CompatibleOffline，head 不被调用（panic 闭包验证）。
+    #[test]
+    fn probe_shortcut_skips_network_when_cached() {
+        let (dir, sc_sha, ui_sha) = fake_steam_dir("shortcut");
+        write_cache(&dir, ProbeTarget::PatternSteamClient, &sc_sha);
+        write_cache(&dir, ProbeTarget::PatternSteamUi, &ui_sha);
+        write_cache(&dir, ProbeTarget::IpcSteamClient, &sc_sha);
+        let report = probe_all_with(&dir, None, |_| panic!("head must not be called"), false);
+        assert_eq!(report.steamclient_pattern.status, ProbeStatus::CompatibleOffline);
+        assert_eq!(report.steamui_pattern.status, ProbeStatus::CompatibleOffline);
+        assert_eq!(report.steamclient_ipc.status, ProbeStatus::CompatibleOffline);
+        assert!(report.is_all_compatible);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 后台刷新（network=true）：全缓存 + Found → 短路态升级为 RemoteAvailable{cached:true}。
+    #[test]
+    fn probe_refresh_upgrades_shortcut_to_available() {
+        let (dir, sc_sha, ui_sha) = fake_steam_dir("refresh");
+        write_cache(&dir, ProbeTarget::PatternSteamClient, &sc_sha);
+        write_cache(&dir, ProbeTarget::PatternSteamUi, &ui_sha);
+        write_cache(&dir, ProbeTarget::IpcSteamClient, &sc_sha);
+        let report = probe_all_with(&dir, None, |_| RemoteOutcome::Found, true);
+        assert_eq!(
+            report.steamclient_pattern.status,
+            ProbeStatus::RemoteAvailable { cached: true }
+        );
+        assert!(report.is_all_compatible);
         let _ = fs::remove_dir_all(&dir);
     }
 

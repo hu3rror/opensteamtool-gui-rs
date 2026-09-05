@@ -315,6 +315,8 @@ enum Msg {
     WorkflowDone(Action, Result<(), workflow::WorkflowError>),
     /// Steam 核心兼容性体检完成（探测链路无失败路径，直接携带报告）。
     Compat(compat::OverallHealthReport),
+    /// 后台网络刷新完成（覆盖短路态的网络适配明细）。
+    CompatRefreshed(compat::OverallHealthReport),
     /// 缓存预热完成（成功/失败）。
     CompatPrecached(Result<(), String>),
 }
@@ -448,6 +450,17 @@ fn precache_targets(report: &compat::OverallHealthReport) -> Vec<(compat::ProbeT
         _ => None,
     })
     .collect()
+}
+
+/// 快速体检后是否需要后台网络刷新：存在短路项（`CompatibleOffline`）即需补查。
+fn compat_needs_network_refresh(report: &compat::OverallHealthReport) -> bool {
+    [
+        &report.steamclient_pattern.status,
+        &report.steamui_pattern.status,
+        &report.steamclient_ipc.status,
+    ]
+    .iter()
+    .any(|s| matches!(s, compat::ProbeStatus::CompatibleOffline))
 }
 pub struct App {
     lang: Lang,
@@ -717,6 +730,20 @@ impl App {
                 }
                 Msg::Compat(report) => {
                     // 保留预热成功提示（ready 构造会重置，预热后重体检不应丢提示）。
+                    let done = self.compat.precache_done;
+                    self.compat = CompatUiState::ready(report.clone());
+                    self.compat.precache_done = done;
+                    // 短路项存在时后台补查网络适配状态（上游适配变化可感知）。
+                    if compat_needs_network_refresh(&report) {
+                        let path = self.steam_path.trim().to_string();
+                        let ctx = self.ctx.clone();
+                        self.spawn(&ctx, move || {
+                            Msg::CompatRefreshed(compat::probe_all_refresh(Path::new(&path)))
+                        });
+                    }
+                }
+                Msg::CompatRefreshed(report) => {
+                    // 网络刷新结果覆盖短路态；不再次触发刷新（防止 quick→refresh 循环）。
                     let done = self.compat.precache_done;
                     self.compat = CompatUiState::ready(report);
                     self.compat.precache_done = done;
@@ -2035,5 +2062,37 @@ mod tests {
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].0, compat::ProbeTarget::PatternSteamClient);
         assert_eq!(targets[0].1, "abc");
+    }
+
+    /// 快速体检后：存在短路项（CompatibleOffline）需后台刷新；其余情况不需要。
+    #[test]
+    fn compat_needs_network_refresh_detects_shortcut() {
+        let with_offline = report_with(
+            [
+                S::CompatibleOffline,
+                S::RemoteAvailable { cached: true },
+                S::RemoteAvailable { cached: true },
+            ],
+            false,
+        );
+        assert!(compat_needs_network_refresh(&with_offline));
+        let all_confirmed = report_with(
+            [
+                S::RemoteAvailable { cached: true },
+                S::RemoteAvailable { cached: true },
+                S::RemoteAvailable { cached: true },
+            ],
+            false,
+        );
+        assert!(!compat_needs_network_refresh(&all_confirmed));
+        let mixed = report_with(
+            [
+                S::FileNotFound,
+                S::IncompatiblePending,
+                S::NetworkError("x".into()),
+            ],
+            false,
+        );
+        assert!(!compat_needs_network_refresh(&mixed));
     }
 }
