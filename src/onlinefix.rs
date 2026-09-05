@@ -112,7 +112,7 @@ pub fn account_vdf_paths(steam_dir: &Path) -> Vec<PathBuf> {
 pub fn read_launch_options(vdf: &Path, appid: u32) -> Result<Option<String>, VdfError> {
     let bytes = fs::read(vdf)?;
     let doc = Doc::parse(&bytes);
-    let Some(appid_block) = doc.descend(&[b"UserLocalConfigStore", b"Software", b"Valve", b"Steam", b"Apps"])? else {
+    let Some(appid_block) = doc.descend(&[b"UserLocalConfigStore", b"Software", b"Valve", b"Steam", b"Apps"]) else {
         return Ok(None);
     };
     let Some(appid_block) = doc.find_child_block(appid_block, appid.to_string().as_bytes()) else {
@@ -459,18 +459,16 @@ impl Doc {
         }
     }
 
-    /// 从根依次下钻块链；任一祖先缺失 → Ok(None)（根缺失也归此）。无 IO。
-    fn descend(&self, path: &[&[u8]]) -> Result<Option<Block>, VdfError> {
+    /// 从根依次下钻块链；任一祖先缺失 → None（根缺失也归此）。无 IO、无错误。
+    fn descend(&self, path: &[&[u8]]) -> Option<Block> {
         let mut from = 0usize;
         let mut current: Option<Block> = None;
         for &key in path {
-            current = self.find_child_block_from(from, key);
-            let Some(block) = current else {
-                return Ok(None);
-            };
+            let block = self.find_child_block_from(from, key)?;
+            current = Some(block);
             from = block.open + 1;
         }
-        Ok(current)
+        current
     }
 
     /// 在父块内按名找子块（限定在父块的开闭括号之间扫描）。
@@ -623,20 +621,7 @@ impl Doc {
         if self.trailing_newline && !self.lines.is_empty() {
             bytes.extend_from_slice(self.eol);
         }
-        let dir = path.parent().unwrap_or_else(|| Path::new("."));
-        let tmp = dir.join(format!(
-            ".{}.tmp-{}",
-            path.file_name().and_then(|n| n.to_str()).unwrap_or("localconfig"),
-            std::process::id()
-        ));
-        fs::write(&tmp, &bytes)?;
-        match fs::rename(&tmp, path) {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                let _ = fs::remove_file(&tmp);
-                Err(e)
-            }
-        }
+        crate::fsutil::write_atomic(path, &bytes)
     }
 }
 

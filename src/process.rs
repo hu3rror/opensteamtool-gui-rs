@@ -130,6 +130,16 @@ pub fn kill_steam(steam_dir: &Path) -> Result<(), String> {
     }
 }
 
+/// 进程组内是否有进程在运行（src/process.rs「关闭 Steam」口径）。
+/// 供写 `localconfig.vdf` 等需要「Steam 彻底未运行」的门闩使用（每次调用全量扫描，
+/// 比 `SteamMonitor::is_running`（仅看 steam.exe、2s 缓存）彻底：steam.exe 退出后
+/// 残留的 steamwebhelper 等孤儿进程也会被计入）。
+pub fn steam_group_running(steam_dir: &Path) -> bool {
+    let mut sys = System::new();
+    sys.refresh_processes(ProcessesToUpdate::All, true);
+    group_running(&sys, steam_dir)
+}
+
 /// 进程组内是否有进程在运行（关闭流程的「Steam 在运行」口径）。
 fn group_running(sys: &System, steam_dir: &Path) -> bool {
     sys.processes()
@@ -149,7 +159,7 @@ fn is_group_member(name: impl AsRef<OsStr>, exe: Option<&Path>, steam_dir: &Path
             // 大小写不敏感 + 目录边界的前缀比较（Windows 路径不区分大小写）。
             let dir = steam_dir.to_string_lossy().to_lowercase();
             let dir = dir.trim_end_matches('\\');
-            if is_drive_root(&dir) {
+            if is_drive_root(dir) {
                 return false; // 盘符根目录（如 c:）前缀过宽，会误伤该盘所有进程
             }
             let exe = path.to_string_lossy().to_lowercase();

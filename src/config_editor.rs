@@ -7,7 +7,6 @@
 //! 结构化表单会失同步（见 issue #1 决策）。全文编辑由 `toml_edit` 保证
 //! 往返保留注释与格式；本模块不修改内容，仅校验与落盘。
 
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -161,24 +160,12 @@ fn line_col(text: &str, offset: usize) -> (usize, usize) {
 /// 原子写入：先写同目录临时文件再 rename，避免半截文件被上游热重载读到。
 /// rename 失败时清理临时文件并返回错误。
 pub fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
-    let dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("opensteamtool");
-    let tmp = dir.join(format!(".{name}.tmp-{}", std::process::id()));
-    fs::write(&tmp, text)?;
-    match fs::rename(&tmp, path) {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            let _ = fs::remove_file(&tmp);
-            Err(e)
-        }
-    }
+    crate::fsutil::write_atomic(path, text.as_bytes())
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use super::*;
 
     /// 示例模板本身必须能通过校验（与上游快照保持一致）。

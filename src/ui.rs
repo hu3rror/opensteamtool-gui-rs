@@ -406,6 +406,9 @@ pub struct App {
     config_saved: bool,
 
     /// OnlineFix 预设区：可用账号（userdata 扫描，对话框打开时刷新）。
+    /// 打开对话框时采样的进程组运行态（写入门闩的「彻底」口径；
+    /// 与 `steam_running`（仅 steam.exe、2s 缓存）并用，取或）。
+    of_steam_group_running: bool,
     of_accounts: Vec<PathBuf>,
     of_account_idx: usize,
     /// 手动输入/候选取用的 AppID。
@@ -525,6 +528,7 @@ impl App {
             config_loaded: false,
             config_err: None,
             config_saved: false,
+            of_steam_group_running: false,
             of_accounts: Vec::new(),
             of_account_idx: 0,
             of_appid: String::new(),
@@ -713,11 +717,13 @@ impl App {
         self.config_loaded = false;
         self.config_err = None;
         self.config_saved = false;
-        // OnlineFix 区：按当前 Steam 路径刷新账号与 AppID 候选。
+        // OnlineFix 区：按当前 Steam 路径刷新账号、AppID 候选与进程组运行态。
         let steam_dir = Path::new(self.steam_path.trim());
         self.of_accounts = onlinefix::account_vdf_paths(steam_dir);
         self.of_account_idx = self.of_account_idx.min(self.of_accounts.len().saturating_sub(1));
         self.of_candidates = onlinefix::scan_lua_appids(steam_dir);
+        // 写入门闩采样：进程组判定（含残留 webhelper），每次打开对话框刷新。
+        self.of_steam_group_running = process::steam_group_running(steam_dir);
         self.of_status = None;
         self.of_status_key = None;
     }
@@ -797,6 +803,9 @@ impl App {
 
     /// 启用 OnlineFix（写入 -onlinefix）；成功在界面内直接更新状态，键置空待下帧复读。
     fn of_enable(&mut self) {
+        if !self.of_write_allowed() {
+            return;
+        }
         let Some(appid) = self.of_appid.trim().parse::<u32>().ok() else {
             self.of_status = Some(OnlineFixStatus::Error(self.strings.err_of_invalid_appid.to_string()));
             self.of_status_key = None;
@@ -817,8 +826,30 @@ impl App {
         }
     }
 
+    /// 写入前门闩：对话框打开期间 Steam 可能已启动，逐次复查进程组。
+    /// 返回 false 时已在界面内给出「请先关闭 Steam」提示。
+    fn of_write_allowed(&mut self) -> bool {
+        if self.steam_running || self.of_steam_group_running {
+            self.of_status = Some(OnlineFixStatus::Error(self.strings.of_steam_running.to_string()));
+            self.of_status_key = None;
+            return false;
+        }
+        // 实时复查（打开对话框时的采样可能已过期）。
+        let steam_dir = Path::new(self.steam_path.trim());
+        if process::steam_group_running(steam_dir) {
+            self.of_steam_group_running = true;
+            self.of_status = Some(OnlineFixStatus::Error(self.strings.of_steam_running.to_string()));
+            self.of_status_key = None;
+            return false;
+        }
+        true
+    }
+
     /// 停用 OnlineFix（移除 -onlinefix）。
     fn of_disable(&mut self) {
+        if !self.of_write_allowed() {
+            return;
+        }
         let Some(appid) = self.of_appid.trim().parse::<u32>().ok() else {
             self.of_status = Some(OnlineFixStatus::Error(self.strings.err_of_invalid_appid.to_string()));
             self.of_status_key = None;
@@ -937,7 +968,9 @@ impl App {
             ui.label(egui::RichText::new(self.strings.of_title).strong().color(TEXT_INK));
             ui.add_space(6.0);
 
-            if self.steam_running {
+            // 写入门闩：进程组判定（覆盖 steam.exe 退出后残留的 webhelper 孤儿）或快速判定的 steam.exe。
+            let write_blocked = self.steam_running || self.of_steam_group_running;
+            if write_blocked {
                 status_line(ui, self.strings.of_steam_running, TEXT_WEAK);
             } else if self.of_accounts.is_empty() {
                 status_line(ui, self.strings.of_no_account, TEXT_WEAK);
@@ -1014,6 +1047,9 @@ impl App {
                         }
                     });
                 });
+                ui.add_space(6.0);
+                // 上游限制提示（spec PR-2）：同一时间仅一个 onlinefix 游戏可运行。
+                status_line(ui, self.strings.of_single_limit, TEXT_WEAK);
             }
             });
         });

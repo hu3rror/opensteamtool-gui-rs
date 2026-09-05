@@ -127,6 +127,8 @@ pub struct Strings {
     pub err_of_op: &'static str,
     pub err_of_invalid_appid: &'static str,
     pub of_err_root_chain: &'static str,
+    /// 上游限制提示：同一时间仅一个 onlinefix 游戏可运行。
+    pub of_single_limit: &'static str,
 }
 
 impl Strings {
@@ -288,6 +290,7 @@ impl Strings {
             err_of_op: "OnlineFix 操作失败",
             err_of_invalid_appid: "AppID 无效，请输入数字",
             of_err_root_chain: "localconfig.vdf 结构异常（缺少 UserLocalConfigStore 根块）",
+            of_single_limit: "注意：同一时间仅一个 onlinefix 游戏可运行",
         }
     }
 
@@ -372,6 +375,7 @@ impl Strings {
             err_of_op: "OnlineFix operation failed",
             err_of_invalid_appid: "Invalid App ID — enter a number",
             of_err_root_chain: "localconfig.vdf is malformed (missing UserLocalConfigStore root)",
+            of_single_limit: "Note: only one onlinefix game can run at a time",
         }
     }
 }

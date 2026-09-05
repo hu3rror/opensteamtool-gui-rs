@@ -4,6 +4,7 @@
 
 mod config_editor;
 mod dll;
+mod fsutil;
 mod i18n;
 mod onlinefix;
 mod process;
