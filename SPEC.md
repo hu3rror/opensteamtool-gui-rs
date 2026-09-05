@@ -223,10 +223,13 @@ URL 占位符统一为 `{channel}` / `{component}` / `{sha256}`，解析顺序�
 - **Error / Missing**：Steam 路径错误或核心 DLL 缺失。
 
 
-**快速体检短路（增强）**：`probe_all`（启动/路径变更入口）在 `Cached == true` 时跳过
-镜像链探测，直接判定为 `CompatibleOffline`——有缓存的机器启动即绿、`Checking` 一闪而过；
-网络适配状态由 `probe_all_refresh` 后台异步补齐（存在短路项即触发一次全量网络探测，
-短路项升级为 `RemoteAvailable{cached:true}` 或维持 `CompatibleOffline`，汇总徽章不受影响）。
+**快速体检短路（增强）**：`probe_all`（启动/路径变更入口）**完全零网络**——
+`Cached == true` 直接判定 `CompatibleOffline`（有缓存的机器启动即绿）；
+`Cached == false` 乐观假定 `RemoteAvailable{cached:false}`（琥珀「上游已适配 (未缓存)」+ 预热按钮可点，
+无缓存启动即离开 Checking）。`Checking` 仅存续于本地哈希阶段（steamclient64.dll 哈希去重，Pattern/IPC 复用）。
+网络适配状态由 `probe_all_refresh` 后台异步补齐（快速报告含短路/乐观项即触发一次全量网络探测：
+短路项可升级 `RemoteAvailable{cached:true}`，乐观项 404 时降级 `IncompatiblePending`，汇总徽章随之更新）。
+探针超时 4s/5s 收紧至 2.5s/2.5s，无网络时快速失败。
 ### 7.6 模块设计（`src/compat.rs`）
 
 `main.rs` 注册 `mod compat;`。核心数据结构（与既有 `UpdateError::Network` 风格一致）：

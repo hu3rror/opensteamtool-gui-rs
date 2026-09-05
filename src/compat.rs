@@ -178,11 +178,12 @@ fn decide(cached: bool, remote: RemoteOutcome) -> ProbeStatus {
     }
 }
 
-/// 探针专用 agent：连接 4s / 总 5s 快速失败（updater 的 10s/30s 不适合探针）。
+/// 探针专用 agent：连接/总超时各 2.5s 快速失败（updater 的 10s/30s 不适合探针；
+/// 2.5s 为无网络时的等待上限，配合快速体检零网络语义）。
 fn probe_agent() -> Agent {
     Agent::config_builder()
-        .timeout_connect(Some(Duration::from_secs(4)))
-        .timeout_global(Some(Duration::from_secs(5)))
+        .timeout_connect(Some(Duration::from_millis(2500)))
+        .timeout_global(Some(Duration::from_millis(2500)))
         .build()
         .into()
 }
@@ -218,20 +219,21 @@ fn probe_urls(head: impl Fn(&str) -> RemoteOutcome, urls: &[String]) -> RemoteOu
     }
 }
 
-/// 单项目探针：本地（DLL 存在 → 哈希 → 缓存命中）→ 远程（镜像链 HEAD）→ 报告。
+/// 单项目探针：本地（哈希 → 缓存命中）→ 远程（镜像链 HEAD）→ 报告。
 ///
-/// `network=false`（快速体检）时本地缓存命中即短路为 `CompatibleOffline`，
-/// 免网络探测——有缓存的机器启动即绿、`Checking` 一闪而过；网络适配状态由
-/// `probe_all_refresh` 后台补齐（SPEC.md §7.5 增强）。
+/// `sha` 由调用方预计算（`probe_all_with` 对 steamclient64.dll 只算一次，Pattern/IPC 复用）。
+/// `network=false`（快速体检）时**完全零网络**：缓存命中 → `CompatibleOffline`；
+/// 无缓存 → 乐观假定 `RemoteAvailable{cached:false}`（琥珀可预热，后台刷新纠正），
+/// 有缓存的机器启动即绿、无缓存启动即离开 Checking（SPEC.md §7.5 增强）。
 fn probe_one(
     steam_dir: &Path,
     target: ProbeTarget,
     template: Option<&str>,
     head: impl Fn(&str) -> RemoteOutcome,
     network: bool,
+    sha: Option<String>,
 ) -> ProbeReport {
-    let dll_path = steam_dir.join(target.relative_dll());
-    let Some(sha) = sha256_of_file(&dll_path).ok() else {
+    let Some(sha) = sha else {
         return ProbeReport {
             target,
             sha256: None,
@@ -241,11 +243,14 @@ fn probe_one(
     };
     let cached = is_cached(steam_dir, target, &sha);
     let urls = build_urls(template, target, &sha);
-    let status = if cached && !network {
+    let status = if network {
+        decide(cached, probe_urls(&head, &urls))
+    } else if cached {
         // 短路：本地缓存齐全，跳过镜像链探测（判定为「离线可用」）。
         ProbeStatus::CompatibleOffline
     } else {
-        decide(cached, probe_urls(&head, &urls))
+        // 乐观假定：无缓存且未查网络，先显示「上游已适配 (未缓存)」，后台刷新纠正。
+        ProbeStatus::RemoteAvailable { cached: false }
     };
     ProbeReport {
         target,
@@ -262,9 +267,12 @@ fn probe_all_with(
     head: impl Fn(&str) -> RemoteOutcome,
     network: bool,
 ) -> OverallHealthReport {
-    let steamclient_pattern = probe_one(steam_dir, ProbeTarget::PatternSteamClient, template, &head, network);
-    let steamui_pattern = probe_one(steam_dir, ProbeTarget::PatternSteamUi, template, &head, network);
-    let steamclient_ipc = probe_one(steam_dir, ProbeTarget::IpcSteamClient, template, &head, network);
+    // 哈希去重：steamclient64.dll 由 Pattern 与 IPC 两项共享，只算一次（~25MB×2 → ×1）。
+    let sc_sha = sha256_of_file(&steam_dir.join(ProbeTarget::PatternSteamClient.relative_dll())).ok();
+    let ui_sha = sha256_of_file(&steam_dir.join(ProbeTarget::PatternSteamUi.relative_dll())).ok();
+    let steamclient_pattern = probe_one(steam_dir, ProbeTarget::PatternSteamClient, template, &head, network, sc_sha.clone());
+    let steamui_pattern = probe_one(steam_dir, ProbeTarget::PatternSteamUi, template, &head, network, ui_sha.clone());
+    let steamclient_ipc = probe_one(steam_dir, ProbeTarget::IpcSteamClient, template, &head, network, sc_sha.clone());
     let reports = [&steamclient_pattern, &steamui_pattern, &steamclient_ipc];
     // Fully Compatible：每项均已适配且本地缓存齐全（SPEC.md §7.5）。
     let is_all_compatible = reports.iter().all(|r| {
@@ -653,6 +661,24 @@ mod tests {
         assert_eq!(report.steamui_pattern.status, ProbeStatus::CompatibleOffline);
         assert_eq!(report.steamclient_ipc.status, ProbeStatus::CompatibleOffline);
         assert!(report.is_all_compatible);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 快速体检乐观假定：无缓存 + network=false → RemoteAvailable{cached:false}（零网络，head 不被调用）。
+    #[test]
+    fn probe_optimistic_when_uncached_and_offline() {
+        let (dir, _, _) = fake_steam_dir("optimistic");
+        let report = probe_all_with(&dir, None, |_| panic!("head must not be called"), false);
+        assert_eq!(
+            report.steamclient_pattern.status,
+            ProbeStatus::RemoteAvailable { cached: false }
+        );
+        assert_eq!(
+            report.steamui_pattern.status,
+            ProbeStatus::RemoteAvailable { cached: false }
+        );
+        assert!(report.has_missing_cache);
+        assert!(!report.is_all_compatible);
         let _ = fs::remove_dir_all(&dir);
     }
 

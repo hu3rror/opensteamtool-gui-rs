@@ -460,7 +460,14 @@ fn compat_needs_network_refresh(report: &compat::OverallHealthReport) -> bool {
         &report.steamclient_ipc.status,
     ]
     .iter()
-    .any(|s| matches!(s, compat::ProbeStatus::CompatibleOffline))
+    .any(|s| {
+        // 快速体检零网络后的两类待确认项：缓存短路（CompatibleOffline）与乐观假定（RemoteAvailable{cached:false}）。
+        matches!(
+            s,
+            compat::ProbeStatus::CompatibleOffline
+                | compat::ProbeStatus::RemoteAvailable { cached: false }
+        )
+    })
 }
 pub struct App {
     lang: Lang,
@@ -2076,6 +2083,15 @@ mod tests {
             false,
         );
         assert!(compat_needs_network_refresh(&with_offline));
+        let optimistic = report_with(
+            [
+                S::RemoteAvailable { cached: false },
+                S::RemoteAvailable { cached: false },
+                S::RemoteAvailable { cached: false },
+            ],
+            true,
+        );
+        assert!(compat_needs_network_refresh(&optimistic));
         let all_confirmed = report_with(
             [
                 S::RemoteAvailable { cached: true },
