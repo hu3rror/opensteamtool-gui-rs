@@ -303,6 +303,9 @@ pub struct OverallHealthReport { pub steamclient_pattern: ProbeReport, pub steam
 | `compat_precache_failed` | Pre-cache failed: {err} | 缓存预热失败：{err} |
 | `compat_tip_pending` | Steam has been updated. Please wait for upstream signatures. | Steam 版本已更新，上游尚未发布适配签名，请等待更新。 |
 | `compat_tip_ready` | Core signatures & IPC specs ready and cached offline. | 核心特征码与 IPC 规约已全部就绪并离线缓存。 |
+| `compat_tip_online` | Supported upstream — pre-cache now for offline use. | 上游已适配，可一键预热离线缓存。 |
+| `compat_tip_missing` | Core DLLs not found (steamclient64.dll / steamui.dll). | 未找到核心 DLL（steamclient64.dll / steamui.dll）。 |
+| `compat_tip_network` | Network unavailable — results unknown; cached items remain usable offline. | 网络不可用，体检结果未知；已缓存项仍可离线使用。 |
 | `compat_row_dll` | {dll} ({kind}) | {dll}（{kind}） |
 
 ### 7.9 实现清单与验收
