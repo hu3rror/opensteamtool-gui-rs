@@ -6,7 +6,7 @@
 //! 本模块实现本地部分（类型、哈希、路径映射）与远程探针链路（镜像链 HEAD 判定）；
 //! 缓存预热下载（T4）与 UI 集成（T5）在后续增量中实现。
 
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, Read};
 use std::time::Duration;
 
@@ -285,6 +285,73 @@ pub fn probe_all(steam_dir: &Path) -> OverallHealthReport {
     probe_all_with(steam_dir, template.as_deref(), |url| head_probe(&agent, url))
 }
 
+/// 预热下载错误，UI 层据此映射双语文案。
+#[derive(Clone, Debug)]
+pub enum CompatError {
+    /// 网络请求失败（HTTP 非 2xx / 传输错误）。
+    Network(String),
+    /// 本地文件操作失败。
+    Io(String),
+}
+
+impl std::fmt::Display for CompatError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CompatError::Network(d) => write!(f, "network: {d}"),
+            CompatError::Io(d) => write!(f, "io: {d}"),
+        }
+    }
+}
+
+/// 沿镜像链下载首个 2xx 的 TOML 内容（自定义模板替代语义与探测一致）。
+fn download_first(urls: &[String]) -> Result<Vec<u8>, CompatError> {
+    let agent = crate::updater::download_agent();
+    let mut last_err: Option<CompatError> = None;
+    for url in urls {
+        match agent.get(url).call() {
+            Ok(resp) => {
+                let body = resp.into_body().read_to_vec()
+                    .map_err(|e| CompatError::Network(format!("read body: {e}")))?;
+                return Ok(body);
+            }
+            Err(ureq::Error::StatusCode(404)) => {
+                last_err = Some(CompatError::Network(format!("HTTP 404: {url}")));
+            }
+            Err(e) => last_err = Some(CompatError::Network(e.to_string())),
+        }
+    }
+    Err(last_err
+        .unwrap_or_else(|| CompatError::Network("no URLs".into())))
+}
+
+/// 持久化 TOML 到本地缓存：建目录 + 原子写（避免半截文件被上游热重载读到）。
+fn write_cache_file(
+    steam_dir: &Path,
+    target: ProbeTarget,
+    sha256: &str,
+    body: &[u8],
+) -> Result<(), CompatError> {
+    let path = cache_path(steam_dir, target, sha256);
+    let dir = path
+        .parent()
+        .ok_or_else(|| CompatError::Io("no parent dir".into()))?;
+    fs::create_dir_all(dir).map_err(|e| CompatError::Io(format!("create dir: {e}")))?;
+    crate::fsutil::write_atomic(&path, body)
+        .map_err(|e| CompatError::Io(format!("write {}: {e}", path.display())))?;
+    Ok(())
+}
+
+/// 预热单个目标的签名缓存：下载 → 持久化。
+///
+/// T4 暴露给 T5（UI 集成）的入口，T5 接入前保持 allow。
+#[allow(dead_code)]
+pub fn precache(steam_dir: &Path, target: ProbeTarget, sha256: &str) -> Result<(), CompatError> {
+    let template = crate::config_editor::remote_url_template(steam_dir);
+    let urls = build_urls(template.as_deref(), target, sha256);
+    let body = download_first(&urls)?;
+    write_cache_file(steam_dir, target, sha256, &body)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -555,6 +622,57 @@ mod tests {
             ProbeStatus::NetworkError(_)
         ));
         assert!(!report.is_all_compatible);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 持久化：建目录 + 写入后文件存在且内容一致（cache_path 目标正确）。
+    #[test]
+    fn write_cache_file_creates_dir_and_file() {
+        let dir = std::env::temp_dir().join(format!("ost_compat_pre_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let target = ProbeTarget::PatternSteamClient;
+        let body = b"[patterns]\nkey = 1\n";
+        write_cache_file(&dir, target, "deadbeef", body).unwrap();
+        let path = cache_path(&dir, target, "deadbeef");
+        assert!(path.is_file());
+        assert_eq!(fs::read(&path).unwrap(), body);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 覆盖写入：同路径二次写入替换内容（原子写语义）。
+    #[test]
+    fn write_cache_file_overwrites_existing() {
+        let dir = std::env::temp_dir().join(format!("ost_compat_over_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let target = ProbeTarget::PatternSteamClient;
+        write_cache_file(&dir, target, "sha", b"v1").unwrap();
+        write_cache_file(&dir, target, "sha", b"v2").unwrap();
+        assert_eq!(fs::read(cache_path(&dir, target, "sha")).unwrap(), b"v2");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// CompatError Display 文案（对齐 UpdateError 风格）。
+    #[test]
+    fn compat_error_display() {
+        assert_eq!(CompatError::Network("x".into()).to_string(), "network: x");
+        assert_eq!(CompatError::Io("y".into()).to_string(), "io: y");
+    }
+
+    /// e2e（requires network，默认忽略）：拉取线上已知哈希并落盘。
+    #[test]
+    #[ignore = "requires network"]
+    fn precache_e2e_known_hash() {
+        let dir = std::env::temp_dir().join(format!("ost_compat_e2e_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let sha = "3f864358fcf50e49e0a8c6bb8e1bf175e381f5628e4cd4997a59ca5e3976afe5";
+        precache(&dir, ProbeTarget::PatternSteamClient, sha).unwrap();
+        let path = cache_path(&dir, ProbeTarget::PatternSteamClient, sha);
+        assert!(path.is_file());
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("["), "signature TOML: {content}");
         let _ = fs::remove_dir_all(&dir);
     }
 }

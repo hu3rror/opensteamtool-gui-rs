@@ -42,7 +42,7 @@ fn agent() -> Agent {
 }
 
 /// 下载专用 agent：连接快速失败，body 读取给足时间。
-fn download_agent() -> Agent {
+pub(crate) fn download_agent() -> Agent {
     Agent::config_builder()
         .timeout_connect(Some(DOWNLOAD_CONNECT_TIMEOUT))
         .timeout_global(Some(DOWNLOAD_GLOBAL_TIMEOUT))
