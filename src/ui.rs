@@ -12,6 +12,7 @@ use crate::onlinefix;
 use crate::dll::{self, DeployStatus};
 use crate::i18n::{Lang, Strings};
 use crate::process::{self, SteamEvent, SteamMonitor};
+use crate::settings::{ConfigEditError, ConfigEditorState, OfError, OfStatus, OnlineFixState};
 use crate::steam;
 use crate::steam_state::SteamState;
 use crate::tray::{Tray, TrayAction};
@@ -178,6 +179,34 @@ fn render_notice(s: &Strings, local_version: Option<&str>, notice: &Notice) -> (
         Notice::WorkflowDone(action, Ok(())) => (true, s.success_text(*action).to_string()),
         Notice::WorkflowDone(_, Err(e)) => (false, s.workflow_error_text(e)),
         Notice::Precheck(p) => (false, s.precheck_text(p)),
+    }
+}
+
+/// 配置编辑器类型化错误 → 本地化文案（渲染闭包内调用，不借 App；语言切换后逐帧重新映射）。
+fn config_err_text(strings: &Strings, lang: Lang, err: &ConfigEditError) -> String {
+    match err {
+        ConfigEditError::Load(m) => format!("{}: {m}", strings.err_config_load),
+        ConfigEditError::Validation(e) => strings.config_error_text(lang, e),
+        ConfigEditError::Save(m) => format!("{}: {m}", strings.err_config_save),
+    }
+}
+
+/// OnlineFix 类型化错误 → 本地化文案。
+fn of_error_text(strings: &Strings, e: &OfError) -> String {
+    match e {
+        OfError::WriteBlocked => strings.of_steam_running.to_string(),
+        OfError::InvalidAppid => strings.err_of_invalid_appid.to_string(),
+        OfError::Vdf(e) => strings.onlinefix_error(e),
+    }
+}
+
+/// OnlineFix 展示状态 → (文案, 颜色)（状态模块存类型化错误，渲染时按当前语言映射）。
+fn of_status_line(strings: &Strings, status: &OfStatus) -> (String, egui::Color32) {
+    match status {
+        OfStatus::Enabled => (strings.of_status_enabled.to_string(), STATUS_INSTALLED),
+        OfStatus::Disabled => (strings.of_status_disabled.to_string(), TEXT_WEAK),
+        OfStatus::Copied => (strings.of_copied.to_string(), STATUS_INSTALLED),
+        OfStatus::Error(e) => (of_error_text(strings, e), ERR_RED),
     }
 }
 
@@ -354,15 +383,6 @@ enum Notice {
     Precheck(workflow::Precheck),
 }
 
-/// OnlineFix 预设区状态行（选中账号 × AppID 的当前状态）。
-enum OnlineFixStatus {
-    Enabled,
-    Disabled,
-    /// 刚点击「复制参数」（短暂显示）。
-    Copied,
-    Error(String),
-}
-
 pub struct App {
     lang: Lang,
     strings: Strings,
@@ -398,28 +418,12 @@ pub struct App {
     /// 上一帧是否处于最小化（检测最小化按钮被点击）。
     was_minimized: bool,
 
-    /// 设置对话框是否打开（PR-1：TOML 配置编辑器；PR-2 挂载 OnlineFix 预设）。
+    /// 设置对话框是否打开（配置编辑器与 OnlineFix 预设状态见 settings.rs）。
     settings_open: bool,
-    /// 编辑器缓冲：磁盘内容载入后在此编辑，保存前不落盘。
-    config_text: String,
-    /// 缓冲是否已从磁盘加载（避免每帧重读覆盖用户编辑）。
-    config_loaded: bool,
-    /// 最近一次校验/写入失败的本地化错误文案（None = 无错误）。
-    config_err: Option<String>,
-    /// 最近一次保存成功（短暂显示「已保存」，再次编辑即清除）。
-    config_saved: bool,
-
-    /// OnlineFix 预设区：可用账号（userdata 扫描，对话框打开时刷新）。
-    of_accounts: Vec<PathBuf>,
-    of_account_idx: usize,
-    /// 手动输入/候选取用的 AppID。
-    of_appid: String,
-    /// Lua config 扫描的候选 AppID。
-    of_candidates: Vec<u32>,
-    /// 当前选中 (账号, AppID) 的在线修复状态。
-    of_status: Option<OnlineFixStatus>,
-    /// 上次计算状态时的 (账号 idx, AppID)，避免每帧重读 VDF。
-    of_status_key: Option<(usize, String)>,
+    /// 配置编辑器状态（缓冲/载入/校验/保存提示，见 settings.rs）。
+    cfg: ConfigEditorState,
+    /// OnlineFix 启动预设状态（账号/AppID/展示状态/写入门闩，见 settings.rs）。
+    of: OnlineFixState,
 }
 
 /// 读取系统中文字体数据（微软雅黑/黑体/宋体，首个可读的生效），无则 None。
@@ -526,16 +530,8 @@ impl App {
             minimize_to_tray: true,
             was_minimized: false,
             settings_open: false,
-            config_text: String::new(),
-            config_loaded: false,
-            config_err: None,
-            config_saved: false,
-            of_accounts: Vec::new(),
-            of_account_idx: 0,
-            of_appid: String::new(),
-            of_candidates: Vec::new(),
-            of_status: None,
-            of_status_key: None,
+            cfg: ConfigEditorState::new(),
+            of: OnlineFixState::new(),
         }
     }
 
@@ -716,164 +712,11 @@ impl App {
     /// 打开设置：置位并标记缓冲待加载（下次渲染时从磁盘读入）。
     fn open_settings(&mut self) {
         self.settings_open = true;
-        self.config_loaded = false;
-        self.config_err = None;
-        self.config_saved = false;
+        // 配置编辑器：标记待载入（首帧渲染时读盘）。
+        self.cfg.mark_unloaded();
         // OnlineFix 区：按当前 Steam 路径刷新账号与 AppID 候选（进程组运行态写入门闩每次写前实时判定）。
         let steam_dir = Path::new(self.steam_path.trim());
-        self.of_accounts = onlinefix::account_vdf_paths(steam_dir);
-        self.of_account_idx = self.of_account_idx.min(self.of_accounts.len().saturating_sub(1));
-        self.of_candidates = onlinefix::scan_lua_appids(steam_dir);
-        self.of_status = None;
-        self.of_status_key = None;
-    }
-
-    /// 首次渲染时把磁盘内容载入编辑器缓冲（避免每帧重读覆盖用户编辑）。
-    fn ensure_config_loaded(&mut self) {
-        if self.config_loaded {
-            return;
-        }
-        self.config_loaded = true;
-        let path = config_editor::target_path(Path::new(self.steam_path.trim()));
-        match std::fs::read_to_string(&path) {
-            Ok(text) => self.config_text = text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                // 文件不存在：留空缓冲，由 UI 显示「从示例模板创建」引导。
-                self.config_text.clear();
-            }
-            Err(e) => {
-                self.config_text.clear();
-                self.config_err = Some(format!("{}: {e}", self.strings.err_config_load));
-            }
-        }
-    }
-
-    /// 保存：先校验（错误带行列定位），通过后原子写入。
-    fn save_config(&mut self) {
-        match config_editor::validate(&self.config_text) {
-            Err(e) => {
-                self.config_err = Some(self.strings.config_error_text(self.lang, &e));
-                self.config_saved = false;
-            }
-            Ok(()) => {
-                let path = config_editor::target_path(Path::new(self.steam_path.trim()));
-                match config_editor::write_atomic(&path, &self.config_text) {
-                    Ok(()) => {
-                        self.config_err = None;
-                        self.config_saved = true;
-                    }
-                    Err(e) => {
-                        self.config_err = Some(format!("{}: {e}", self.strings.err_config_save));
-                        self.config_saved = false;
-                    }
-                }
-            }
-        }
-    }
-
-    /// 账号展示名：`userdata/<id>/config/localconfig.vdf` → `<id>`。
-    fn of_account_name(vdf: &Path) -> String {
-        vdf.parent()
-            .and_then(|c| c.parent())
-            .and_then(|u| u.file_name())
-            .and_then(|n| n.to_str())
-            .map(|s| s.to_owned())
-            .unwrap_or_else(|| vdf.display().to_string())
-    }
-
-    /// 重算 OnlineFix 状态（仅当选中的 (账号, AppID) 变化时读盘）。
-    fn refresh_of_status(&mut self) {
-        let key = (self.of_account_idx, self.of_appid.trim().to_owned());
-        if self.of_status_key.as_ref() == Some(&key) {
-            return;
-        }
-        self.of_status_key = Some(key.clone());
-        let Ok(appid) = key.1.parse::<u32>() else {
-            return; // 输入未成形：不显示状态。
-        };
-        let Some(vdf) = self.of_accounts.get(key.0).cloned() else {
-            return;
-        };
-        self.of_status = Some(match onlinefix::is_onlinefix(&vdf, appid) {
-            Ok(true) => OnlineFixStatus::Enabled,
-            Ok(false) => OnlineFixStatus::Disabled,
-            Err(e) => OnlineFixStatus::Error(self.strings.onlinefix_error(&e)),
-        });
-    }
-
-    /// 启用 OnlineFix（写入 -onlinefix）；成功在界面内直接更新状态，键置空待下帧复读。
-    fn of_enable(&mut self) {
-        if !self.of_write_allowed() {
-            return;
-        }
-        let Some(appid) = self.of_appid.trim().parse::<u32>().ok() else {
-            self.of_status = Some(OnlineFixStatus::Error(self.strings.err_of_invalid_appid.to_string()));
-            self.of_status_key = None;
-            return;
-        };
-        let Some(vdf) = self.of_accounts.get(self.of_account_idx).cloned() else {
-            return;
-        };
-        match onlinefix::set_onlinefix(&vdf, appid) {
-            Ok(()) => {
-                self.of_status = Some(OnlineFixStatus::Enabled);
-                self.of_status_key = None;
-            }
-            Err(e) => {
-                self.of_status = Some(OnlineFixStatus::Error(self.strings.onlinefix_error(&e)));
-                self.of_status_key = None;
-            }
-        }
-    }
-
-    /// 写入前门闩：对话框打开期间 Steam 可能已启动，逐次复查进程组。
-    /// 返回 false 时已在界面内给出「请先关闭 Steam」提示。
-    fn of_write_allowed(&mut self) -> bool {
-        // 快速判定（仅看 steam.exe，2s 缓存）：Steam 在跑时直接拦截。
-        if self.steam_running {
-            self.of_status = Some(OnlineFixStatus::Error(self.strings.of_steam_running.to_string()));
-            self.of_status_key = None;
-            return false;
-        }
-        // 实时复查（进程组口径，覆盖 steam.exe 退出后残留的 webhelper 孤儿）。
-        let steam_dir = Path::new(self.steam_path.trim());
-        if self.steam_state.group_running(steam_dir) {
-            self.of_status = Some(OnlineFixStatus::Error(self.strings.of_steam_running.to_string()));
-            self.of_status_key = None;
-            return false;
-        }
-        true
-    }
-
-    /// 停用 OnlineFix（移除 -onlinefix）。
-    fn of_disable(&mut self) {
-        if !self.of_write_allowed() {
-            return;
-        }
-        let Some(appid) = self.of_appid.trim().parse::<u32>().ok() else {
-            self.of_status = Some(OnlineFixStatus::Error(self.strings.err_of_invalid_appid.to_string()));
-            self.of_status_key = None;
-            return;
-        };
-        let Some(vdf) = self.of_accounts.get(self.of_account_idx).cloned() else {
-            return;
-        };
-        match onlinefix::clear_onlinefix(&vdf, appid) {
-            Ok(()) => {
-                self.of_status = Some(OnlineFixStatus::Disabled);
-                self.of_status_key = None;
-            }
-            Err(e) => {
-                self.of_status = Some(OnlineFixStatus::Error(self.strings.onlinefix_error(&e)));
-                self.of_status_key = None;
-            }
-        }
-    }
-
-    /// 复制 `-onlinefix` 参数到剪贴板。
-    fn of_copy(&mut self, ctx: &egui::Context) {
-        ctx.copy_text(onlinefix::ONLINEFIX_ARG.to_owned());
-        self.of_status = Some(OnlineFixStatus::Copied);
+        self.of.refresh(steam_dir);
     }
 
     /// 设置对话框主体（模态；Steam 路径无效时仅提示 + 关闭）。
@@ -886,7 +729,7 @@ impl App {
         let steam_ok = dll::check_status(steam_dir) != DeployStatus::InvalidPath;
         let target = config_editor::target_path(steam_dir);
         if steam_ok {
-            self.ensure_config_loaded();
+            self.cfg.ensure_loaded(&target);
         }
         let file_exists = steam_ok && target.exists();
 
@@ -926,20 +769,20 @@ impl App {
                 .show(ui, |ui| {
                     ui.add_sized(
                         egui::vec2(ui.available_width(), 300.0),
-                        egui::TextEdit::multiline(&mut self.config_text)
+                        egui::TextEdit::multiline(&mut self.cfg.text)
                             .code_editor()
                             .desired_width(f32::INFINITY),
                     )
                 });
             if editor.inner.changed() {
-                self.config_saved = false; // 编辑清除「已保存」提示。
+                self.cfg.mark_edited(); // 编辑清除「已保存」提示。
             }
             ui.add_space(6.0);
 
             // 状态行：错误（红）/ 已保存（绿）/ 文件缺失引导（弱灰）。
-            if let Some(err) = &self.config_err {
-                status_line(ui, err, ERR_RED);
-            } else if self.config_saved {
+            if let Some(err) = &self.cfg.err {
+                status_line(ui, &config_err_text(&self.strings, self.lang, err), ERR_RED);
+            } else if self.cfg.saved {
                 status_line(ui, self.strings.ok_config_saved, STATUS_INSTALLED);
             } else if !file_exists {
                 status_line(ui, self.strings.settings_file_missing, TEXT_WEAK);
@@ -972,66 +815,61 @@ impl App {
             let write_blocked = self.steam_running;
             if write_blocked {
                 status_line(ui, self.strings.of_steam_running, TEXT_WEAK);
-            } else if self.of_accounts.is_empty() {
+            } else if self.of.accounts.is_empty() {
                 status_line(ui, self.strings.of_no_account, TEXT_WEAK);
             } else {
                 // 账号选择。
                 ui.horizontal(|ui| {
                     ui.label(self.strings.of_account_label);
-                    let label = App::of_account_name(&self.of_accounts[self.of_account_idx]);
+                    let label = OnlineFixState::account_name(&self.of.accounts[self.of.account_idx]);
+                    let mut selected_idx = None;
                     egui::ComboBox::from_id_salt("of_account")
                         .selected_text(label)
                         .width(150.0)
                         .show_ui(ui, |ui| {
-                            for (i, vdf) in self.of_accounts.iter().enumerate() {
-                                let selected = self.of_account_idx == i;
-                                let name = App::of_account_name(vdf);
+                            for (i, vdf) in self.of.accounts.iter().enumerate() {
+                                let selected = self.of.account_idx == i;
+                                let name = OnlineFixState::account_name(vdf);
                                 if ui.selectable_label(selected, name).clicked() {
-                                    self.of_account_idx = i;
-                                    self.of_status_key = None;
+                                    selected_idx = Some(i);
                                 }
                             }
                         });
+                    if let Some(i) = selected_idx {
+                        self.of.select_account(i);
+                    }
                 });
                 // AppID 输入 + Lua 候选。
                 ui.horizontal_wrapped(|ui| {
                     ui.label(self.strings.of_appid_label);
                     let resp = ui.add(
-                        egui::TextEdit::singleline(&mut self.of_appid)
+                        egui::TextEdit::singleline(&mut self.of.appid)
                             .desired_width(96.0)
                             .hint_text("0"),
                     );
                     if resp.changed() {
-                        self.of_status_key = None;
+                        self.of.appid_changed();
                     }
-                    if !self.of_candidates.is_empty() {
+                    if !self.of.candidates.is_empty() {
                         ui.add_space(8.0);
-                        for &id in &self.of_candidates {
+                        let mut picked = None;
+                        for &id in &self.of.candidates {
                             if ui.small_button(id.to_string()).clicked() {
-                                self.of_appid = id.to_string();
-                                self.of_status_key = None;
+                                picked = Some(id);
                             }
+                        }
+                        if let Some(id) = picked {
+                            self.of.appid = id.to_string();
+                            self.of.appid_changed();
                         }
                     }
                 });
                 ui.add_space(6.0);
                 // 状态行（先刷新再渲染）。
-                self.refresh_of_status();
-                if let Some(status) = &self.of_status {
-                    match status {
-                        OnlineFixStatus::Enabled => {
-                            status_line(ui, self.strings.of_status_enabled, STATUS_INSTALLED);
-                        }
-                        OnlineFixStatus::Disabled => {
-                            status_line(ui, self.strings.of_status_disabled, TEXT_WEAK);
-                        }
-                        OnlineFixStatus::Copied => {
-                            status_line(ui, self.strings.of_copied, STATUS_INSTALLED);
-                        }
-                        OnlineFixStatus::Error(msg) => {
-                            status_line(ui, msg, ERR_RED);
-                        }
-                    }
+                self.of.refresh_status();
+                if let Some(status) = self.of.status() {
+                    let (text, color) = of_status_line(&self.strings, status);
+                    status_line(ui, &text, color);
                 }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
@@ -1055,22 +893,20 @@ impl App {
         });
 
         if save_clicked {
-            self.save_config();
+            self.cfg.save(&target);
         }
         if template_clicked {
-            self.config_text = config_editor::EXAMPLE_TEMPLATE.to_owned();
-            self.config_loaded = true;
-            self.config_err = None;
-            self.config_saved = false;
+            self.cfg.fill_template();
         }
         if enable_clicked {
-            self.of_enable();
+            self.of.enable(steam_dir, self.steam_running, &self.steam_state);
         }
         if disable_clicked {
-            self.of_disable();
+            self.of.disable(steam_dir, self.steam_running, &self.steam_state);
         }
         if copy_clicked {
-            self.of_copy(ctx);
+            ctx.copy_text(onlinefix::ONLINEFIX_ARG.to_owned());
+            self.of.mark_copied();
         }
         if close_clicked {
             self.settings_open = false;

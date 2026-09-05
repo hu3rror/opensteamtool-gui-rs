@@ -8,6 +8,7 @@ mod fsutil;
 mod i18n;
 mod onlinefix;
 mod process;
+mod settings;
 mod steam;
 mod steam_state;
 mod tray;
