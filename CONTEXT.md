@@ -81,12 +81,20 @@ _Avoid_: 关闭成功（易与 spawn 成功混淆）
 _Avoid_: 设置窗口、选项框
 
 **配置编辑器（Config Editor）**:
-编辑 `<Steam>/opensteamtool.toml`（上游 OpenSteamTool 配置文件）的文本编辑器：载入现有内容、保存前 TOML 语法校验（错误带行列定位）、原子写入。
+编辑 `<Steam>/opensteamtool.toml`（上游 OpenSteamTool 配置文件）的文本编辑器：载入现有内容、保存前 TOML 语法校验（错误带行列定位）、原子写入；编辑区提供「撤销」与「未保存的编辑」覆盖确认。
 _Avoid_: 设置编辑器
 
 **示例模板（Example Template）**:
 配置编辑器内内置的上游 `opensteamtool.example.toml` 快照，一键载入作为编辑起点（文件不存在时的引导入口）。
 _Avoid_: 示例配置
+
+**未保存的编辑（Unsaved Edits）**:
+配置编辑器缓冲与磁盘内容不一致的状态（编辑后未保存）；存在时「从示例模板创建」先弹覆盖确认，避免误覆盖。
+_Avoid_: 脏标记、有改动、dirty
+
+**撤销（Undo）**:
+配置编辑器回退最近一次编辑的动作（「撤销」按钮或 Ctrl+Z），重做走 Ctrl+Y；撤销历史随应用会话存在（载入/保存不清空）。
+_Avoid_: 回退、revert
 
 **OnlineFix 启动预设（OnlineFix Preset）**:
 把 `-onlinefix` 写入指定游戏 AppID 的「启动选项」的持久设置（改 `localconfig.vdf`，Steam 原生读取）；上游据此把该游戏的 AppID 重写为 480（`kOnlineFixAppId`）实现在线修复。
