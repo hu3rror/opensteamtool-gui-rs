@@ -93,15 +93,84 @@ struct PyStyle {
     border: Option<egui::Color32>,
 }
 
+/// 按钮样式（语义名，对齐操作语义；样式常量表集中在此，新增样式只加变体）。
+#[derive(Clone, Copy)]
+enum ButtonStyle {
+    /// 绿色主按钮（应用补丁并启动 Steam）。
+    Deploy,
+    /// 白色次按钮（正常启动 Steam）。
+    Launch,
+    /// 浅蓝描边按钮（退出 Steam 并卸载补丁）。
+    UninstallExit,
+    /// 蓝色实心按钮（卸载补丁并重启 Steam）。
+    UninstallRestart,
+    /// 主蓝按钮（保存/下载/确认）。
+    Primary,
+    /// 次灰按钮（检查更新/浏览/取消）。
+    Secondary,
+    /// 语言切换按钮（白底蓝字，固定小尺寸）。
+    Lang,
+}
+
+impl ButtonStyle {
+    fn style(self) -> PyStyle {
+        match self {
+            ButtonStyle::Deploy => PyStyle {
+                bg: BTN_DEPLOY_BG,
+                hover: BTN_DEPLOY_HOVER,
+                fg: egui::Color32::WHITE,
+                border: None,
+            },
+            ButtonStyle::Launch => PyStyle {
+                bg: CARD_BG,
+                hover: BTN_SECONDARY_HOVER,
+                fg: TEXT_SUB,
+                border: Some(ENTRY_BORDER),
+            },
+            ButtonStyle::UninstallExit => PyStyle {
+                bg: BTN_UNINSTALL_A_BG,
+                hover: BTN_UNINSTALL_A_HOVER,
+                fg: BTN_UNINSTALL_A_FG,
+                border: Some(BTN_UNINSTALL_A_BORDER),
+            },
+            ButtonStyle::UninstallRestart => PyStyle {
+                bg: BTN_UNINSTALL_B_BG,
+                hover: BTN_UNINSTALL_B_HOVER,
+                fg: egui::Color32::WHITE,
+                border: None,
+            },
+            ButtonStyle::Primary => PyStyle {
+                bg: ACCENT,
+                hover: ACCENT_ACTIVE,
+                fg: egui::Color32::WHITE,
+                border: None,
+            },
+            ButtonStyle::Secondary => PyStyle {
+                bg: FILL_SECONDARY,
+                hover: BTN_SECONDARY_HOVER,
+                fg: TEXT_SUB,
+                border: Some(ENTRY_BORDER),
+            },
+            ButtonStyle::Lang => PyStyle {
+                bg: CARD_BG,
+                hover: FILL_SECONDARY,
+                fg: ACCENT,
+                border: Some(ENTRY_BORDER),
+            },
+        }
+    }
+}
+
 /// Python 风格按钮：手动绘制底/描边/文字，hover 换色（效仿 tkinter <Enter>/<Leave>）。
 /// `enabled=false` 时文字弱化为 muted 且不响应点击。
-fn py_button(
+fn styled_button(
     ui: &mut egui::Ui,
     text: &str,
-    style: PyStyle,
+    style: ButtonStyle,
     size: egui::Vec2,
     enabled: bool,
 ) -> egui::Response {
+    let style = style.style();
     // 长文案（如英文 "Download & Extract New Version"）超出固定宽度时会被绘制在
     // 按钮边界外截断；按文本宽度自适应，最小仍为调用方指定的 size。
     let font_id = egui::FontId::proportional(13.0);
@@ -221,137 +290,8 @@ fn version_line(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
     ui.label(egui::RichText::new(text).size(12.5).color(color));
 }
 
-/// 绿色主按钮（应用补丁并启动 Steam）。
-fn deploy_button(ui: &mut egui::Ui, text: &str, size: egui::Vec2, enabled: bool) -> egui::Response {
-    py_button(
-        ui,
-        text,
-        PyStyle {
-            bg: BTN_DEPLOY_BG,
-            hover: BTN_DEPLOY_HOVER,
-            fg: egui::Color32::WHITE,
-            border: None,
-        },
-        size,
-        enabled,
-    )
-}
 
-/// 白色次按钮（正常启动 Steam）。
-fn launch_button(ui: &mut egui::Ui, text: &str, size: egui::Vec2, enabled: bool) -> egui::Response {
-    py_button(
-        ui,
-        text,
-        PyStyle {
-            bg: CARD_BG,
-            hover: BTN_SECONDARY_HOVER,
-            fg: TEXT_SUB,
-            border: Some(ENTRY_BORDER),
-        },
-        size,
-        enabled,
-    )
-}
 
-/// 浅蓝描边按钮（退出 Steam 并卸载补丁）。
-fn uninstall_exit_button(
-    ui: &mut egui::Ui,
-    text: &str,
-    size: egui::Vec2,
-    enabled: bool,
-) -> egui::Response {
-    py_button(
-        ui,
-        text,
-        PyStyle {
-            bg: BTN_UNINSTALL_A_BG,
-            hover: BTN_UNINSTALL_A_HOVER,
-            fg: BTN_UNINSTALL_A_FG,
-            border: Some(BTN_UNINSTALL_A_BORDER),
-        },
-        size,
-        enabled,
-    )
-}
-
-/// 蓝色实心按钮（卸载补丁并重启 Steam）。
-fn uninstall_restart_button(
-    ui: &mut egui::Ui,
-    text: &str,
-    size: egui::Vec2,
-    enabled: bool,
-) -> egui::Response {
-    py_button(
-        ui,
-        text,
-        PyStyle {
-            bg: BTN_UNINSTALL_B_BG,
-            hover: BTN_UNINSTALL_B_HOVER,
-            fg: egui::Color32::WHITE,
-            border: None,
-        },
-        size,
-        enabled,
-    )
-}
-
-/// 主蓝按钮（下载/确认弹窗）。
-fn primary_button(
-    ui: &mut egui::Ui,
-    text: &str,
-    size: egui::Vec2,
-    enabled: bool,
-) -> egui::Response {
-    py_button(
-        ui,
-        text,
-        PyStyle {
-            bg: ACCENT,
-            hover: ACCENT_ACTIVE,
-            fg: egui::Color32::WHITE,
-            border: None,
-        },
-        size,
-        enabled,
-    )
-}
-
-/// 次灰按钮（检查更新/浏览/取消）。
-fn secondary_button(
-    ui: &mut egui::Ui,
-    text: &str,
-    size: egui::Vec2,
-    enabled: bool,
-) -> egui::Response {
-    py_button(
-        ui,
-        text,
-        PyStyle {
-            bg: FILL_SECONDARY,
-            hover: BTN_SECONDARY_HOVER,
-            fg: TEXT_SUB,
-            border: Some(ENTRY_BORDER),
-        },
-        size,
-        enabled,
-    )
-}
-
-/// 语言切换按钮：白底 + 蓝字 + 描边（Python btn_lang 样式）。
-fn lang_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    py_button(
-        ui,
-        text,
-        PyStyle {
-            bg: CARD_BG,
-            hover: FILL_SECONDARY,
-            fg: ACCENT,
-            border: Some(ENTRY_BORDER),
-        },
-        egui::vec2(56.0, 26.0),
-        true,
-    )
-}
 
 /// 后台线程 → UI 线程的消息。
 enum Msg {
@@ -750,7 +690,7 @@ impl App {
             if !steam_ok {
                 ui.label(egui::RichText::new(self.strings.settings_no_steam_dir).color(TEXT_SUB));
                 ui.add_space(14.0);
-                if primary_button(ui, self.strings.btn_close, egui::vec2(80.0, 30.0), true).clicked() {
+                if styled_button(ui, self.strings.btn_close, ButtonStyle::Primary, egui::vec2(80.0, 30.0), true).clicked() {
                     close_clicked = true;
                 }
                 return;
@@ -790,16 +730,16 @@ impl App {
             ui.add_space(10.0);
 
             ui.horizontal(|ui| {
-                if secondary_button(ui, self.strings.btn_load_template, egui::vec2(150.0, 30.0), true).clicked()
+                if styled_button(ui, self.strings.btn_load_template, ButtonStyle::Secondary, egui::vec2(150.0, 30.0), true).clicked()
                 {
                     template_clicked = true;
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if primary_button(ui, self.strings.btn_save, egui::vec2(80.0, 30.0), true).clicked() {
+                    if styled_button(ui, self.strings.btn_save, ButtonStyle::Primary, egui::vec2(80.0, 30.0), true).clicked() {
                         save_clicked = true;
                     }
                     ui.add_space(6.0);
-                    if secondary_button(ui, self.strings.btn_close, egui::vec2(80.0, 30.0), true).clicked() {
+                    if styled_button(ui, self.strings.btn_close, ButtonStyle::Secondary, egui::vec2(80.0, 30.0), true).clicked() {
                         close_clicked = true;
                     }
                 });
@@ -873,14 +813,14 @@ impl App {
                 }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if primary_button(ui, self.strings.of_btn_enable, egui::vec2(120.0, 30.0), true).clicked() {
+                    if styled_button(ui, self.strings.of_btn_enable, ButtonStyle::Primary, egui::vec2(120.0, 30.0), true).clicked() {
                         enable_clicked = true;
                     }
-                    if secondary_button(ui, self.strings.of_btn_disable, egui::vec2(120.0, 30.0), true).clicked() {
+                    if styled_button(ui, self.strings.of_btn_disable, ButtonStyle::Secondary, egui::vec2(120.0, 30.0), true).clicked() {
                         disable_clicked = true;
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if secondary_button(ui, self.strings.of_btn_copy, egui::vec2(84.0, 30.0), true).clicked() {
+                        if styled_button(ui, self.strings.of_btn_copy, ButtonStyle::Secondary, egui::vec2(84.0, 30.0), true).clicked() {
                             copy_clicked = true;
                         }
                     });
@@ -923,11 +863,11 @@ impl App {
                     .color(TEXT_INK),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if lang_button(ui, self.lang.toggle_label()).clicked() {
+                if styled_button(ui, self.lang.toggle_label(), ButtonStyle::Lang, egui::vec2(56.0, 26.0), true).clicked() {
                     self.toggle_lang();
                 }
                 // 设置按钮（RTL 布局中位于语言按钮左侧；样式与语言按钮一致）。
-                if lang_button(ui, self.strings.btn_settings).clicked() {
+                if styled_button(ui, self.strings.btn_settings, ButtonStyle::Lang, egui::vec2(56.0, 26.0), true).clicked() {
                     self.open_settings();
                 }
             });
@@ -951,7 +891,7 @@ impl App {
                 if resp.changed() {
                     self.refresh_status();
                 }
-                if secondary_button(ui, self.strings.browse, egui::vec2(82.0, 34.0), true).clicked()
+                if styled_button(ui, self.strings.browse, ButtonStyle::Secondary, egui::vec2(82.0, 34.0), true).clicked()
                     && let Some(dir) = rfd::FileDialog::new().pick_folder()
                 {
                     self.steam_path = dir.display().to_string();
@@ -996,13 +936,14 @@ impl App {
                     } else {
                         self.strings.btn_uninstall
                     };
-                    if uninstall_exit_button(ui, uninstall_label, size, !self.busy).clicked() {
+                    if styled_button(ui, uninstall_label, ButtonStyle::UninstallExit, size, !self.busy).clicked() {
                         self.request_action(&ctx, Action::ExitAndUninstall);
                     }
                     ui.add_space(gap);
-                    if uninstall_restart_button(
+                    if styled_button(
                         ui,
                         self.strings.btn_uninstall_and_restart,
+                        ButtonStyle::UninstallRestart,
                         size,
                         !self.busy,
                     )
@@ -1012,22 +953,22 @@ impl App {
                     }
                 }
                 DeployStatus::NotDeployed => {
-                    if deploy_button(ui, self.strings.btn_apply_and_launch, size, !self.busy)
+                    if styled_button(ui, self.strings.btn_apply_and_launch, ButtonStyle::Deploy, size, !self.busy)
                         .clicked()
                     {
                         self.request_action(&ctx, Action::ApplyAndLaunch);
                     }
                     ui.add_space(gap);
-                    if launch_button(ui, self.strings.btn_launch_normal, size, !self.busy).clicked()
+                    if styled_button(ui, self.strings.btn_launch_normal, ButtonStyle::Launch, size, !self.busy).clicked()
                     {
                         self.request_action(&ctx, Action::Launch);
                     }
                 }
                 DeployStatus::InvalidPath => {
                     // 无有效路径时禁用操作按钮。
-                    deploy_button(ui, self.strings.btn_apply_and_launch, size, false);
+                    styled_button(ui, self.strings.btn_apply_and_launch, ButtonStyle::Deploy, size, false);
                     ui.add_space(gap);
-                    launch_button(ui, self.strings.btn_launch_normal, size, false);
+                    styled_button(ui, self.strings.btn_launch_normal, ButtonStyle::Launch, size, false);
                 }
             }
         });
@@ -1103,9 +1044,10 @@ impl App {
 
             // 先只收集按钮意图，避免借用冲突。
             ui.horizontal(|ui| {
-                if secondary_button(
+                if styled_button(
                     ui,
                     self.strings.btn_check_update,
+                    ButtonStyle::Secondary,
                     egui::vec2(96.0, 32.0),
                     !self.busy,
                 )
@@ -1118,9 +1060,10 @@ impl App {
                     let local = self.local_version.as_deref().unwrap_or("");
                     if info.version != local
                         && !info.version.is_empty()
-                        && primary_button(
+                        && styled_button(
                             ui,
                             self.strings.btn_download_and_extract,
+                            ButtonStyle::Primary,
                             egui::vec2(150.0, 32.0),
                             !self.busy,
                         )
@@ -1265,12 +1208,12 @@ impl eframe::App for App {
                 ui.label(self.strings.confirm_close_steam);
                 ui.add_space(14.0);
                 ui.horizontal(|ui| {
-                    if primary_button(ui, self.strings.yes, egui::vec2(72.0, 30.0), true).clicked()
+                    if styled_button(ui, self.strings.yes, ButtonStyle::Primary, egui::vec2(72.0, 30.0), true).clicked()
                     {
                         confirmed = true;
                     }
                     ui.add_space(4.0);
-                    if secondary_button(ui, self.strings.no, egui::vec2(72.0, 30.0), true).clicked()
+                    if styled_button(ui, self.strings.no, ButtonStyle::Secondary, egui::vec2(72.0, 30.0), true).clicked()
                     {
                         cancelled = true;
                     }
@@ -1444,17 +1387,18 @@ mod tests {
         let mut full = ctx.run_ui(raw, |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
                 let short =
-                    secondary_button(ui, "检查更新", egui::vec2(96.0, 32.0), true).rect.width();
-                let long = primary_button(
+                    styled_button(ui, "检查更新", ButtonStyle::Secondary, egui::vec2(96.0, 32.0), true).rect.width();
+                let long = styled_button(
                     ui,
                     "Download & Extract New Version",
+                    ButtonStyle::Primary,
                     egui::vec2(150.0, 32.0),
                     true,
                 )
                 .rect
                 .width();
                 let short_en =
-                    secondary_button(ui, "Check Update", egui::vec2(96.0, 32.0), true).rect.width();
+                    styled_button(ui, "Check Update", ButtonStyle::Secondary, egui::vec2(96.0, 32.0), true).rect.width();
                 out = Some((short, long, short_en));
             });
         });
