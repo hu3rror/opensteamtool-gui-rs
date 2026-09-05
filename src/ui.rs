@@ -364,6 +364,8 @@ struct CompatUiState {
     precache_error: Option<String>,
     /// 预热成功提示（重体检后保留至下次预热/路径变更）。
     precache_done: bool,
+    /// 本次预热是否为自动触发（自动失败静默，不显示错误提示）。
+    precaching_auto: bool,
 }
 
 impl CompatUiState {
@@ -375,6 +377,7 @@ impl CompatUiState {
             precaching: false,
             precache_error: None,
             precache_done: false,
+            precaching_auto: false,
         }
     }
 
@@ -386,6 +389,7 @@ impl CompatUiState {
             precaching: false,
             precache_error: None,
             precache_done: false,
+            precaching_auto: false,
         }
     }
 }
@@ -468,6 +472,12 @@ fn compat_needs_network_refresh(report: &compat::OverallHealthReport) -> bool {
                 | compat::ProbeStatus::RemoteAvailable { cached: false }
         )
     })
+}
+
+/// 是否应自动预热：体检落定为 Online（上游已适配未缓存）且当前无预热进行中。
+/// 离线/未适配/缺文件/网络错误等场景不触发（规格：只有 Online 态才自动下载）。
+fn should_auto_precache(report: &compat::OverallHealthReport, precaching: bool) -> bool {
+    !precaching && compat_summary(false, Some(report)) == CompatSummary::Online
 }
 pub struct App {
     lang: Lang,
@@ -748,6 +758,12 @@ impl App {
                             Msg::CompatRefreshed(compat::probe_all_refresh(Path::new(&path)))
                         });
                     }
+                    // 自动预热：体检落定为 Online（上游已适配未缓存）且无手动预热进行中 →
+                    // 后台自动下载新签名，用户零操作（失败静默，手动入口保留）。
+                    if should_auto_precache(&report, self.compat.precaching) {
+                        let ctx = self.ctx.clone();
+                        self.start_precache_all(&ctx, true);
+                    }
                 }
                 Msg::CompatRefreshed(report) => {
                     // 网络刷新结果覆盖短路态；不再次触发刷新（防止 quick→refresh 循环）。
@@ -757,6 +773,8 @@ impl App {
                 }
                 Msg::CompatPrecached(res) => {
                     self.compat.precaching = false;
+                    let was_auto = self.compat.precaching_auto;
+                    self.compat.precaching_auto = false;
                     match res {
                         Ok(()) => {
                             self.compat.precache_done = true;
@@ -770,7 +788,13 @@ impl App {
                                 Msg::Compat(compat::probe_all(Path::new(&path)))
                             });
                         }
-                        Err(e) => self.compat.precache_error = Some(e),
+                        Err(e) => {
+                            // 自动预热失败静默（离线等场景不弹错误），状态保持 Online、手动入口保留；
+                            // 手动预热失败照常显示错误提示。
+                            if !was_auto {
+                                self.compat.precache_error = Some(e);
+                            }
+                        }
                     }
                 }
             }
@@ -1227,8 +1251,9 @@ impl App {
         self.spawn(ctx, move || Msg::Compat(compat::probe_all(Path::new(&path))));
     }
 
-    /// 一键预热：后台线程逐个下载未缓存签名，完成后触发体检刷新（SPEC.md §7.7）。
-    fn start_precache_all(&mut self, ctx: &egui::Context) {
+    /// 预热：后台线程逐个下载未缓存签名，完成后触发体检刷新（SPEC.md §7.7）。
+    /// `auto=true`（自动预热）时失败静默——离线等场景不弹错误，徽章保持 Online、手动入口保留。
+    fn start_precache_all(&mut self, ctx: &egui::Context, auto: bool) {
         let Some(report) = &self.compat.report else {
             return;
         };
@@ -1239,6 +1264,7 @@ impl App {
         let steam_path = self.steam_path.trim().to_string();
         let ctx = ctx.clone();
         self.compat.precaching = true;
+        self.compat.precaching_auto = auto;
         self.compat.precache_error = None;
         self.compat.precache_done = false;
         self.spawn(&ctx, move || {
@@ -1292,7 +1318,7 @@ impl App {
                     .clicked()
                     {
                         let ctx = self.ctx.clone();
-                        self.start_precache_all(&ctx);
+                        self.start_precache_all(&ctx, false);
                     }
                 }
             });
@@ -1409,7 +1435,7 @@ impl App {
             )
             .clicked()
             {
-                self.start_precache_all(&ctx);
+                self.start_precache_all(&ctx, false);
             }
         }
     }
@@ -2110,5 +2136,58 @@ mod tests {
             false,
         );
         assert!(!compat_needs_network_refresh(&mixed));
+    }
+
+    /// 自动预热判定：仅 Online 态（上游已适配未缓存）且无预热进行中才触发；
+    /// Ready/Pending/Missing/Network 与进行中均不触发。
+    #[test]
+    fn should_auto_precache_only_fires_on_online() {
+        let online = report_with(
+            [
+                S::RemoteAvailable { cached: false },
+                S::RemoteAvailable { cached: false },
+                S::RemoteAvailable { cached: false },
+            ],
+            true,
+        );
+        assert!(should_auto_precache(&online, false));
+        // 预热进行中不再触发（防重复，手动按钮 disabled 已覆盖）。
+        assert!(!should_auto_precache(&online, true));
+        let ready = report_with(
+            [
+                S::RemoteAvailable { cached: true },
+                S::RemoteAvailable { cached: true },
+                S::RemoteAvailable { cached: true },
+            ],
+            false,
+        );
+        assert!(!should_auto_precache(&ready, false));
+        let pending = report_with(
+            [
+                S::IncompatiblePending,
+                S::RemoteAvailable { cached: false },
+                S::RemoteAvailable { cached: false },
+            ],
+            true,
+        );
+        assert!(!should_auto_precache(&pending, false));
+        let missing = report_with(
+            [
+                S::FileNotFound,
+                S::FileNotFound,
+                S::FileNotFound,
+            ],
+            false,
+        );
+        assert!(!should_auto_precache(&missing, false));
+        let network_err = report_with(
+            [
+                S::NetworkError("x".into()),
+                S::NetworkError("x".into()),
+                S::NetworkError("x".into()),
+            ],
+            false,
+        );
+        assert!(!should_auto_precache(&network_err, false));
     }
 }
