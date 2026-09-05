@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
 
 use eframe::egui;
 use egui::Frame;
@@ -12,6 +13,7 @@ use crate::dll::{self, DeployStatus};
 use crate::i18n::{Lang, Strings};
 use crate::process::{self, SteamEvent, SteamMonitor};
 use crate::steam;
+use crate::steam_state::SteamState;
 use crate::tray::{Tray, TrayAction};
 use crate::updater::{self, OnlineInfo, UpdateError};
 use crate::workflow::{self, Action, BusyKind};
@@ -368,6 +370,8 @@ pub struct App {
     status: DeployStatus,
     steam_running: bool,
     steam_monitor: SteamMonitor,
+    /// 共享 Steam 运行状态（进程表 + alive/group_running/kill 三查询）。
+    steam_state: Arc<SteamState>,
     local_version: Option<String>,
     update_state: UpdateState,
     busy: bool,
@@ -406,9 +410,6 @@ pub struct App {
     config_saved: bool,
 
     /// OnlineFix 预设区：可用账号（userdata 扫描，对话框打开时刷新）。
-    /// 打开对话框时采样的进程组运行态（写入门闩的「彻底」口径；
-    /// 与 `steam_running`（仅 steam.exe、2s 缓存）并用，取或）。
-    of_steam_group_running: bool,
     of_accounts: Vec<PathBuf>,
     of_account_idx: usize,
     /// 手动输入/候选取用的 AppID。
@@ -490,9 +491,9 @@ impl App {
         let steam_dir = Path::new(&steam_path);
         let status = dll::check_status(steam_dir);
         let local_version = dll::read_local_version(&dll::dll_dir());
-        let steam_monitor = SteamMonitor::new();
+        let steam_state = Arc::new(SteamState::new());
+        let steam_monitor = SteamMonitor::new(&steam_state);
         let steam_running = steam_monitor.is_running();
-
         let tray = Tray::new(
             crate::tray::load_icon(),
             strings.app_title,
@@ -508,6 +509,7 @@ impl App {
             status,
             steam_running,
             steam_monitor,
+            steam_state,
             local_version,
             update_state: UpdateState::Idle,
             busy: false,
@@ -528,7 +530,6 @@ impl App {
             config_loaded: false,
             config_err: None,
             config_saved: false,
-            of_steam_group_running: false,
             of_accounts: Vec::new(),
             of_account_idx: 0,
             of_appid: String::new(),
@@ -666,10 +667,11 @@ impl App {
 
         let ctx2 = ctx.clone();
         let tx = self.tx.clone();
+        let steam = self.steam_state.clone();
         self.spawn(ctx, move || {
             let res = workflow::execute(
                 &ops,
-                &workflow::WorkflowCtx { dll_dir, steam_dir },
+                &workflow::WorkflowCtx { dll_dir, steam_dir, steam },
                 |phase| {
                     let _ = tx.send(Msg::Phase(phase));
                     ctx2.request_repaint();
@@ -717,13 +719,11 @@ impl App {
         self.config_loaded = false;
         self.config_err = None;
         self.config_saved = false;
-        // OnlineFix 区：按当前 Steam 路径刷新账号、AppID 候选与进程组运行态。
+        // OnlineFix 区：按当前 Steam 路径刷新账号与 AppID 候选（进程组运行态写入门闩每次写前实时判定）。
         let steam_dir = Path::new(self.steam_path.trim());
         self.of_accounts = onlinefix::account_vdf_paths(steam_dir);
         self.of_account_idx = self.of_account_idx.min(self.of_accounts.len().saturating_sub(1));
         self.of_candidates = onlinefix::scan_lua_appids(steam_dir);
-        // 写入门闩采样：进程组判定（含残留 webhelper），每次打开对话框刷新。
-        self.of_steam_group_running = process::steam_group_running(steam_dir);
         self.of_status = None;
         self.of_status_key = None;
     }
@@ -829,15 +829,15 @@ impl App {
     /// 写入前门闩：对话框打开期间 Steam 可能已启动，逐次复查进程组。
     /// 返回 false 时已在界面内给出「请先关闭 Steam」提示。
     fn of_write_allowed(&mut self) -> bool {
-        if self.steam_running || self.of_steam_group_running {
+        // 快速判定（仅看 steam.exe，2s 缓存）：Steam 在跑时直接拦截。
+        if self.steam_running {
             self.of_status = Some(OnlineFixStatus::Error(self.strings.of_steam_running.to_string()));
             self.of_status_key = None;
             return false;
         }
-        // 实时复查（打开对话框时的采样可能已过期）。
+        // 实时复查（进程组口径，覆盖 steam.exe 退出后残留的 webhelper 孤儿）。
         let steam_dir = Path::new(self.steam_path.trim());
-        if process::steam_group_running(steam_dir) {
-            self.of_steam_group_running = true;
+        if self.steam_state.group_running(steam_dir) {
             self.of_status = Some(OnlineFixStatus::Error(self.strings.of_steam_running.to_string()));
             self.of_status_key = None;
             return false;
@@ -968,8 +968,8 @@ impl App {
             ui.label(egui::RichText::new(self.strings.of_title).strong().color(TEXT_INK));
             ui.add_space(6.0);
 
-            // 写入门闩：进程组判定（覆盖 steam.exe 退出后残留的 webhelper 孤儿）或快速判定的 steam.exe。
-            let write_blocked = self.steam_running || self.of_steam_group_running;
+            // 写入门闩：快速判定（仅看 steam.exe，2s 缓存）；残留 webhelper 等孤儿由写时实时复查兜底。
+            let write_blocked = self.steam_running;
             if write_blocked {
                 status_line(ui, self.strings.of_steam_running, TEXT_WEAK);
             } else if self.of_accounts.is_empty() {

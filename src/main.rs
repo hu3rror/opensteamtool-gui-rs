@@ -9,6 +9,7 @@ mod i18n;
 mod onlinefix;
 mod process;
 mod steam;
+mod steam_state;
 mod tray;
 mod ui;
 mod updater;

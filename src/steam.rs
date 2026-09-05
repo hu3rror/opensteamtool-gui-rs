@@ -4,8 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use crate::process;
-
+use crate::steam_state::SteamState;
 use winreg::enums::*;
 use winreg::{HKEY, RegKey};
 
@@ -42,7 +41,7 @@ const LAUNCH_RETRY_DELAY: Duration = Duration::from_secs(1);
 const LAUNCH_RETRIES: u32 = 1;
 /// 校验 `Steam 目录\steam.exe` 存在，以 Steam 目录为 cwd 启动，并验证进程存活。
 /// spawn 成功不算成功：等待窗口后确认 steam.exe 仍在运行，失败重试 `LAUNCH_RETRIES` 次。
-pub fn launch_steam(steam_dir: &Path) -> Result<(), String> {
+pub fn launch_steam(steam: &SteamState, steam_dir: &Path) -> Result<(), String> {
     let exe = steam_dir.join("steam.exe");
     if !exe.is_file() {
         return Err("steam.exe not found".into());
@@ -54,7 +53,7 @@ pub fn launch_steam(steam_dir: &Path) -> Result<(), String> {
             .map_err(|e| format!("spawn steam.exe: {e}"))?;
         // spawn 成功不算成功：旧实例残留可能让新实例随即退出，等待窗口后验证存活。
         std::thread::sleep(LAUNCH_VERIFY_WINDOW);
-        if process::steam_alive() {
+        if steam.alive() {
             return Ok(());
         }
         if attempt < LAUNCH_RETRIES {
@@ -71,7 +70,7 @@ mod tests {
     #[test]
     fn launch_missing_steam_errors() {
         let dir = std::env::temp_dir().join(format!("ost_launch_{}", std::process::id()));
-        let err = launch_steam(&dir).unwrap_err();
+        let err = launch_steam(&SteamState::new(), &dir).unwrap_err();
         assert!(err.contains("steam.exe"), "err: {err}");
     }
 }

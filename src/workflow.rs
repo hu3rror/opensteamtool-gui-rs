@@ -4,10 +4,11 @@
 //! 分阶段执行、首错即停）。不依赖 i18n 与 UI；文案 helpers 由 ui.rs 提供。
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::dll::{self, TARGET_DLLS};
-use crate::process;
 use crate::steam;
+use crate::steam_state::SteamState;
 
 /// 用户从按钮触发的组合操作（见 CONTEXT.md「操作（Action）」）。
 /// 可混含补丁操作（部署/卸载）与 Steam 启动/退出。
@@ -70,6 +71,7 @@ impl Op {
 pub struct WorkflowCtx {
     pub dll_dir: PathBuf,
     pub steam_dir: PathBuf,
+    pub steam: Arc<SteamState>,
 }
 
 /// 前置校验失败（plan 阶段判定，未进入忙碌状态）。
@@ -143,10 +145,10 @@ where
     for &op in ops {
         on_phase(op.phase());
         let res = match op {
-            Op::CloseSteam => process::kill_steam(&ctx.steam_dir),
+            Op::CloseSteam => ctx.steam.kill(&ctx.steam_dir),
             Op::Deploy => dll::deploy(&ctx.dll_dir, &ctx.steam_dir),
             Op::Uninstall => dll::uninstall(&ctx.steam_dir),
-            Op::Launch => steam::launch_steam(&ctx.steam_dir),
+            Op::Launch => steam::launch_steam(&ctx.steam, &ctx.steam_dir),
         };
         res.map_err(|message| WorkflowError { op, message })?;
     }
@@ -258,6 +260,7 @@ mod tests {
         let ctx = WorkflowCtx {
             dll_dir: dlls.clone(),
             steam_dir: steam.clone(),
+            steam: Arc::new(SteamState::new()),
         };
 
         let mut phases = Vec::new();
@@ -281,6 +284,7 @@ mod tests {
         let ctx = WorkflowCtx {
             dll_dir: dlls.clone(),
             steam_dir: steam.clone(),
+            steam: Arc::new(SteamState::new()),
         };
 
         let mut phases = Vec::new();
@@ -304,6 +308,7 @@ mod tests {
         let ctx = WorkflowCtx {
             dll_dir: dlls.clone(),
             steam_dir: steam.clone(),
+            steam: Arc::new(SteamState::new()),
         };
 
         let mut phases = Vec::new();

@@ -68,6 +68,10 @@ _Avoid_: 自动隐身（那是 Steam 联动）
 判定「Steam 在运行」的进程集合：exe 路径位于 Steam 目录下的进程，排除 `steamservice.exe`；「关闭 Steam」对整组生效。
 _Avoid_: Steam 相关进程（模糊）
 
+**Steam 运行状态（Steam State）**:
+判定「Steam 在运行/不在运行」的共享入口：`SteamState` 模块持有进程表，提供 `alive`（steam.exe 口径）、`group_running(dir)`（进程组口径）与 `kill(dir)` 三查询，每次锁内实时刷新+判定；2s 轮询缓存与边沿事件由「Steam 进程监视器」承担。
+_Avoid_: 进程状态、运行检测
+
 **关闭完成（Close Settled）**:
 「关闭 Steam」的成功态：Steam 进程组内所有进程从进程表消失（轮询预算 5s）；超时视为关闭失败。
 _Avoid_: 关闭成功（易与 spawn 成功混淆）
