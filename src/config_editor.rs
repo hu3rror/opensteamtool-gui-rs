@@ -130,6 +130,22 @@ pub fn target_path(steam_dir: &Path) -> PathBuf {
     steam_dir.join("opensteamtool.toml")
 }
 
+/// 读取 `<Steam>/opensteamtool.toml` 中 `[remote].url_template`。
+///
+/// 语义（SPEC.md §7.4 第 1 优先级）：自定义镜像**替代**内置 GitHub/jsDelivr 源，
+/// 本函数只负责读值；镜像链决策由 compat 探测链路执行。
+/// 文件缺失 / 解析失败 / 键缺失 / 值为空白字符串 → `None`（走官方默认链路）。
+pub fn remote_url_template(steam_dir: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(target_path(steam_dir)).ok()?;
+    let doc = text.parse::<toml_edit::DocumentMut>().ok()?;
+    doc.get("remote")?
+        .get("url_template")?
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+}
+
 /// 校验 TOML 文本；语法错误返回带行列定位的 `ConfigError`。
 pub fn validate(text: &str) -> Result<(), ConfigError> {
     match text.parse::<toml_edit::DocumentMut>() {
@@ -269,5 +285,77 @@ mod tests {
         let p = target_path(Path::new("C:/Steam"));
         assert_eq!(p, PathBuf::from("C:/Steam/opensteamtool.toml"));
         assert_eq!(p.parent(), Some(Path::new("C:/Steam")));
+    }
+
+    /// 临时 Steam 目录，写入 `opensteamtool.toml` 后返回该目录。
+    fn temp_steam_dir(tag: &str, content: Option<&str>) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ost-ce-rt-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        if let Some(text) = content {
+            fs::write(dir.join("opensteamtool.toml"), text).unwrap();
+        }
+        dir
+    }
+
+    /// 配置文件不存在 → None（走官方默认链路）。
+    #[test]
+    fn remote_url_template_missing_file_is_none() {
+        let dir = temp_steam_dir("missing", None);
+        assert_eq!(remote_url_template(&dir), None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 无 `[remote]` 表 → None。
+    #[test]
+    fn remote_url_template_no_remote_table_is_none() {
+        let dir = temp_steam_dir("noremote", Some("[log]\nlevel = \"debug\"\n"));
+        assert_eq!(remote_url_template(&dir), None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// `[remote]` 存在但键缺失（模板默认注释状态）→ None。
+    #[test]
+    fn remote_url_template_missing_key_is_none() {
+        let dir = temp_steam_dir("nokey", Some("[remote]\n# url_template = \"https://x/{channel}/{component}/{sha256}.toml\"\n"));
+        assert_eq!(remote_url_template(&dir), None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 键值为空字符串 → None。
+    #[test]
+    fn remote_url_template_empty_value_is_none() {
+        let dir = temp_steam_dir("empty", Some("[remote]\nurl_template = \"\"\n"));
+        assert_eq!(remote_url_template(&dir), None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 键值为纯空白 → None（trim 后判空）。
+    #[test]
+    fn remote_url_template_whitespace_value_is_none() {
+        let dir = temp_steam_dir("blank", Some("[remote]\nurl_template = \"   \"\n"));
+        assert_eq!(remote_url_template(&dir), None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 语法错误文件 → None（容忍用户配置损坏，不报错）。
+    #[test]
+    fn remote_url_template_syntax_error_is_none() {
+        let dir = temp_steam_dir("bad", Some("[remote\nurl_template = \"x\"\n"));
+        assert_eq!(remote_url_template(&dir), None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 有效值 → Some（原样返回，含占位符）。
+    #[test]
+    fn remote_url_template_valid_value_returns_template() {
+        let dir = temp_steam_dir("valid", Some(
+            "[remote]\nurl_template = \"https://my.mirror/{channel}/{component}/{sha256}.toml\"\n",
+        ));
+        assert_eq!(
+            remote_url_template(&dir).as_deref(),
+            Some("https://my.mirror/{channel}/{component}/{sha256}.toml")
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 }
