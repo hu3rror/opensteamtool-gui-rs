@@ -108,6 +108,34 @@ _Avoid_: 启动参数、命令行参数（「参数」指 `-onlinefix` 本身）
 修改 `localconfig.vdf` 前生成的时间戳副本（`localconfig.vdf.bak-<unix秒>`），用于异常回滚。
 _Avoid_: 备份文件
 
+**兼容性体检（Compatibility Probe）**:
+对 Steam 目录下核心 DLL（`steamclient64.dll` / `steamui.dll`）计算 SHA-256，并按「通道」向 `OpenSteam001/steam-monitor` 探查上游签名/IPC 规约是否适配的后台过程；产出「健康度」六态结论。
+_Avoid_: 兼容检查、版本检测
+
+**通道（Channel）**:
+上游 `steam-monitor` 仓库的分支名，决定拉取何种签名：`pattern`（特征码）/ `ipc`（IPC 规约）。
+_Avoid_: 分支、类型
+
+**组件（Component）**:
+上游仓库内的一级目录名，指代被探针的核心 DLL：`steamclient`（steamclient64.dll）/ `steamui`（steamui.dll）。
+_Avoid_: 模块、目标
+
+**离线缓存（Offline Cache）**:
+按 `<Steam>/opensteamtool/{通道}/{组件}/<sha256>.toml` 落盘的本地签名文件；体检命中即「离线可用」。
+_Avoid_: 本地缓存、签名缓存
+
+**预热（Precache）**:
+把上游已适配但本地缺失的签名文件下载并原子写入「离线缓存」的动作；是兼容性体检流程中唯一落盘动作。
+_Avoid_: 预下载、缓存更新
+
+**健康度（Health Summary）**:
+兼容性体检的六态结论：检查中 / 完美兼容（已缓存）/ 上游已适配（未缓存）/ 上游尚未适配 / 未找到核心 DLL / 网络不可用。
+_Avoid_: 状态、兼容性状态
+
+**兼容性徽章（Compatibility Badge）**:
+Card 1 兼容性小节内的 pill 徽章（浅色底 + 圆角 + 状态图标/文字），以「健康度」六态概括体检结论；辅助说明行弱化于其下。
+_Avoid_: 状态标签、状态点
+
 ## Rules
 
 - 术语 `部署/卸载` 只用于补丁 DLL 相对 Steam 目录的操作，不与「启动/退出 Steam」混用。

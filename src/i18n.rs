@@ -151,6 +151,9 @@ pub struct Strings {
     pub compat_precache_failed: &'static str,
     pub compat_tip_pending: &'static str,
     pub compat_tip_ready: &'static str,
+    pub compat_tip_online: &'static str,
+    pub compat_tip_missing: &'static str,
+    pub compat_tip_network: &'static str,
     pub compat_row_dll: &'static str,
 }
 
@@ -333,6 +336,9 @@ impl Strings {
             compat_precache_failed: "缓存预热失败：{err}",
             compat_tip_pending: "Steam 版本已更新，上游尚未发布适配签名，请等待更新。",
             compat_tip_ready: "核心特征码与 IPC 规约已全部就绪并离线缓存。",
+            compat_tip_online: "上游已适配，可一键预热离线缓存。",
+            compat_tip_missing: "未找到核心 DLL（steamclient64.dll / steamui.dll）。",
+            compat_tip_network: "网络不可用，体检结果未知；已缓存项仍可离线使用。",
             compat_row_dll: "{dll}（{kind}）",
         }
     }
@@ -438,6 +444,9 @@ impl Strings {
             compat_precache_failed: "Pre-cache failed: {err}",
             compat_tip_pending: "Steam has been updated. Please wait for upstream signatures.",
             compat_tip_ready: "Core signatures & IPC specs ready and cached offline.",
+            compat_tip_online: "Supported upstream — pre-cache now for offline use.",
+            compat_tip_missing: "Core DLLs not found (steamclient64.dll / steamui.dll).",
+            compat_tip_network: "Network unavailable — results unknown; cached items remain usable offline.",
             compat_row_dll: "{dll} ({kind})",
         }
     }

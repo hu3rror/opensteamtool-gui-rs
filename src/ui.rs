@@ -1219,8 +1219,7 @@ impl App {
     /// Card 1 底部「Steam 核心兼容性」小节：第一行标题+状态徽章+操作靠右，第二行辅助说明弱化。
     fn compat_section(&mut self, ui: &mut egui::Ui) {
         ui.add_space(10.0);
-        ui.separator();
-        ui.add_space(8.0);
+        // 无分隔线：竖条标题 + 徽章自成边界，直接衔接上方路径输入区。
 
         let summary = compat_summary(self.compat.checking, self.compat.report.as_ref());
 
@@ -1265,24 +1264,21 @@ impl App {
             });
         });
 
-        // 第二行：辅助说明（小字号、低对比灰）。
-        ui.add_space(4.0);
-        match summary {
-            CompatSummary::Ready => {
-                ui.label(
-                    egui::RichText::new(self.strings.compat_tip_ready)
-                        .size(12.0)
-                        .color(TEXT_WEAK),
-                );
-            }
-            CompatSummary::Pending => {
-                ui.label(
-                    egui::RichText::new(self.strings.compat_tip_pending)
-                        .size(12.0)
-                        .color(TEXT_WEAK),
-                );
-            }
-            _ => {}
+        // 辅助说明：五态一句话（Checking 为瞬时态不显示），小字号弱灰 + 缩进对齐标题竖条。
+        if summary != CompatSummary::Checking {
+            let tip = match summary {
+                CompatSummary::Ready => self.strings.compat_tip_ready,
+                CompatSummary::Online => self.strings.compat_tip_online,
+                CompatSummary::Pending => self.strings.compat_tip_pending,
+                CompatSummary::Missing => self.strings.compat_tip_missing,
+                CompatSummary::Network => self.strings.compat_tip_network,
+                CompatSummary::Checking => "",
+            };
+            ui.horizontal(|ui| {
+                // 缩进对齐标题竖条（竖条 3px + 8px gap = 11px）。
+                ui.add_space(11.0);
+                ui.label(egui::RichText::new(tip).size(11.5).color(TEXT_WEAK));
+            });
         }
         if let Some(err) = &self.compat.precache_error {
             ui.label(
