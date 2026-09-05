@@ -45,6 +45,11 @@ const BTN_UNINSTALL_B_HOVER: egui::Color32 = egui::Color32::from_rgb(0x03, 0x69,
 const DOT_RUNNING: egui::Color32 = STATUS_INSTALLED; // 成功/进行中圆点
 const ERR_RED: egui::Color32 = egui::Color32::from_rgb(0xDC, 0x26, 0x26); // 错误红
 const STATUS_WARN: egui::Color32 = egui::Color32::from_rgb(0xB4, 0x53, 0x09); // 琥珀（上游已适配未缓存）
+// 状态徽章浅底（pill badge 背景，深色文字配浅色底，效仿 #E6F7ED 一类）。
+const BADGE_GREEN: egui::Color32 = egui::Color32::from_rgb(0xE6, 0xF7, 0xED);
+const BADGE_AMBER: egui::Color32 = egui::Color32::from_rgb(0xFE, 0xF3, 0xC7);
+const BADGE_RED: egui::Color32 = egui::Color32::from_rgb(0xFE, 0xE2, 0xE2);
+const BADGE_GRAY: egui::Color32 = egui::Color32::from_rgb(0xF1, 0xF5, 0xF9);
 
 /// 设置对话框非滚动行的固定高度占用（标题+页签行+顶部固定行+底部固定行+页脚+窗口边距）。
 /// 数值保守偏大：低估会让页脚越界（Modal 是 Area 不约束屏幕），过估只浪费一点滚动区。
@@ -420,7 +425,12 @@ fn compat_summary(checking: bool, report: Option<&compat::OverallHealthReport>) 
     if r.has_missing_cache {
         return CompatSummary::Online;
     }
-    CompatSummary::Ready
+    // Ready 需 is_all_compatible 确认（全项 RemoteAvailable{cached:true} 或 CompatibleOffline）。
+    if r.is_all_compatible {
+        CompatSummary::Ready
+    } else {
+        CompatSummary::Online
+    }
 }
 
 /// 待预热目标（RemoteAvailable{cached:false} 且已有哈希），供「一键缓存签名」。
@@ -1206,66 +1216,73 @@ impl App {
         });
     }
 
-    /// Card 1 底部「Steam 核心兼容性」小节：汇总徽标 + 明细/预热按钮。
+    /// Card 1 底部「Steam 核心兼容性」小节：第一行标题+状态徽章+操作靠右，第二行辅助说明弱化。
     fn compat_section(&mut self, ui: &mut egui::Ui) {
         ui.add_space(10.0);
         ui.separator();
         ui.add_space(8.0);
-        ui.label(egui::RichText::new(self.strings.compat_title).strong());
-        ui.add_space(6.0);
 
         let summary = compat_summary(self.compat.checking, self.compat.report.as_ref());
-        let (text, color) = self.compat_summary_text(summary);
+
+        // 第一行：左侧（竖条标题 + 状态徽章）| 右侧操作（预热 + 详细信息，贴右边缘）。
         ui.horizontal(|ui| {
-            status_line(ui, text, color);
-            if summary == CompatSummary::Online && !self.compat.checking {
-                let label = if self.compat.precaching {
-                    self.strings.compat_precaching
-                } else {
-                    self.strings.compat_btn_precache
-                };
-                if styled_button(
-                    ui,
-                    label,
-                    ButtonStyle::Secondary,
-                    egui::vec2(132.0, 28.0),
-                    !self.compat.precaching,
-                )
-                .clicked()
-                {
-                    let ctx = self.ctx.clone();
-                    self.start_precache_all(&ctx);
+            // 标题：与其他卡片一致的蓝色竖条指示器。
+            ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(3.0, 13.0), egui::Sense::hover());
+                ui.painter().rect_filled(rect, 0.0, ACCENT);
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new(self.strings.compat_title).size(13.5).strong());
+            });
+            ui.add_space(8.0);
+            self.compat_badge(ui, summary);
+
+            // 右侧操作区：right_to_left 首项（详细信息）贴最右，预热按钮在其左侧。
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if !self.compat.checking {
+                    if ui.button(self.strings.compat_btn_details).clicked() {
+                        self.compat.details_open = !self.compat.details_open;
+                    }
                 }
-            }
-            if !self.compat.checking {
-                if ui.button(self.strings.compat_btn_details).clicked() {
-                    self.compat.details_open = !self.compat.details_open;
+                if summary == CompatSummary::Online && !self.compat.checking {
+                    let label = if self.compat.precaching {
+                        self.strings.compat_precaching
+                    } else {
+                        self.strings.compat_btn_precache
+                    };
+                    if styled_button(
+                        ui,
+                        label,
+                        ButtonStyle::Secondary,
+                        egui::vec2(132.0, 26.0),
+                        !self.compat.precaching,
+                    )
+                    .clicked()
+                    {
+                        let ctx = self.ctx.clone();
+                        self.start_precache_all(&ctx);
+                    }
                 }
-            }
+            });
         });
+
+        // 第二行：辅助说明（小字号、低对比灰）。
+        ui.add_space(4.0);
         match summary {
             CompatSummary::Ready => {
                 ui.label(
                     egui::RichText::new(self.strings.compat_tip_ready)
                         .size(12.0)
-                        .color(TEXT_SUB),
-                )
-                .on_hover_text(self.strings.compat_tip_ready);
+                        .color(TEXT_WEAK),
+                );
             }
             CompatSummary::Pending => {
                 ui.label(
                     egui::RichText::new(self.strings.compat_tip_pending)
                         .size(12.0)
-                        .color(TEXT_SUB),
-                )
-                .on_hover_text(self.strings.compat_tip_pending);
+                        .color(TEXT_WEAK),
+                );
             }
             _ => {}
-        }
-        if self.compat.details_open {
-            if let Some(report) = self.compat.report.clone() {
-                self.compat_details(ui, &report);
-            }
         }
         if let Some(err) = &self.compat.precache_error {
             ui.label(
@@ -1283,18 +1300,32 @@ impl App {
                     .color(STATUS_INSTALLED),
             );
         }
+
+        // 详情明细（展开时）。
+        if self.compat.details_open {
+            if let Some(report) = self.compat.report.clone() {
+                self.compat_details(ui, &report);
+            }
+        }
     }
 
-    /// 汇总徽标文案与颜色（SPEC.md §7.7 状态视觉）。
-    fn compat_summary_text(&self, summary: CompatSummary) -> (&'static str, egui::Color32) {
-        match summary {
-            CompatSummary::Checking => (self.strings.compat_checking, TEXT_WEAK),
-            CompatSummary::Ready => (self.strings.compat_status_ready, STATUS_INSTALLED),
-            CompatSummary::Online => (self.strings.compat_status_online, STATUS_WARN),
-            CompatSummary::Pending => (self.strings.compat_status_pending, ERR_RED),
-            CompatSummary::Missing => (self.strings.compat_status_missing, TEXT_WEAK),
-            CompatSummary::Network => (self.strings.compat_status_network, TEXT_WEAK),
-        }
+    /// 状态徽章（pill badge）：浅色底 + 深色文字 + 状态图标，视觉低于标题、高于辅助行。
+    fn compat_badge(&self, ui: &mut egui::Ui, summary: CompatSummary) {
+        let (icon, text, fg, bg) = match summary {
+            CompatSummary::Checking => ("○", self.strings.compat_checking, TEXT_WEAK, BADGE_GRAY),
+            CompatSummary::Ready => ("✔", self.strings.compat_status_ready, STATUS_INSTALLED, BADGE_GREEN),
+            CompatSummary::Online => ("●", self.strings.compat_status_online, STATUS_WARN, BADGE_AMBER),
+            CompatSummary::Pending => ("▲", self.strings.compat_status_pending, ERR_RED, BADGE_RED),
+            CompatSummary::Missing => ("?", self.strings.compat_status_missing, TEXT_WEAK, BADGE_GRAY),
+            CompatSummary::Network => ("?", self.strings.compat_status_network, TEXT_WEAK, BADGE_GRAY),
+        };
+        egui::Frame::new()
+            .fill(bg)
+            .corner_radius(egui::CornerRadius::same(12))
+            .inner_margin(egui::Margin::symmetric(10, 3))
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new(format!("{icon} {text}")).size(12.5).color(fg));
+            });
     }
 
     /// 单项探针状态文案与颜色（详情明细行）。
