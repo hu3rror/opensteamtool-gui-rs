@@ -323,6 +323,14 @@ enum Notice {
     Precheck(workflow::Precheck),
 }
 
+/// 设置对话框页签（纯 UI 选择，状态层 cfg/of 本就独立，切换零耦合）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SettingsTab {
+    /// 配置编辑器（默认）。
+    Config,
+    /// OnlineFix 启动预设。
+    OnlineFix,
+}
 pub struct App {
     lang: Lang,
     strings: Strings,
@@ -364,6 +372,8 @@ pub struct App {
     cfg: ConfigEditorState,
     /// OnlineFix 启动预设状态（账号/AppID/展示状态/写入门闩，见 settings.rs）。
     of: OnlineFixState,
+    /// 设置对话框当前页签（会话内记忆，默认「配置编辑器」）。
+    settings_tab: SettingsTab,
 }
 
 /// 读取系统中文字体数据（微软雅黑/黑体/宋体，首个可读的生效），无则 None。
@@ -472,6 +482,7 @@ impl App {
             settings_open: false,
             cfg: ConfigEditorState::new(),
             of: OnlineFixState::new(),
+            settings_tab: SettingsTab::Config,
         }
     }
 
@@ -649,10 +660,10 @@ impl App {
 
     // ---------- 设置对话框（PR-1：TOML 配置编辑器） ----------
 
-    /// 打开设置：置位并标记缓冲待加载（下次渲染时从磁盘读入）。
+    /// 打开设置：置位并标记缓冲待加载（首次进入「配置编辑器」页签时读盘）。
     fn open_settings(&mut self) {
         self.settings_open = true;
-        // 配置编辑器：标记待载入（首帧渲染时读盘）。
+        // 配置编辑器：标记待载入（切到该页签首帧读盘）。
         self.cfg.mark_unloaded();
         // OnlineFix 区：按当前 Steam 路径刷新账号与 AppID 候选（进程组运行态写入门闩每次写前实时判定）。
         let steam_dir = Path::new(self.steam_path.trim());
@@ -668,9 +679,6 @@ impl App {
         let steam_dir = Path::new(self.steam_path.trim());
         let steam_ok = dll::check_status(steam_dir) != DeployStatus::InvalidPath;
         let target = config_editor::target_path(steam_dir);
-        if steam_ok {
-            self.cfg.ensure_loaded(&target);
-        }
         let file_exists = steam_ok && target.exists();
 
         let mut save_clicked = false;
@@ -679,159 +687,199 @@ impl App {
         let mut enable_clicked = false;
         let mut disable_clicked = false;
         let mut copy_clicked = false;
+        let mut tab_clicked = None;
 
         egui::Modal::new(egui::Id::new("settings_dialog")).show(ctx, |ui| {
-            // 内容变长后允许纵向滚动，避免超出窗口高度。
-            egui::ScrollArea::vertical().max_height(460.0).show(ui, |ui| {
             ui.set_width(560.0);
             ui.heading(self.strings.settings_title);
-            ui.add_space(8.0);
+            ui.add_space(6.0);
+
+            // 页签行：配置编辑器 / OnlineFix 预设（egui 0.36 无内置 TabView，selectable_label 手写）。
+            ui.horizontal(|ui| {
+                let selected = self.settings_tab == SettingsTab::Config;
+                if ui
+                    .selectable_label(selected, egui::RichText::new(self.strings.settings_tab_config).strong())
+                    .clicked()
+                {
+                    tab_clicked = Some(SettingsTab::Config);
+                }
+                let selected = self.settings_tab == SettingsTab::OnlineFix;
+                if ui
+                    .selectable_label(selected, egui::RichText::new(self.strings.of_title).strong())
+                    .clicked()
+                {
+                    tab_clicked = Some(SettingsTab::OnlineFix);
+                }
+            });
+            ui.add_space(6.0);
+            ui.separator();
+            ui.add_space(6.0);
 
             if !steam_ok {
                 ui.label(egui::RichText::new(self.strings.settings_no_steam_dir).color(TEXT_SUB));
                 ui.add_space(14.0);
-                if styled_button(ui, self.strings.btn_close, ButtonStyle::Primary, egui::vec2(80.0, 30.0), true).clicked() {
-                    close_clicked = true;
-                }
+                ui.separator();
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if styled_button(ui, self.strings.btn_close, ButtonStyle::Primary, egui::vec2(80.0, 30.0), true).clicked() {
+                            close_clicked = true;
+                        }
+                    });
+                });
                 return;
             }
 
-            status_line(
-                ui,
-                &format!("{}{}", self.strings.settings_target, target.display()),
-                TEXT_WEAK,
-            );
-            ui.add_space(8.0);
+            // 页签内容：防御性纵向滚动（页脚固定在滚动区外，始终可见）。
+            egui::ScrollArea::vertical().max_height(460.0).show(ui, |ui| {
+                match self.settings_tab {
+                    SettingsTab::Config => {
+                        // 懒加载：首次进入该页签才读盘。
+                        self.cfg.ensure_loaded(&target);
+                        status_line(
+                            ui,
+                            &format!("{}{}", self.strings.settings_target, target.display()),
+                            TEXT_WEAK,
+                        );
+                        ui.add_space(8.0);
 
-            // 编辑器：等宽字体，滚动区，高度固定。
-            let editor = egui::ScrollArea::vertical()
-                .max_height(320.0)
-                .show(ui, |ui| {
-                    ui.add_sized(
-                        egui::vec2(ui.available_width(), 300.0),
-                        egui::TextEdit::multiline(&mut self.cfg.text)
-                            .code_editor()
-                            .desired_width(f32::INFINITY),
-                    )
-                });
-            if editor.inner.changed() {
-                self.cfg.mark_edited(); // 编辑清除「已保存」提示。
-            }
-            ui.add_space(6.0);
+                        // 编辑器：等宽字体，滚动区，高度固定。
+                        let editor = egui::ScrollArea::vertical()
+                            .max_height(400.0)
+                            .show(ui, |ui| {
+                                ui.add_sized(
+                                    egui::vec2(ui.available_width(), 380.0),
+                                    egui::TextEdit::multiline(&mut self.cfg.text)
+                                        .code_editor()
+                                        .desired_width(f32::INFINITY),
+                                )
+                            });
+                        if editor.inner.changed() {
+                            self.cfg.mark_edited(); // 编辑清除「已保存」提示。
+                        }
+                        ui.add_space(6.0);
 
-            // 状态行：错误（红）/ 已保存（绿）/ 文件缺失引导（弱灰）。
-            if let Some(err) = &self.cfg.err {
-                status_line(ui, &config_err_text(&self.strings, self.lang, err), ERR_RED);
-            } else if self.cfg.saved {
-                status_line(ui, self.strings.ok_config_saved, STATUS_INSTALLED);
-            } else if !file_exists {
-                status_line(ui, self.strings.settings_file_missing, TEXT_WEAK);
-            }
-            ui.add_space(10.0);
+                        // 状态行：错误（红）/ 已保存（绿）/ 文件缺失引导（弱灰）。
+                        if let Some(err) = &self.cfg.err {
+                            status_line(ui, &config_err_text(&self.strings, self.lang, err), ERR_RED);
+                        } else if self.cfg.saved {
+                            status_line(ui, self.strings.ok_config_saved, STATUS_INSTALLED);
+                        } else if !file_exists {
+                            status_line(ui, self.strings.settings_file_missing, TEXT_WEAK);
+                        }
+                        ui.add_space(10.0);
 
-            ui.horizontal(|ui| {
-                if styled_button(ui, self.strings.btn_load_template, ButtonStyle::Secondary, egui::vec2(150.0, 30.0), true).clicked()
-                {
-                    template_clicked = true;
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if styled_button(ui, self.strings.btn_save, ButtonStyle::Primary, egui::vec2(80.0, 30.0), true).clicked() {
-                        save_clicked = true;
+                        ui.horizontal(|ui| {
+                            if styled_button(ui, self.strings.btn_load_template, ButtonStyle::Secondary, egui::vec2(150.0, 30.0), true).clicked()
+                            {
+                                template_clicked = true;
+                            }
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if styled_button(ui, self.strings.btn_save, ButtonStyle::Primary, egui::vec2(80.0, 30.0), true).clicked() {
+                                    save_clicked = true;
+                                }
+                            });
+                        });
                     }
-                    ui.add_space(6.0);
+                    SettingsTab::OnlineFix => {
+                        // 写入门闩：快速判定（仅看 steam.exe，2s 缓存）；残留 webhelper 等孤儿由写时实时复查兜底。
+                        let write_blocked = self.steam_running;
+                        if write_blocked {
+                            status_line(ui, self.strings.of_steam_running, TEXT_WEAK);
+                        } else if self.of.accounts.is_empty() {
+                            status_line(ui, self.strings.of_no_account, TEXT_WEAK);
+                        } else {
+                            // 账号选择。
+                            ui.horizontal(|ui| {
+                                ui.label(self.strings.of_account_label);
+                                let label = OnlineFixState::account_name(&self.of.accounts[self.of.account_idx]);
+                                let mut selected_idx = None;
+                                egui::ComboBox::from_id_salt("of_account")
+                                    .selected_text(label)
+                                    .width(150.0)
+                                    .show_ui(ui, |ui| {
+                                        for (i, vdf) in self.of.accounts.iter().enumerate() {
+                                            let selected = self.of.account_idx == i;
+                                            let name = OnlineFixState::account_name(vdf);
+                                            if ui.selectable_label(selected, name).clicked() {
+                                                selected_idx = Some(i);
+                                            }
+                                        }
+                                    });
+                                if let Some(i) = selected_idx {
+                                    self.of.select_account(i);
+                                }
+                            });
+                            // AppID 输入 + Lua 候选。
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(self.strings.of_appid_label);
+                                let resp = ui.add(
+                                    egui::TextEdit::singleline(&mut self.of.appid)
+                                        .desired_width(96.0)
+                                        .hint_text("0"),
+                                );
+                                if resp.changed() {
+                                    self.of.appid_changed();
+                                }
+                                if !self.of.candidates.is_empty() {
+                                    ui.add_space(8.0);
+                                    let mut picked = None;
+                                    for &id in &self.of.candidates {
+                                        if ui.small_button(id.to_string()).clicked() {
+                                            picked = Some(id);
+                                        }
+                                    }
+                                    if let Some(id) = picked {
+                                        self.of.appid = id.to_string();
+                                        self.of.appid_changed();
+                                    }
+                                }
+                            });
+                            ui.add_space(6.0);
+                            // 状态行（先刷新再渲染）。
+                            self.of.refresh_status();
+                            if let Some(status) = self.of.status() {
+                                let (text, color) = of_status_line(&self.strings, status);
+                                status_line(ui, &text, color);
+                            }
+                            ui.add_space(8.0);
+                            ui.horizontal(|ui| {
+                                if styled_button(ui, self.strings.of_btn_enable, ButtonStyle::Primary, egui::vec2(120.0, 30.0), true).clicked() {
+                                    enable_clicked = true;
+                                }
+                                if styled_button(ui, self.strings.of_btn_disable, ButtonStyle::Secondary, egui::vec2(120.0, 30.0), true).clicked() {
+                                    disable_clicked = true;
+                                }
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if styled_button(ui, self.strings.of_btn_copy, ButtonStyle::Secondary, egui::vec2(84.0, 30.0), true).clicked() {
+                                        copy_clicked = true;
+                                    }
+                                });
+                            });
+                            ui.add_space(6.0);
+                            // 上游限制提示（spec PR-2）：同一时间仅一个 onlinefix 游戏可运行。
+                            status_line(ui, self.strings.of_single_limit, TEXT_WEAK);
+                        }
+                    }
+                }
+            });
+
+            // 页脚：共享「关闭」（滚动区外，始终可见）。
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if styled_button(ui, self.strings.btn_close, ButtonStyle::Secondary, egui::vec2(80.0, 30.0), true).clicked() {
                         close_clicked = true;
                     }
                 });
             });
-
-            ui.add_space(14.0);
-            ui.separator();
-            ui.add_space(8.0);
-            ui.label(egui::RichText::new(self.strings.of_title).strong().color(TEXT_INK));
-            ui.add_space(6.0);
-
-            // 写入门闩：快速判定（仅看 steam.exe，2s 缓存）；残留 webhelper 等孤儿由写时实时复查兜底。
-            let write_blocked = self.steam_running;
-            if write_blocked {
-                status_line(ui, self.strings.of_steam_running, TEXT_WEAK);
-            } else if self.of.accounts.is_empty() {
-                status_line(ui, self.strings.of_no_account, TEXT_WEAK);
-            } else {
-                // 账号选择。
-                ui.horizontal(|ui| {
-                    ui.label(self.strings.of_account_label);
-                    let label = OnlineFixState::account_name(&self.of.accounts[self.of.account_idx]);
-                    let mut selected_idx = None;
-                    egui::ComboBox::from_id_salt("of_account")
-                        .selected_text(label)
-                        .width(150.0)
-                        .show_ui(ui, |ui| {
-                            for (i, vdf) in self.of.accounts.iter().enumerate() {
-                                let selected = self.of.account_idx == i;
-                                let name = OnlineFixState::account_name(vdf);
-                                if ui.selectable_label(selected, name).clicked() {
-                                    selected_idx = Some(i);
-                                }
-                            }
-                        });
-                    if let Some(i) = selected_idx {
-                        self.of.select_account(i);
-                    }
-                });
-                // AppID 输入 + Lua 候选。
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(self.strings.of_appid_label);
-                    let resp = ui.add(
-                        egui::TextEdit::singleline(&mut self.of.appid)
-                            .desired_width(96.0)
-                            .hint_text("0"),
-                    );
-                    if resp.changed() {
-                        self.of.appid_changed();
-                    }
-                    if !self.of.candidates.is_empty() {
-                        ui.add_space(8.0);
-                        let mut picked = None;
-                        for &id in &self.of.candidates {
-                            if ui.small_button(id.to_string()).clicked() {
-                                picked = Some(id);
-                            }
-                        }
-                        if let Some(id) = picked {
-                            self.of.appid = id.to_string();
-                            self.of.appid_changed();
-                        }
-                    }
-                });
-                ui.add_space(6.0);
-                // 状态行（先刷新再渲染）。
-                self.of.refresh_status();
-                if let Some(status) = self.of.status() {
-                    let (text, color) = of_status_line(&self.strings, status);
-                    status_line(ui, &text, color);
-                }
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if styled_button(ui, self.strings.of_btn_enable, ButtonStyle::Primary, egui::vec2(120.0, 30.0), true).clicked() {
-                        enable_clicked = true;
-                    }
-                    if styled_button(ui, self.strings.of_btn_disable, ButtonStyle::Secondary, egui::vec2(120.0, 30.0), true).clicked() {
-                        disable_clicked = true;
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if styled_button(ui, self.strings.of_btn_copy, ButtonStyle::Secondary, egui::vec2(84.0, 30.0), true).clicked() {
-                            copy_clicked = true;
-                        }
-                    });
-                });
-                ui.add_space(6.0);
-                // 上游限制提示（spec PR-2）：同一时间仅一个 onlinefix 游戏可运行。
-                status_line(ui, self.strings.of_single_limit, TEXT_WEAK);
-            }
-            });
         });
 
+        if let Some(tab) = tab_clicked {
+            self.settings_tab = tab; // 会话内记忆上次页签。
+        }
         if save_clicked {
             self.cfg.save(&target);
         }

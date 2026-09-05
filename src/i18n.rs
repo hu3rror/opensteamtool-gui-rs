@@ -100,6 +100,8 @@ pub struct Strings {
     pub tray_minimize: &'static str,
     pub btn_settings: &'static str,
     pub settings_title: &'static str,
+    /// 设置对话框「配置编辑器」页签标签（OnlineFix 页签复用 of_title）。
+    pub settings_tab_config: &'static str,
     /// 「目标文件：」前缀（设置对话框显示正在编辑的路径）。
     pub settings_target: &'static str,
     pub settings_no_steam_dir: &'static str,
@@ -266,6 +268,7 @@ impl Strings {
             tray_minimize: "最小化时自动隐藏到托盘",
             btn_settings: "设置",
             settings_title: "设置",
+            settings_tab_config: "配置编辑器",
             settings_target: "目标文件：",
             settings_no_steam_dir: "请先指定有效的 Steam 安装路径，再编辑配置",
             settings_file_missing: "文件不存在，保存后创建；也可从示例模板开始",
@@ -351,6 +354,7 @@ impl Strings {
             tray_minimize: "Minimize to tray automatically",
             btn_settings: "Settings",
             settings_title: "Settings",
+            settings_tab_config: "Config Editor",
             settings_target: "Target file: ",
             settings_no_steam_dir: "Set a valid Steam install path to edit the config",
             settings_file_missing: "File does not exist — save to create it, or start from the example template",
