@@ -290,6 +290,7 @@ pub struct OverallHealthReport { pub steamclient_pattern: ProbeReport, pub steam
 **详情与预热交互**：
 - 「详细信息」展开/弹窗展示 3 行明细：`steamclient64.dll`（Pattern）、`steamui.dll`（Pattern）、`steamclient64.dll`（IPC），每行 = SHA-256 前 12 位 + 状态徽标。
 - 有 `RemoteAvailable{cached:false}` 项时显示 `[ 一键缓存签名 ]`：后台线程 GET 下载 → 建 `<Steam>/opensteamtool/{channel}/{component}/` → 原子写入 `<sha256>.toml` → 重跑本地探针刷新状态。
+- **自动预热（增强）**：体检落定为 Online（上游已适配未缓存）且无预热进行中时，自动触发同一下载链路——Steam 更新后首次启动零点击补缓存；自动失败静默（不弹错误、徽章保持 Online、手动入口保留），成功复用「缓存已就绪」提示，无新增文案。预热目标以签名缓存文件实际存在性为准（含验证缓存命中但未下载的情形）。
 - **触发防抖**：Steam 路径输入逐字符 `resp.changed()` 触发刷新——体检线程仅当路径与上次体检路径不同才 spawn（防每字符起线程）。
 
 ### 7.8 国际化词表（`src/i18n.rs`）

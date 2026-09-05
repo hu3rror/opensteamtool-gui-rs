@@ -448,7 +448,10 @@ fn precache_targets(report: &compat::OverallHealthReport) -> Vec<(compat::ProbeT
     ]
     .iter()
     .filter_map(|r| match &r.status {
-        compat::ProbeStatus::RemoteAvailable { cached: false } => {
+        // 收集「已适配但签名缓存缺失」的项，可手动/自动补下载。
+        // cached:false（乐观/未缓存）+ RemoteAvailable{cached:true}（验证缓存命中但无签名缓存）都收；
+        // 以 cache_path 实际文件存在性为准（而非信任 cached 字段，它承载「显示绿」语义）。
+        compat::ProbeStatus::RemoteAvailable { .. } if !r.cache_path.is_file() => {
             r.sha256.clone().map(|sha| (r.target, sha))
         }
         _ => None,
@@ -2080,9 +2083,10 @@ mod tests {
         assert_eq!(compat_summary(false, Some(&offline)), CompatSummary::Ready);
     }
 
-    /// 待预热目标：仅收集 RemoteAvailable{cached:false} 且带哈希的项。
+    /// 待预热目标：收集「已适配但签名缓存缺失」的项（以 cache_path 存在性为准）——
+    /// cached:false（未缓存）+ RemoteAvailable{cached:true}（验证缓存命中但无签名缓存）都收。
     #[test]
-    fn precache_targets_picks_uncached_available() {
+    fn precache_targets_picks_available_without_signature() {
         let r = report_with(
             [
                 S::RemoteAvailable { cached: false },
@@ -2092,9 +2096,37 @@ mod tests {
             true,
         );
         let targets = precache_targets(&r);
+        // report_with 的 cache_path 均为不存在的假路径 → cached:false 与验证命中的 cached:true 都被收。
+        assert_eq!(targets.len(), 2);
+        let ts: Vec<_> = targets.iter().map(|(t, _)| *t).collect();
+        assert!(ts.contains(&compat::ProbeTarget::PatternSteamClient));
+        assert!(ts.contains(&compat::ProbeTarget::PatternSteamUi));
+    }
+
+    /// 已存在签名缓存文件的项（cache_path.is_file()）不被收集。
+    #[test]
+    fn precache_targets_excludes_existing_signature() {
+        let dir = std::env::temp_dir().join(format!("ost_ui_sig_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut r = report_with(
+            [
+                S::RemoteAvailable { cached: true },
+                S::RemoteAvailable { cached: true },
+                S::IncompatiblePending,
+            ],
+            true,
+        );
+        // 给 PatternSteamClient 补一个真实存在的缓存文件 → 排除；其余 cache_path 假路径仍收。
+        let path = crate::compat::cache_path(&dir, compat::ProbeTarget::PatternSteamClient, "abc");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"[x]").unwrap();
+        r.steamclient_pattern.cache_path = path;
+        let targets = precache_targets(&r);
+        // PatternSteamClient 已补真实缓存文件 → 唯一排除；steamui（假路径）仍收；ipc 非 RemoteAvailable 不收。
         assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0].0, compat::ProbeTarget::PatternSteamClient);
-        assert_eq!(targets[0].1, "abc");
+        assert_eq!(targets[0].0, compat::ProbeTarget::PatternSteamUi);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 快速体检后：存在短路项（CompatibleOffline）需后台刷新；其余情况不需要。
