@@ -129,7 +129,7 @@ src/
 ├── steam.rs         # 注册表路径检测、steam.exe 启动
 ├── process.rs       # 进程检测/监视/关闭（sysinfo）
 ├── dll.rs           # 部署/卸载、本地状态检测
-├── updater.rs       # GitHub API 检查、下载、解压、version.txt
+├── compat.rs        # Steam 核心版本健康度体检（哈希/远程探针/缓存，见 §7）
 ├── workflow.rs      # 操作判定表与执行（plan/execute）
 ├── tray.rs          # 系统托盘（左键显隐切换、菜单）
 ├── i18n.rs          # 双语文案、系统语言检测
@@ -137,7 +137,7 @@ src/
 ```
 
 依赖候选：`eframe/egui`、`winreg`、`sysinfo`、`ureq`（轻量 HTTP）或 `reqwest`、`zip`、`image`（图标转 rgba）。
-已定依赖（`Cargo.toml`）：`eframe`（glow）、`winreg`、`sysinfo`、`ureq`（json+rustls）、`zip`、`windows-sys`、`serde_json`、`rfd`（目录选择器）、`image`（ico→rgba，仅 `ico` feature）。release 用 `opt-level="z"` + fat LTO + `panic="abort"`，`--release` 体积约 6.7MB。
+已定依赖（`Cargo.toml`）：`eframe`（glow）、`winreg`、`sysinfo`、`ureq`（json+rustls）、`zip`、`windows-sys`、`serde_json`、`rfd`（目录选择器）、`image`（ico→rgba，仅 `ico` feature）；§7 新增 `sha2`（0.10）。release 用 `opt-level="z"` + fat LTO + `panic="abort"`，`--release` 体积约 6.7MB。
 
 ## 5. 验证标准
 
@@ -152,3 +152,162 @@ src/
 - Git 历史：新仓库 `git init` 全新开始（用户已确认不保留旧仓库历史）。
 - 旧仓库 `opensteamtool-gui-py` 冻结，不再改动。
 - 本 spec 若与实际开发冲突，以开发中最新决策为准并回更本文档。
+
+## 7. Steam 核心版本健康度体检与 Pattern/IPC 缓存管理
+
+> 本节为新增功能规格（2026-09-05 确立，经代码/上游仓库双向核对修正）。
+> 上游事实基准：`OpenSteam001/steam-monitor` 三分支 `pattern` / `ipc` / `protobuf`（默认），
+> `{channel}` 即**分支名**；`pattern` 分支含 `steamclient/*.toml`（特征码）与 `steamui/*.toml`，
+> `ipc` 分支仅含 `steamclient/*.toml`（IPC 规约）。
+
+### 7.1 概述
+
+OpenSteamTool（上游）自重构后不再将硬编码特征码打包进 DLL，而是在每次由注入器随 Steam 启动时，计算本地核心 DLL 的 SHA-256 哈希，并按通道从 `OpenSteam001/steam-monitor` 拉取匹配的 TOML 签名文件与 IPC 规约。
+
+本项目需在 **Card 1（Steam 安装路径卡片）底部**新增版本健康度诊断指示器：在用户指定或自动识别 Steam 路径后，后台异步计算核心文件哈希并探查远程/本地缓存适配情况，在不阻塞 UI 的前提下提供兼容性状态指示及一键离线缓存预热。
+
+### 7.2 架构对齐（AGENTS.md 约束落地）
+
+1. **UI 零阻塞**：禁止在 `eframe::App::update` 内做 DLL 读取、SHA-256 计算与网络请求；复用现有 `ui.rs` 的 `spawn()`（`std::thread::spawn` + mpsc）+ `handle_messages()`（`rx.try_recv` 轮询）机制回传状态（`Msg` 枚举新增变体）。
+2. **零白屏 / 零等待**：启动立即渲染，体检初始为 `Checking` 骨架态，完成后就地刷新徽标。
+3. **单一二进制与依赖控制**：
+   - 哈希：`sha2 = "0.10"`（**需新增**，Cargo.toml 现无此依赖），缓冲区分块流式读取，避免大文件爆内存。
+   - HTTP：**复用项目现有 `ureq 3.4`**（同步、rustls；spec 原拟 reqwest 已否决，不引入新依赖）。
+     ureq 语义注意：`agent.head(url).call()` 对 2xx 返回 `Ok(Response)`；**4xx 返回 `Err(ureq::Error::StatusCode(u16))`**（非响应对象），404 判定为 `matches!(err, Error::StatusCode(404))`。
+4. **严格双语**：所有新增状态文本、Tooltip、弹窗词条在 `src/i18n.rs` 登记 `en` 与 `zh-CN`（`Strings` struct 加字段 + `zh()`/`en()` 各赋值一行）。
+5. **用户意愿优先**：优先解析 `<Steam>/opensteamtool.toml` 的 `[remote].url_template`；注意模板语义为**替代**（custom mirror replaces built-in sources），即自定义模板存在时不再回退 GitHub/jsDelivr。
+
+### 7.3 核心文件与通道映射
+
+| 探测目标 | 本地文件 | SHA-256 来源 | Channel（=分支） | Component | 本地缓存路径 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| SteamClient Pattern | `<Steam>/steamclient64.dll` | `steamclient64.dll` | `pattern` | `steamclient` | `<Steam>/opensteamtool/pattern/steamclient/<sha256>.toml` |
+| SteamUI Pattern | `<Steam>/steamui.dll` | `steamui.dll` | `pattern` | `steamui` | `<Steam>/opensteamtool/pattern/steamui/<sha256>.toml` |
+| SteamClient IPC | `<Steam>/steamclient64.dll` | `steamclient64.dll` | `ipc` | `steamclient` | `<Steam>/opensteamtool/ipc/steamclient/<sha256>.toml` |
+
+哈希输出：标准 64 位小写十六进制（如 `3f864358fcf5...`；该前缀在线上 `pattern/steamclient/` 真实存在）。
+
+### 7.4 远程探针链路（Mirror Chain）
+
+URL 占位符统一为 `{channel}` / `{component}` / `{sha256}`，解析顺序：
+
+1. **用户自定义（替代，非追加）**：`<Steam>/opensteamtool.toml` 中 `[remote].url_template` 非空则用之；键默认注释状态，文件不存在/无键/空值 → `None` → 回退。
+2. **官方 GitHub Raw**：`https://raw.githubusercontent.com/OpenSteam001/steam-monitor/{channel}/{component}/{sha256}.toml`（`{channel}` 即分支名）。
+3. **jsDelivr CDN 回退**：`https://fast.jsdelivr.net/gh/OpenSteam001/steam-monitor@{channel}/{component}/{sha256}.toml`。
+
+### 7.5 状态判定决策矩阵
+
+探针用独立 `ureq::Agent`：`timeout_connect(4s)` + `timeout_global(5s)`（`updater.rs` 现有 agent 是 10s/30s，不适合探针），`HEAD` 请求。
+
+```text
+[检查本地核心 DLL 是否存在]
+    ├── 不存在 -> FileNotFound
+    └── 存在 -> 计算 SHA-256
+                   │
+                   ├── [检查本地缓存文件] 存在 -> Cached = true / 缺失 -> Cached = false
+                   │
+                   └── [HEAD 探测 url_template -> GitHub -> jsDelivr]
+                           ├── HTTP 2xx -> RemoteAvailable
+                           ├── Err(StatusCode(404))
+                           │       ├── Cached == true  -> CompatibleOffline
+                           │       └── Cached == false -> IncompatiblePending
+                           └── 网络超时/连接错误
+                                   ├── Cached == true  -> CompatibleOffline
+                                   └── Cached == false -> NetworkError
+```
+
+综合健康度：
+- **Fully Compatible**：3 项探针均 `RemoteAvailable` 或 `CompatibleOffline`，且三项均有本地缓存。
+- **Available Online**：上游已适配但本地缺缓存（提示一键预热）。
+- **Pending Upstream**：任意探针 404 且本地无缓存。
+- **Error / Missing**：Steam 路径错误或核心 DLL 缺失。
+
+### 7.6 模块设计（`src/compat.rs`）
+
+`main.rs` 注册 `mod compat;`。核心数据结构（与既有 `UpdateError::Network` 风格一致）：
+
+```rust
+pub enum ProbeTarget { PatternSteamClient, PatternSteamUi, IpcSteamClient }
+// channel() -> "pattern"/"pattern"/"ipc"; component() -> "steamclient"/"steamui"/"steamclient"
+// relative_dll() -> "steamclient64.dll"/"steamui.dll"/"steamclient64.dll"
+
+pub enum ProbeStatus {
+    Checking,
+    RemoteAvailable { cached: bool },
+    CompatibleOffline,
+    IncompatiblePending,
+    NetworkError(String), // 网络超时/连接错误（含 URL 解析失败）
+    FileNotFound,
+}
+
+pub struct ProbeReport { pub target: ProbeTarget, pub sha256: Option<String>, pub status: ProbeStatus, pub cache_path: PathBuf }
+pub struct OverallHealthReport { pub steamclient_pattern: ProbeReport, pub steamui_pattern: ProbeReport, pub steamclient_ipc: ProbeReport, pub is_all_compatible: bool, pub has_missing_cache: bool }
+```
+
+**配置读取**：`config_editor.rs` 现无读取函数（仅 `validate()`/`write_atomic()`），需**新增** `pub fn remote_url_template(steam_dir: &Path) -> Option<String>`：`toml_edit` 解析 `<Steam>/opensteamtool.toml`，取 `[remote].url_template` 非空字符串；文件缺失/解析失败/键空 → `None`。
+
+**功能清单**：
+- `sha256_of_file(path) -> io::Result<String>`：`std::fs::File` + 64KB 缓冲分块流式 `Sha256`。
+- `cache_path(steam_dir, target) -> PathBuf`：`<Steam>/opensteamtool/{channel}/{component}/` 目录存在性检查。
+- `probe_all(steam_dir) -> OverallHealthReport`：三探针循环，先本地（哈希/缓存）后网络（镜像链 HEAD）。
+- `precache(steam_dir, target, report) -> Result<(), CompatError>`：GET 拉取 TOML（复用 `download_agent` 超时模式），`fsutil::write_atomic` 原子写入缓存路径（先建目录）。
+
+### 7.7 UI 布局与交互（`src/ui.rs`）
+
+**落位**：`card1()`（路径输入 + 浏览按钮下方）新增「Steam 核心兼容性」小节。注意：DLL 部署状态在 Card 2，Card 1 内无既有状态列表。
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ Card 1: Steam 安装路径                                      │
+│ [路径输入框....................] [浏览...]                   │
+│ ─────────────────────────────────────────────────────────── │
+│ Steam 核心兼容性: [ ● 已全面适配 ]      [ 详细信息 / 预热缓存 ]│
+└─────────────────────────────────────────────────────────────┘
+```
+
+**状态视觉**：
+1. `Checking`：灰色 `[ ○ 检查中... ]`。
+2. `Fully Compatible`（含 `RemoteAvailable{cached:true}` 与 `CompatibleOffline` 全绿）：绿色 `[ ● 完美兼容 ]`，Tooltip「核心特征码与 IPC 规约已全部就绪并离线缓存」。
+3. `RemoteAvailable{cached:false}`：黄/蓝绿 `[ ● 上游已适配 (未缓存) ]` + 小按钮 `[ 预热离线缓存 ]`。
+4. `IncompatiblePending`：红色 `[ ▲ 暂未适配 ]`，Tooltip「Steam 版本已更新，上游尚未发布匹配签名」。
+5. `FileNotFound`：灰色 `[ ? 未找到核心文件 ]`。
+6. `NetworkError`：灰/橙 `[ ? 网络不可用 ]`，cached 时显示离线可用。
+
+**详情与预热交互**：
+- 「详细信息」展开/弹窗展示 3 行明细：`steamclient64.dll`（Pattern）、`steamui.dll`（Pattern）、`steamclient64.dll`（IPC），每行 = SHA-256 前 12 位 + 状态徽标。
+- 有 `RemoteAvailable{cached:false}` 项时显示 `[ 一键缓存签名 ]`：后台线程 GET 下载 → 建 `<Steam>/opensteamtool/{channel}/{component}/` → 原子写入 `<sha256>.toml` → 重跑本地探针刷新状态。
+- **触发防抖**：Steam 路径输入逐字符 `resp.changed()` 触发刷新——体检线程仅当路径与上次体检路径不同才 spawn（防每字符起线程）。
+
+### 7.8 国际化词表（`src/i18n.rs`）
+
+| 键名 | en | zh-CN |
+| :--- | :--- | :--- |
+| `compat_title` | Steam Core Compatibility | Steam 核心兼容性 |
+| `compat_checking` | Checking compatibility... | 正在检查兼容性... |
+| `compat_status_ready` | Fully Compatible | 完美兼容 (已缓存) |
+| `compat_status_online` | Supported (Not Cached) | 上游已适配 (未缓存) |
+| `compat_status_offline` | Compatible (Offline Cache) | 离线可用 (使用本地缓存) |
+| `compat_status_pending` | Unsupported (Pending) | 上游尚未适配此版本 |
+| `compat_status_missing` | DLLs Not Found | 未找到核心 DLL |
+| `compat_status_network` | Network Unavailable | 网络不可用 |
+| `compat_btn_precache` | Pre-cache Signatures | 预热离线缓存 |
+| `compat_btn_details` | Details | 详细信息 |
+| `compat_btn_precache_all` | Pre-cache All Signatures | 一键缓存签名 |
+| `compat_precaching` | Downloading... | 正在缓存... |
+| `compat_precache_done` | Cache pre-warmed | 缓存已就绪 |
+| `compat_precache_failed` | Pre-cache failed: {err} | 缓存预热失败：{err} |
+| `compat_tip_pending` | Steam has been updated. Please wait for upstream signatures. | Steam 版本已更新，上游尚未发布适配签名，请等待更新。 |
+| `compat_tip_ready` | Core signatures & IPC specs ready and cached offline. | 核心特征码与 IPC 规约已全部就绪并离线缓存。 |
+| `compat_row_dll` | {dll} ({kind}) | {dll}（{kind}） |
+
+### 7.9 实现清单与验收
+
+1. **依赖**：`Cargo.toml` 增 `sha2 = "0.10"`（ureq 已存在，复用）。
+2. **`src/compat.rs`**：哈希（流式）→ 配置读取（`config_editor::remote_url_template`）→ 单次探测（本地缓存 + HEAD 镜像链）→ `OverallHealthReport` → 预热下载持久化。
+3. **集成**：`Msg` 增 `Compat(Result<OverallHealthReport, ...>)` / `CompatPrecached(...)`；`App` 持有 `compat_report` 与触发状态；`card1()` 底部渲染；路径变更防抖触发；预热按钮异步调用。
+4. **i18n**：§7.8 词表完整登记 `en`/`zh-CN`。
+5. **测试**：
+   - `compat.rs`：临时目录伪造 DLL（写入已知字节）+ 伪造缓存目录，验证哈希、缓存命中、`FileNotFound` 判定、URL 构造（三占位符替换、自定义模板替代语义）。
+   - 网络探针不依赖真实网络：HEAD 判定逻辑拆为纯函数（输入镜像链结果枚举 → 输出 `ProbeStatus`）单测覆盖决策矩阵全分支。
+   - `config_editor`：`remote_url_template()` 覆盖文件缺失/无键/空值/有效值/自定义模板。
+6. **构建验收**：`cargo check` / `cargo test` 无错误（既有 `cargo fmt --check` 噪音与 1 条 clippy warning 与本功能无关，勿动）。
