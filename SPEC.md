@@ -230,6 +230,12 @@ URL 占位符统一为 `{channel}` / `{component}` / `{sha256}`，解析顺序�
 网络适配状态由 `probe_all_refresh` 后台异步补齐（快速报告含短路/乐观项即触发一次全量网络探测：
 短路项可升级 `RemoteAvailable{cached:true}`，乐观项 404 时降级 `IncompatiblePending`，汇总徽章随之更新）。
 探针超时 4s/5s 收紧至 2.5s/2.5s，无网络时快速失败。
+
+**验证缓存（增强）**：后台刷新确认适配（Found）的项持久化到 `<exe>/cache/verified.toml`
+（`{target → sha256}` 映射，原子写）。下次快速体检：签名缓存命中 → `CompatibleOffline`（绿）；
+验证缓存命中 → `RemoteAvailable{cached:true}`（绿，零网络）；均未命中 → 乐观琥珀。
+缓存由 DLL 哈希自动失效：Steam 更新改哈希即重验，无时间有效期；只记 Found（404/错误不缓存，
+避免上游补发签名后本地仍失真）。
 ### 7.6 模块设计（`src/compat.rs`）
 
 `main.rs` 注册 `mod compat;`。核心数据结构（与既有 `UpdateError::Network` 风格一致）：
