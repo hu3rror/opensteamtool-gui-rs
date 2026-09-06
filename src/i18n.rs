@@ -142,6 +142,18 @@ pub struct Strings {
     pub settings_title: &'static str,
     /// 设置对话框「配置编辑器」页签标签（OnlineFix 页签复用 of_title）。
     pub settings_tab_config: &'static str,
+    /// 设置对话框「常规偏好」页签标签。
+    pub settings_tab_general: &'static str,
+    /// 常规偏好页「界面语言」标签。
+    pub settings_lang_label: &'static str,
+    /// 语言三选：自动检测（跟随系统）。
+    pub lang_auto: &'static str,
+    /// 语言三选：简体中文（两种界面语言下均以本名显示）。
+    pub lang_zh: &'static str,
+    /// 语言三选：English。
+    pub lang_en: &'static str,
+    /// 常规偏好页「最小化至托盘」复选框。
+    pub minimize_to_tray_check: &'static str,
     /// 「目标文件：」前缀（设置对话框显示正在编辑的路径）。
     pub settings_target: &'static str,
     pub settings_no_steam_dir: &'static str,
@@ -333,6 +345,12 @@ impl Strings {
             btn_settings: "设置",
             settings_title: "设置",
             settings_tab_config: "配置编辑器",
+            settings_tab_general: "常规偏好",
+            settings_lang_label: "界面语言",
+            lang_auto: "自动检测",
+            lang_zh: "简体中文",
+            lang_en: "English",
+            minimize_to_tray_check: "最小化至托盘",
             settings_target: "目标文件：",
             settings_no_steam_dir: "请先指定有效的 Steam 安装路径，再编辑配置",
             settings_file_missing: "文件不存在，保存后创建；也可从示例模板开始",
@@ -441,6 +459,12 @@ impl Strings {
             btn_settings: "Settings",
             settings_title: "Settings",
             settings_tab_config: "Config Editor",
+            settings_tab_general: "General",
+            settings_lang_label: "Language",
+            lang_auto: "Auto Detect",
+            lang_zh: "简体中文",
+            lang_en: "English",
+            minimize_to_tray_check: "Minimize to tray",
             settings_target: "Target file: ",
             settings_no_steam_dir: "Set a valid Steam install path to edit the config",
             settings_file_missing: "File does not exist — save to create it, or start from the example template",

@@ -53,10 +53,9 @@ const BADGE_AMBER: egui::Color32 = egui::Color32::from_rgb(0xFE, 0xF3, 0xC7);
 const BADGE_RED: egui::Color32 = egui::Color32::from_rgb(0xFE, 0xE2, 0xE2);
 const BADGE_GRAY: egui::Color32 = egui::Color32::from_rgb(0xF1, 0xF5, 0xF9);
 
-/// 设置对话框非滚动行的固定高度占用（标题+页签行+顶部固定行+底部固定行+页脚+窗口边距）。
-/// 数值保守偏大：低估会让页脚越界（Modal 是 Area 不约束屏幕），过估只浪费一点滚动区。
-const CFG_FIXED_H: f32 = 300.0; // 配置编辑器页（实测固定行 193 + 安全量）
-const OF_FIXED_H: f32 = 340.0; // OnlineFix 页（实测固定行 234 + 安全量）
+/// 设置弹窗 Footer 预留高度（分隔线 + 按钮行 + 间距 + 边距）。
+/// 滚动区高度 = 当前可用高度 − 此预留，随窗口缩放自适应（SPEC AC5：根除固定魔法常数）。
+const FOOTER_RESERVE: f32 = 56.0;
 fn install_theme(ctx: &egui::Context) {
     let mut visuals = egui::Visuals::light();
     visuals.panel_fill = PANEL_BG;
@@ -346,10 +345,114 @@ enum Notice {
 /// 设置对话框页签（纯 UI 选择，状态层 cfg/of 本就独立，切换零耦合）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum SettingsTab {
-    /// 配置编辑器（默认）。
-    Config,
+    /// 常规偏好（默认；语言与托盘全局偏好）。
+    General,
+    /// 配置编辑器（TOML 文本编辑）。
+    ConfigEditor,
     /// OnlineFix 启动预设。
     OnlineFix,
+}
+
+/// 设置弹窗全局单行动态 Footer 的按钮动作（SPEC §8.6 AC5）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum FooterAction {
+    LoadTemplate,
+    Undo,
+    Save,
+    Close,
+    Copy,
+    Enable,
+    Disable,
+}
+
+/// 单帧收集的 Footer 按钮意图（渲染后统一处理，避免借用冲突）。
+#[derive(Default)]
+struct SettingsActions {
+    close: bool,
+    save: bool,
+    load_template: bool,
+    undo: bool,
+    copy: bool,
+    enable: bool,
+    disable: bool,
+}
+
+/// 每页签 Footer 布局：(左区顺序, 右区 right_to_left 顺序——第一个元素贴最右)。
+/// SPEC AC5：General 仅右[关闭]；ConfigEditor 左[模板][撤销]右[保存][关闭]；
+/// OnlineFix 左[复制][启用][停用]右[关闭]。
+fn footer_layout(tab: SettingsTab) -> (&'static [FooterAction], &'static [FooterAction]) {
+    match tab {
+        SettingsTab::General => (&[], &[FooterAction::Close]),
+        SettingsTab::ConfigEditor => (
+            &[FooterAction::LoadTemplate, FooterAction::Undo],
+            &[FooterAction::Close, FooterAction::Save],
+        ),
+        SettingsTab::OnlineFix => (
+            &[
+                FooterAction::Copy,
+                FooterAction::Enable,
+                FooterAction::Disable,
+            ],
+            &[FooterAction::Close],
+        ),
+    }
+}
+
+/// 渲染单个 Footer 按钮并收集点击意图（SPEC AC5 单行动态 Footer）。
+fn render_footer_button(
+    ui: &mut egui::Ui,
+    strings: &Strings,
+    action: FooterAction,
+    actions: &mut SettingsActions,
+) {
+    let (label, style, size) = match action {
+        FooterAction::Close => (
+            strings.btn_close,
+            ButtonStyle::Secondary,
+            egui::vec2(80.0, 30.0),
+        ),
+        FooterAction::Save => (
+            strings.btn_save,
+            ButtonStyle::Primary,
+            egui::vec2(80.0, 30.0),
+        ),
+        FooterAction::LoadTemplate => (
+            strings.btn_load_template,
+            ButtonStyle::Secondary,
+            egui::vec2(150.0, 30.0),
+        ),
+        FooterAction::Undo => (
+            strings.btn_undo,
+            ButtonStyle::Secondary,
+            egui::vec2(64.0, 30.0),
+        ),
+        FooterAction::Copy => (
+            strings.of_btn_copy,
+            ButtonStyle::Secondary,
+            egui::vec2(84.0, 30.0),
+        ),
+        FooterAction::Enable => (
+            strings.of_btn_enable,
+            ButtonStyle::Primary,
+            egui::vec2(120.0, 30.0),
+        ),
+        FooterAction::Disable => (
+            strings.of_btn_disable,
+            ButtonStyle::Secondary,
+            egui::vec2(120.0, 30.0),
+        ),
+    };
+    if styled_button(ui, label, style, size, true).clicked() {
+        match action {
+            FooterAction::Close => actions.close = true,
+            FooterAction::Save => actions.save = true,
+            FooterAction::LoadTemplate => actions.load_template = true,
+            FooterAction::Undo => actions.undo = true,
+            FooterAction::Copy => actions.copy = true,
+            FooterAction::Enable => actions.enable = true,
+            FooterAction::Disable => actions.disable = true,
+        }
+    }
 }
 
 /// Steam 核心兼容性小节：体检状态 + 明细展示 + 预热进行中标记。
@@ -652,7 +755,7 @@ impl App {
             settings_open: false,
             cfg: ConfigEditorState::new(),
             of: OnlineFixState::new(),
-            settings_tab: SettingsTab::Config,
+            settings_tab: SettingsTab::General,
             undo_pending: false,
             editor_id: None,
             compat: CompatUiState::checking(),
@@ -921,34 +1024,32 @@ impl App {
         let steam_ok = dll::check_status(steam_dir) != DeployStatus::InvalidPath;
         let target = config_editor::target_path(steam_dir);
         let file_exists = steam_ok && target.exists();
-        // 窗口内高：中间滚动区高度 = 窗口内高 − 固定行占用，总高永不越界（Modal 是 Area，不约束屏幕）。
-        let win_h = ctx
-            .input(|i| i.viewport().inner_rect)
-            .map_or(520.0, |r| r.height());
-
-        let mut save_clicked = false;
-        let mut close_clicked = false;
-        let mut template_clicked = false;
+        let mut actions = SettingsActions::default();
         let mut template_confirm = false;
-        let mut undo_clicked = false;
-        let mut enable_clicked = false;
-        let mut disable_clicked = false;
-        let mut copy_clicked = false;
         let mut tab_clicked = None;
+        let mut lang_changed = false;
+        let mut minimize_changed = false;
 
         egui::Modal::new(egui::Id::new("settings_dialog")).show(ctx, |ui| {
             ui.set_width(560.0);
             ui.heading(self.strings.settings_title);
             ui.add_space(6.0);
 
-            // 页签行：配置编辑器 / OnlineFix 预设（egui 0.36 无内置 TabView，selectable_label 手写）。
+            // 页签行：常规偏好 / 配置编辑器 / OnlineFix 预设（egui 0.36 无内置 TabView，selectable_label 手写）。
             ui.horizontal(|ui| {
-                let selected = self.settings_tab == SettingsTab::Config;
+                let selected = self.settings_tab == SettingsTab::General;
+                if ui
+                    .selectable_label(selected, egui::RichText::new(self.strings.settings_tab_general).strong())
+                    .clicked()
+                {
+                    tab_clicked = Some(SettingsTab::General);
+                }
+                let selected = self.settings_tab == SettingsTab::ConfigEditor;
                 if ui
                     .selectable_label(selected, egui::RichText::new(self.strings.settings_tab_config).strong())
                     .clicked()
                 {
-                    tab_clicked = Some(SettingsTab::Config);
+                    tab_clicked = Some(SettingsTab::ConfigEditor);
                 }
                 let selected = self.settings_tab == SettingsTab::OnlineFix;
                 if ui
@@ -970,7 +1071,7 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if styled_button(ui, self.strings.btn_close, ButtonStyle::Primary, egui::vec2(80.0, 30.0), true).clicked() {
-                            close_clicked = true;
+                            actions.close = true;
                         }
                     });
                 });
@@ -978,7 +1079,27 @@ impl App {
             }
 
             match self.settings_tab {
-                SettingsTab::Config => {
+                SettingsTab::General => {
+                    // 界面语言三选（变更即时生效并写盘，SPEC AC4）。
+                    let lang_before = self.gui_config.language;
+                    ui.horizontal(|ui| {
+                        ui.label(self.strings.settings_lang_label);
+                        ui.add_space(8.0);
+                        ui.radio_value(&mut self.gui_config.language, LanguagePreference::Auto, self.strings.lang_auto);
+                        ui.radio_value(&mut self.gui_config.language, LanguagePreference::Zh, self.strings.lang_zh);
+                        ui.radio_value(&mut self.gui_config.language, LanguagePreference::En, self.strings.lang_en);
+                    });
+                    ui.add_space(10.0);
+                    let minimize_before = self.gui_config.minimize_to_tray;
+                    ui.checkbox(&mut self.gui_config.minimize_to_tray, self.strings.minimize_to_tray_check);
+                    if self.gui_config.language != lang_before {
+                        lang_changed = true;
+                    }
+                    if self.gui_config.minimize_to_tray != minimize_before {
+                        minimize_changed = true;
+                    }
+                }
+                SettingsTab::ConfigEditor => {
                     // 懒加载：首次进入该页签才读盘。
                     self.cfg.ensure_loaded(&target);
                     // 顶部固定行：目标文件。
@@ -1006,7 +1127,7 @@ impl App {
                     }
 
                     // 中间滚动：仅编辑器。
-                    let h_mid = (win_h - CFG_FIXED_H).max(120.0);
+                    let h_mid = (ui.available_height() - FOOTER_RESERVE).max(120.0);
                     let mut text_edit_id = None;
                     let editor = egui::ScrollArea::vertical()
                         .max_height(h_mid)
@@ -1036,25 +1157,6 @@ impl App {
                         status_line(ui, self.strings.settings_file_missing, TEXT_WEAK);
                     }
                     ui.add_space(10.0);
-                    ui.horizontal(|ui| {
-                        if styled_button(ui, self.strings.btn_load_template, ButtonStyle::Secondary, egui::vec2(150.0, 30.0), true).clicked()
-                        {
-                            if self.cfg.dirty {
-                                template_confirm = true; // 有未保存修改：先确认再覆盖。
-                            } else {
-                                template_clicked = true;
-                            }
-                        }
-                        ui.add_space(6.0);
-                        if styled_button(ui, self.strings.btn_undo, ButtonStyle::Secondary, egui::vec2(64.0, 30.0), true).clicked() {
-                            undo_clicked = true;
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if styled_button(ui, self.strings.btn_save, ButtonStyle::Primary, egui::vec2(80.0, 30.0), true).clicked() {
-                                save_clicked = true;
-                            }
-                        });
-                    });
                 }
                 SettingsTab::OnlineFix => {
                     // 写入门闩：快速判定（仅看 steam.exe，2s 缓存）；残留 webhelper 等孤儿由写时实时复查兜底。
@@ -1088,7 +1190,7 @@ impl App {
                         ui.add_space(6.0);
 
                         // 中间滚动：AppID 输入 + Lua 候选。
-                        let h_mid = (win_h - OF_FIXED_H).max(120.0);
+                        let h_mid = (ui.available_height() - FOOTER_RESERVE).max(120.0);
                         egui::ScrollArea::vertical().max_height(h_mid).show(ui, |ui| {
                             ui.horizontal_wrapped(|ui| {
                                 ui.label(self.strings.of_appid_label);
@@ -1124,40 +1226,40 @@ impl App {
                             status_line(ui, &text, color);
                         }
                         ui.add_space(8.0);
-                        ui.horizontal(|ui| {
-                            if styled_button(ui, self.strings.of_btn_enable, ButtonStyle::Primary, egui::vec2(120.0, 30.0), true).clicked() {
-                                enable_clicked = true;
-                            }
-                            if styled_button(ui, self.strings.of_btn_disable, ButtonStyle::Secondary, egui::vec2(120.0, 30.0), true).clicked() {
-                                disable_clicked = true;
-                            }
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if styled_button(ui, self.strings.of_btn_copy, ButtonStyle::Secondary, egui::vec2(84.0, 30.0), true).clicked() {
-                                    copy_clicked = true;
-                                }
-                            });
-                        });
-                        ui.add_space(6.0);
                         // 上游限制提示（spec PR-2）：同一时间仅一个 onlinefix 游戏可运行。
                         status_line(ui, self.strings.of_single_limit, TEXT_WEAK);
                     }
                 }
             }
 
-            // 页脚：共享「关闭」（始终可见）。
+            // 页脚：全局单行动态 Footer（SPEC AC5）——按钮集按页签布局，
+            // 子视图内部不再渲染局部按钮条。
             ui.add_space(8.0);
             ui.separator();
             ui.add_space(8.0);
+            let (left, right) = footer_layout(self.settings_tab);
             ui.horizontal(|ui| {
+                for action in left {
+                    render_footer_button(ui, &self.strings, *action, &mut actions);
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if styled_button(ui, self.strings.btn_close, ButtonStyle::Secondary, egui::vec2(80.0, 30.0), true).clicked() {
-                        close_clicked = true;
+                    for action in right {
+                        render_footer_button(ui, &self.strings, *action, &mut actions);
                     }
                 });
             });
         });
 
         // 「从示例模板创建」覆盖确认（顶置模态；是 → 载入模板，否 → 取消）。
+        // 「从示例模板创建」：先处理（可能置位覆盖确认），弹窗紧随其后同帧可见。
+        if actions.load_template {
+            if self.cfg.dirty {
+                template_confirm = true; // 有未保存修改：先确认再覆盖。
+            } else {
+                self.cfg.fill_template();
+            }
+        }
+
         if template_confirm {
             let mut confirmed = false;
             egui::Modal::new(egui::Id::new("confirm_template")).show(ctx, |ui| {
@@ -1177,33 +1279,45 @@ impl App {
                 });
             });
             if confirmed {
-                template_clicked = true;
+                self.cfg.fill_template();
             }
         }
 
         if let Some(tab) = tab_clicked {
             self.settings_tab = tab; // 会话内记忆上次页签。
         }
-        if undo_clicked {
+        if lang_changed {
+            // 语言变更：即时生效（渲染 + 窗口标题）并写盘（SPEC AC4）。
+            self.lang = self.gui_config.language.resolve();
+            self.strings = Strings::new(self.lang);
+            self.ctx.send_viewport_cmd(egui::ViewportCommand::Title(
+                self.strings.window_title.to_owned(),
+            ));
+            let _ = self.gui_config.save(&paths::resolver().config_path());
+        }
+        if minimize_changed {
+            self.minimize_to_tray = self.gui_config.minimize_to_tray;
+            let _ = self.gui_config.save(&paths::resolver().config_path());
+        }
+        if actions.undo {
             self.undo_pending = true; // 下一帧合成 Ctrl+Z。
         }
-        if save_clicked {
+        if actions.save {
             self.cfg.save(&target);
         }
-        if template_clicked {
-            self.cfg.fill_template();
+        if actions.enable {
+            self.of
+                .enable(steam_dir, self.steam_running, &self.steam_state);
         }
-        if enable_clicked {
-            self.of.enable(steam_dir, self.steam_running, &self.steam_state);
+        if actions.disable {
+            self.of
+                .disable(steam_dir, self.steam_running, &self.steam_state);
         }
-        if disable_clicked {
-            self.of.disable(steam_dir, self.steam_running, &self.steam_state);
-        }
-        if copy_clicked {
+        if actions.copy {
             ctx.copy_text(onlinefix::ONLINEFIX_ARG.to_owned());
             self.of.mark_copied();
         }
-        if close_clicked {
+        if actions.close {
             self.settings_open = false;
         }
     }
@@ -2240,5 +2354,73 @@ mod tests {
             false,
         );
         assert!(!should_auto_precache(&network_err, false));
+    }
+
+    #[test]
+    fn footer_layout_matches_spec_ac5() {
+        // General：仅右[关闭]。
+        let (l, r) = footer_layout(SettingsTab::General);
+        assert!(l.is_empty());
+        assert_eq!(r, &[FooterAction::Close]);
+        // ConfigEditor：左[模板][撤销]，右区 right_to_left 数组 [Close, Save]（显示：保存 关闭）。
+        let (l, r) = footer_layout(SettingsTab::ConfigEditor);
+        assert_eq!(l, &[FooterAction::LoadTemplate, FooterAction::Undo]);
+        assert_eq!(r, &[FooterAction::Close, FooterAction::Save]);
+        // OnlineFix：左[复制][启用][停用]，右[关闭]。
+        let (l, r) = footer_layout(SettingsTab::OnlineFix);
+        assert_eq!(l, &[FooterAction::Copy, FooterAction::Enable, FooterAction::Disable]);
+        assert_eq!(r, &[FooterAction::Close]);
+    }
+
+    #[test]
+    fn footer_renders_all_tabs_without_spurious_actions() {
+        let ctx = egui::Context::default();
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(640.0, 520.0),
+            )),
+            ..Default::default()
+        };
+        let mut rendered = 0u32;
+        let mut full = ctx.run_ui(raw, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                for tab in [
+                    SettingsTab::General,
+                    SettingsTab::ConfigEditor,
+                    SettingsTab::OnlineFix,
+                ] {
+                    let (left, right) = footer_layout(tab);
+                    let mut actions = SettingsActions::default();
+                    ui.horizontal(|ui| {
+                        for action in left {
+                            render_footer_button(ui, &Strings::new(Lang::Zh), *action, &mut actions);
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            for action in right {
+                                render_footer_button(ui, &Strings::new(Lang::Zh), *action, &mut actions);
+                            }
+                        });
+                    });
+                    ui.add_space(4.0);
+                    // 无点击输入：所有意图必须保持 false。
+                    assert!(
+                        !actions.close
+                            && !actions.save
+                            && !actions.undo
+                            && !actions.load_template
+                            && !actions.copy
+                            && !actions.enable
+                            && !actions.disable,
+                        "tab {tab:?} footer 无点击却产生意图"
+                    );
+                    rendered += 1;
+                }
+            });
+        });
+        full.textures_delta.clear();
+        // 三个页签均完成渲染且有图形产出（按钮已绘制）。
+        assert_eq!(rendered, 3);
+        assert!(!full.shapes.is_empty(), "footer 渲染无图形产出");
     }
 }
