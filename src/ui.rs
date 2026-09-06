@@ -11,6 +11,7 @@ use crate::compat;
 use crate::config_editor;
 use crate::onlinefix;
 use crate::dll::{self, DeployStatus};
+use crate::paths;
 use crate::i18n::{Lang, Strings};
 use crate::process::{self, SteamEvent, SteamMonitor};
 use crate::settings::{ConfigEditError, ConfigEditorState, OfError, OfStatus, OnlineFixState};
@@ -589,6 +590,7 @@ fn auto_tray_policy(event: SteamEvent, window_visible: bool) -> Option<bool> {
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        paths::init(Box::new(paths::RealEnvironmentProbe)); // 启动时探测一次存储模式。
         install_cjk_font(&cc.egui_ctx);
         install_theme(&cc.egui_ctx);
         let (tx, rx) = mpsc::channel();
@@ -605,7 +607,7 @@ impl App {
         let probe_path = steam_path.clone();
         let steam_dir = Path::new(&steam_path);
         let status = dll::check_status(steam_dir);
-        let local_version = dll::read_local_version(&dll::dll_dir());
+        let local_version = dll::read_local_version(&paths::resolver().effective_dll_dir());
         let steam_state = Arc::new(SteamState::new());
         let steam_monitor = SteamMonitor::new(&steam_state);
         let steam_running = steam_monitor.is_running();
@@ -733,7 +735,8 @@ impl App {
                     self.busy_kind = None;
                     self.notice = Some(Notice::Downloaded(res.clone()));
                     if let Ok(()) = res {
-                        self.local_version = dll::read_local_version(&dll::dll_dir());
+                        self.local_version =
+                            dll::read_local_version(&paths::resolver().effective_dll_dir());
                     }
                 }
                 Msg::WorkflowDone(action, res) => {
@@ -817,7 +820,7 @@ impl App {
     }
 
     fn start_action(&mut self, ctx: &egui::Context, action: Action, kill_first: bool) {
-        let dll_dir = dll::dll_dir();
+        let dll_dir = paths::resolver().effective_dll_dir();
         let steam_dir = PathBuf::from(self.steam_path.trim());
 
         // 前置校验（类型化错误 → 本地化文案），失败则不进入忙碌状态。
@@ -874,7 +877,7 @@ impl App {
         }
         self.busy = true;
         self.busy_kind = Some(BusyKind::Downloading);
-        let dll_dir = dll::dll_dir();
+        let dll_dir = paths::resolver().update_target_dll_dir();
         self.spawn(ctx, move || {
             Msg::Downloaded(updater::download_and_extract(&info, &dll_dir))
         });
@@ -1523,7 +1526,7 @@ impl App {
             ui.add_space(10.0);
 
             // 本地版本行：v + 版本 / 已本地就绪 (未记录版本) / 未下载 (dlls 文件夹缺失文件)。
-            let dll_dir = dll::dll_dir();
+            let dll_dir = paths::resolver().effective_dll_dir();
             let all_local_exist = dll::TARGET_DLLS.iter().all(|d| dll_dir.join(d).is_file());
             let (local_text, local_color) = match &self.local_version {
                 Some(v) => (

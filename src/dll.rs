@@ -1,7 +1,7 @@
 //! 目标 DLL 定义、本地版本、部署状态检测、部署/卸载。
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// 三个目标 DLL，部署/卸载/提取都以此集合为准。
 pub const TARGET_DLLS: [&str; 3] = ["OpenSteamTool.dll", "dwmapi.dll", "xinput1_4.dll"];
@@ -18,15 +18,6 @@ pub enum DeployStatus {
     Deployed,
     /// 未部署。
     NotDeployed,
-}
-
-/// dlls/ 目录：exe 同目录下的 `dlls` 文件夹（便携版）。
-pub fn dll_dir() -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("dlls")
 }
 
 /// 读取本地版本记录 `dlls/version.txt`，失败返回 None。

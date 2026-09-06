@@ -8,6 +8,7 @@ mod dll;
 mod fsutil;
 mod i18n;
 mod onlinefix;
+mod paths;
 mod process;
 mod settings;
 mod steam;
