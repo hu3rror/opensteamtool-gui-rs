@@ -424,6 +424,147 @@ fn patch_console_buttons(
     }
 }
 
+/// 底部状态栏：右侧（版本 + 按钮）预留宽度，左侧提示超长截断防溢出。
+const STATUS_BAR_RIGHT_RESERVE: f32 = 340.0;
+/// 底部状态栏：版本文本最大宽度（超长截断，防挤压按钮行）。
+const STATUS_BAR_VERSION_MAX: f32 = 220.0;
+
+/// 底部状态栏渲染输入（T6 AC3 视图模型，聚合渲染所需状态）。
+struct StatusBarView<'a> {
+    strings: &'a Strings,
+    local_version: Option<&'a str>,
+    all_local_exist: bool,
+    update_state: &'a UpdateState,
+    busy: bool,
+    busy_kind: Option<BusyKind>,
+    notice: Option<&'a Notice>,
+}
+
+/// 底部状态栏右侧按钮意图（T6 AC3）。
+#[derive(Default)]
+struct StatusBarActions {
+    check: bool,
+    download: Option<OnlineInfo>,
+}
+
+/// 本地版本展示文本（有版本 → v{ver}；已就绪未记录 / 缺失 DLL → 对应词条）。
+fn local_version_text(
+    strings: &Strings,
+    local_version: Option<&str>,
+    all_local_exist: bool,
+) -> (String, egui::Color32) {
+    match local_version {
+        Some(v) => (
+            format!("{}v{}", strings.local_version, v.trim_start_matches('v')),
+            TEXT_INK,
+        ),
+        None if all_local_exist => (
+            format!("{}{}", strings.local_version, strings.local_ver_ready_no_record),
+            TEXT_SUB,
+        ),
+        None => (
+            format!("{}{}", strings.local_version, strings.local_ver_missing),
+            TEXT_WEAK,
+        ),
+    }
+}
+
+/// 底部状态栏右侧：本地版本 + 更新/检查按钮（T6 AC3）。
+/// 可更新 → 强调色 [立即更新]；下载中 → 原地「正在下载...」禁用态；否则 → [检查更新]。
+/// 返回 (版本 label, 按钮) 响应（测试据此定位点击坐标）。
+fn status_bar_right(
+    ui: &mut egui::Ui,
+    view: &StatusBarView<'_>,
+    actions: &mut StatusBarActions,
+) -> (egui::Response, egui::Response) {
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let updatable = match view.update_state {
+            UpdateState::Checked(Ok(info)) => {
+                !info.version.is_empty() && Some(info.version.as_str()) != view.local_version
+            }
+            _ => false,
+        };
+        let downloading = view.busy && view.busy_kind == Some(BusyKind::Downloading);
+        let btn = if updatable {
+            let label = if downloading {
+                view.strings.busy_downloading
+            } else {
+                view.strings.btn_update_now
+            };
+            styled_button(
+                ui,
+                label,
+                ButtonStyle::Primary,
+                egui::vec2(96.0, 26.0),
+                !view.busy,
+            )
+        } else {
+            styled_button(
+                ui,
+                view.strings.btn_check_update,
+                ButtonStyle::Secondary,
+                egui::vec2(96.0, 26.0),
+                !view.busy,
+            )
+        };
+        if btn.clicked() {
+            match view.update_state {
+                UpdateState::Checked(Ok(info)) if updatable => {
+                    actions.download = Some(info.clone());
+                }
+                _ => actions.check = true,
+            }
+        }
+        ui.add_space(8.0);
+        let (text, color) =
+            local_version_text(view.strings, view.local_version, view.all_local_exist);
+        let text_w = ui
+            .painter()
+            .layout_no_wrap(text.clone(), egui::FontId::proportional(12.5), color)
+            .size()
+            .x;
+        let version = ui.add_sized(
+            egui::vec2(text_w.min(STATUS_BAR_VERSION_MAX), 18.0),
+            egui::Label::new(egui::RichText::new(text).size(12.5).color(color)).truncate(),
+        );
+        (version, btn)
+    })
+    .inner
+}
+
+/// 底部状态栏左侧：busy 提示或最近结果（T6 AC3，超长截断防溢出）。
+/// 返回渲染出的提示文本（None = 无提示）。
+fn status_bar_notice(ui: &mut egui::Ui, view: &StatusBarView<'_>) -> Option<String> {
+    let (text, color, dot_color) = if let Some(kind) = view.busy_kind {
+        (view.strings.busy_label(kind).to_string(), TEXT_WEAK, ACCENT)
+    } else if let Some((ok, text)) = view
+        .notice
+        .map(|n| render_notice(view.strings, view.local_version, n))
+    {
+        let (color, dot) = if ok {
+            (TEXT_INK, DOT_RUNNING)
+        } else {
+            (ERR_RED, ERR_RED)
+        };
+        (text, color, dot)
+    } else {
+        return None;
+    };
+    ui.horizontal(|ui| {
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(7.0, 7.0), egui::Sense::hover());
+        ui.painter().circle_filled(rect.center(), 3.5, dot_color);
+        ui.add_space(6.0);
+        ui.add_sized(
+            egui::vec2(
+                (ui.available_width() - STATUS_BAR_RIGHT_RESERVE).max(60.0),
+                16.0,
+            ),
+            egui::Label::new(egui::RichText::new(text.clone()).size(12.5).color(color)).truncate(),
+        );
+    });
+    Some(text)
+}
+
 /// 卡片标题：3px 蓝色 accent bar + 标题（Python 版样式）。
 fn card_title(ui: &mut egui::Ui, text: &str) {
     ui.horizontal(|ui| {
@@ -498,10 +639,6 @@ fn of_status_line(strings: &Strings, status: &OfStatus) -> (String, egui::Color3
 /// 溢出并把下方依赖 `available_width` 撑满的卡片顶到窗口右缘（历史 bug）。
 fn twin_button_width(available: f32, gap: f32, item_spacing: f32) -> f32 {
     ((available - gap - item_spacing) / 2.0).max(150.0)
-}
-/// 版本信息行：整行单 label（效仿 Python 纯文本，非胶囊标签）。
-fn version_line(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
-    ui.label(egui::RichText::new(text).size(12.5).color(color));
 }
 
 
@@ -1799,149 +1936,30 @@ impl App {
         ui.add_space(10.0);
     }
 
-    fn card3(&mut self, ui: &mut egui::Ui) {
-        card_frame().show(ui, |ui| {
-            ui.set_width(ui.available_width()); // 卡片撑满窗口宽度
-            card_title(ui, self.strings.card3_title);
-            ui.add_space(10.0);
-
-            // 本地版本行：v + 版本 / 已本地就绪 (未记录版本) / 未下载 (dlls 文件夹缺失文件)。
-            let dll_dir = paths::resolver().effective_dll_dir();
-            let all_local_exist = dll::TARGET_DLLS.iter().all(|d| dll_dir.join(d).is_file());
-            let (local_text, local_color) = match &self.local_version {
-                Some(v) => (
-                    format!(
-                        "{}v{}",
-                        self.strings.local_version,
-                        v.trim_start_matches('v')
-                    ),
-                    TEXT_INK,
-                ),
-                None if all_local_exist => (
-                    format!(
-                        "{}{}",
-                        self.strings.local_version, self.strings.local_ver_ready_no_record
-                    ),
-                    TEXT_SUB,
-                ),
-                None => (
-                    format!(
-                        "{}{}",
-                        self.strings.local_version, self.strings.local_ver_missing
-                    ),
-                    TEXT_WEAK,
-                ),
-            };
-            version_line(ui, &local_text, local_color);
-            ui.add_space(6.0);
-
-            // 线上版本行：未知 / 正在检查更新 / v+版本+后缀 / 检查失败。
-            let prefix = self.strings.online_version;
-            let (online_text, online_color) = match &self.update_state {
-                UpdateState::Idle => (format!("{}{}", prefix, self.strings.unknown), TEXT_SUB),
-                UpdateState::Checking => (format!("{}{}", prefix, self.strings.checking), TEXT_SUB),
-                UpdateState::Checked(Ok(info)) => {
-                    let local = self.local_version.as_deref().unwrap_or("");
-                    let suffix = if local == info.version {
-                        self.strings.up_to_date
-                    } else {
-                        self.strings.new_version
-                    };
-                    (format!("{}v{} {}", prefix, info.version, suffix), TEXT_SUB)
-                }
-                UpdateState::Checked(Err(e)) => (
-                    format!(
-                        "{}{} ({})",
-                        prefix,
-                        self.strings.online_check_fail,
-                        self.strings.update_error(e),
-                    ),
-                    ERR_RED,
-                ),
-            };
-            version_line(ui, &online_text, online_color);
-            ui.add_space(14.0);
-
-            let ctx = ui.ctx().clone();
-            let mut do_check = false;
-            let mut do_download: Option<OnlineInfo> = None;
-
-            // 先只收集按钮意图，避免借用冲突。
-            ui.horizontal(|ui| {
-                if styled_button(
-                    ui,
-                    self.strings.btn_check_update,
-                    ButtonStyle::Secondary,
-                    egui::vec2(96.0, 32.0),
-                    !self.busy,
-                )
-                .clicked()
-                {
-                    do_check = true;
-                }
-
-                if let UpdateState::Checked(Ok(info)) = &self.update_state {
-                    let local = self.local_version.as_deref().unwrap_or("");
-                    if info.version != local
-                        && !info.version.is_empty()
-                        && styled_button(
-                            ui,
-                            self.strings.btn_download_and_extract,
-                            ButtonStyle::Primary,
-                            egui::vec2(150.0, 32.0),
-                            !self.busy,
-                        )
-                        .clicked()
-                    {
-                        do_download = Some(info.clone());
-                    }
-                }
-            });
-
-            if do_check {
-                self.check_update(&ctx);
-            }
-            if let Some(info) = do_download {
-                self.download_update(&ctx, info);
-            }
+    /// 底部状态栏（T6 AC3）：左 notice / 右本地版本 + 更新按钮（内联更新，不弹窗不拉起卡片）。
+    fn status_bar(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let dll_dir = paths::resolver().effective_dll_dir();
+        let all_local_exist = dll::TARGET_DLLS.iter().all(|d| dll_dir.join(d).is_file());
+        let view = StatusBarView {
+            strings: &self.strings,
+            local_version: self.local_version.as_deref(),
+            all_local_exist,
+            update_state: &self.update_state,
+            busy: self.busy,
+            busy_kind: self.busy_kind,
+            notice: self.notice.as_ref(),
+        };
+        let mut actions = StatusBarActions::default();
+        ui.horizontal(|ui| {
+            let _ = status_bar_notice(ui, &view);
+            let _ = status_bar_right(ui, &view, &mut actions);
         });
-        ui.add_space(10.0);
-    }
-
-    /// 最近一次结果提示 → 当前语言渲染（切换语言后无需重建 notice，逐帧取当前 strings）。
-    fn notice_text(&self) -> Option<(bool, String)> {
-        self.notice
-            .as_ref()
-            .map(|n| render_notice(&self.strings, self.local_version.as_deref(), n))
-    }
-
-    fn notice_bar(&mut self, ui: &mut egui::Ui) {
-        // busy / 成功改中性文字；错误保留红色（kill-ai-slop：收敛语义三连）。
-        if let Some(kind) = self.busy_kind {
-            ui.horizontal(|ui| {
-                let (rect, _) = ui.allocate_exact_size(egui::vec2(7.0, 7.0), egui::Sense::hover());
-                ui.painter().circle_filled(rect.center(), 3.5, ACCENT);
-                ui.add_space(6.0);
-                ui.label(
-                    egui::RichText::new(self.strings.busy_label(kind))
-                        .size(12.5)
-                        .color(TEXT_WEAK),
-                );
-            });
-            return;
+        if actions.check {
+            self.check_update(&ctx);
         }
-        if let Some((ok, text)) = self.notice_text() {
-            let (color, dot_color) = if ok {
-                (TEXT_INK, DOT_RUNNING)
-            } else {
-                (ERR_RED, ERR_RED)
-            };
-            ui.horizontal(|ui| {
-                let (rect, _) = ui.allocate_exact_size(egui::vec2(7.0, 7.0), egui::Sense::hover());
-                ui.painter().circle_filled(rect.center(), 3.5, dot_color);
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new(text).size(12.5).color(color));
-            });
+        if let Some(info) = actions.download {
+            self.download_update(&ctx, info);
         }
     }
 }
@@ -2004,8 +2022,7 @@ impl eframe::App for App {
             self.top_bar(ui);
             self.card1(ui);
             self.patch_console(ui);
-            self.card3(ui);
-            self.notice_bar(ui);
+            self.status_bar(ui);
 
             // 用布局游标测内容底部（min_rect 被 CentralPanel 撑满，不可用）。
             content_h = ui.cursor().top();
@@ -2594,6 +2611,215 @@ mod tests {
         });
         full.textures_delta.clear();
         assert!(!full.shapes.is_empty(), "三态徽章渲染无图形产出");
+    }
+
+    // ---- 底部状态栏（T6 #13）----
+
+    fn update_info(version: &str) -> OnlineInfo {
+        OnlineInfo {
+            version: version.to_string(),
+            zip_url: "https://x/z.zip".into(),
+        }
+    }
+
+    /// 构造状态栏渲染视图（测试样板）。
+    fn status_view<'a>(
+        strings: &'a Strings,
+        local_version: Option<&'a str>,
+        all_local_exist: bool,
+        update_state: &'a UpdateState,
+        busy: bool,
+        busy_kind: Option<BusyKind>,
+        notice: Option<&'a Notice>,
+    ) -> StatusBarView<'a> {
+        StatusBarView {
+            strings,
+            local_version,
+            all_local_exist,
+            update_state,
+            busy,
+            busy_kind,
+            notice,
+        }
+    }
+
+    /// 无头渲染状态栏右侧一帧（不点击），返回 (版本 label, 按钮) 响应。
+    fn render_status_right(
+        ctx: &egui::Context,
+        raw: &egui::RawInput,
+        view: &StatusBarView<'_>,
+    ) -> (egui::Response, egui::Response) {
+        let mut out = None;
+        let mut full = ctx.run_ui(raw.clone(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let mut actions = StatusBarActions::default();
+                out = Some(status_bar_right(ui, view, &mut actions));
+                assert!(
+                    !actions.check && actions.download.is_none(),
+                    "无点击帧不应产生更新意图"
+                );
+            });
+        });
+        full.textures_delta.clear();
+        out.unwrap()
+    }
+
+    /// 点击状态栏按钮（帧 2），返回产生的更新意图。
+    fn click_status_button(
+        ctx: &egui::Context,
+        raw: &egui::RawInput,
+        view: &StatusBarView<'_>,
+        btn: egui::Response,
+    ) -> StatusBarActions {
+        let mut actions = StatusBarActions::default();
+        let mut click = raw.clone();
+        click_at(&mut click, btn.rect.center());
+        let mut full = ctx.run_ui(click, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let _ = status_bar_right(ui, view, &mut actions);
+            });
+        });
+        full.textures_delta.clear();
+        actions
+    }
+
+    /// AC3：各更新态按钮行为——检查更新 / 立即更新 / busy 禁用 / 下载中禁用。
+    #[test]
+    fn status_bar_update_state_buttons() {
+        let ctx = egui::Context::default();
+        let raw = headless_raw();
+        let zh = Strings::new(Lang::Zh);
+
+        // Idle：检查更新。
+        let idle = UpdateState::Idle;
+        let view = status_view(&zh, Some("1.4.8"), true, &idle, false, None, None);
+        let (_, btn) = render_status_right(&ctx, &raw, &view);
+        let a = click_status_button(&ctx, &raw, &view, btn);
+        assert!(a.check && a.download.is_none());
+
+        // 已检查且本地最新（同版本）：仍为检查更新。
+        let state = UpdateState::Checked(Ok(update_info("1.4.8")));
+        let view = status_view(&zh, Some("1.4.8"), true, &state, false, None, None);
+        let (_, btn) = render_status_right(&ctx, &raw, &view);
+        let a = click_status_button(&ctx, &raw, &view, btn);
+        assert!(a.check && a.download.is_none(), "同版本应保持检查更新");
+
+        // 已检查且可更新（线上更新）：立即更新。
+        let state = UpdateState::Checked(Ok(update_info("1.4.9")));
+        let view = status_view(&zh, Some("1.4.8"), true, &state, false, None, None);
+        let (_, btn) = render_status_right(&ctx, &raw, &view);
+        let a = click_status_button(&ctx, &raw, &view, btn);
+        assert!(!a.check && a.download.is_some(), "可更新应触发立即更新");
+        assert_eq!(a.download.unwrap().version, "1.4.9");
+
+        // 检查失败：仍为检查更新。
+        let state = UpdateState::Checked(Err(UpdateError::Network("t".into())));
+        let view = status_view(&zh, Some("1.4.8"), true, &state, false, None, None);
+        let (_, btn) = render_status_right(&ctx, &raw, &view);
+        let a = click_status_button(&ctx, &raw, &view, btn);
+        assert!(a.check && a.download.is_none());
+
+        // busy（如检查中）：按钮禁用，点击无意图。
+        let checking = UpdateState::Checking;
+        let view = status_view(
+            &zh,
+            Some("1.4.8"),
+            true,
+            &checking,
+            true,
+            Some(BusyKind::Checking),
+            None,
+        );
+        let (_, btn) = render_status_right(&ctx, &raw, &view);
+        let a = click_status_button(&ctx, &raw, &view, btn);
+        assert!(!a.check && a.download.is_none(), "busy 时按钮应禁用");
+
+        // 下载中：立即更新按钮原地进入禁用态，点击无意图。
+        let state = UpdateState::Checked(Ok(update_info("1.4.9")));
+        let view = status_view(
+            &zh,
+            Some("1.4.8"),
+            true,
+            &state,
+            true,
+            Some(BusyKind::Downloading),
+            None,
+        );
+        let (_, btn) = render_status_right(&ctx, &raw, &view);
+        let a = click_status_button(&ctx, &raw, &view, btn);
+        assert!(!a.check && a.download.is_none(), "下载中按钮应禁用");
+    }
+
+    /// AC3：本地版本展示文本三态（有版本 / 已就绪未记录 / 缺失 DLL）。
+    #[test]
+    fn local_version_text_variants() {
+        let zh = Strings::new(Lang::Zh);
+        let (text, _) = local_version_text(&zh, Some("1.4.8"), true);
+        assert_eq!(text, format!("{}v1.4.8", zh.local_version));
+        let (text, _) = local_version_text(&zh, None, true);
+        assert_eq!(
+            text,
+            format!("{}{}", zh.local_version, zh.local_ver_ready_no_record)
+        );
+        let (text, _) = local_version_text(&zh, None, false);
+        assert_eq!(
+            text,
+            format!("{}{}", zh.local_version, zh.local_ver_missing)
+        );
+    }
+
+    /// AC3：左侧提示——busy 显示忙碌文案；结果显示最近结果；均无 → 不渲染。
+    #[test]
+    fn status_bar_notice_renders_busy_or_result() {
+        let ctx = egui::Context::default();
+        let raw = headless_raw();
+        let zh = Strings::new(Lang::Zh);
+
+        // busy：忙碌文案。
+        let downloading = BusyKind::Downloading;
+        let idle = UpdateState::Idle;
+        let view = status_view(
+            &zh,
+            Some("1.4.8"),
+            true,
+            &idle,
+            true,
+            Some(downloading),
+            None,
+        );
+        let mut text = None;
+        let mut full = ctx.run_ui(raw.clone(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                text = status_bar_notice(ui, &view);
+            });
+        });
+        full.textures_delta.clear();
+        assert_eq!(text.as_deref(), Some(zh.busy_downloading));
+
+        // 结果：最近一次结果。
+        let notice = Notice::WorkflowDone(Action::Launch, Ok(()));
+        let idle = UpdateState::Idle;
+        let view = status_view(&zh, Some("1.4.8"), true, &idle, false, None, Some(&notice));
+        let mut text = None;
+        let mut full = ctx.run_ui(raw.clone(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                text = status_bar_notice(ui, &view);
+            });
+        });
+        full.textures_delta.clear();
+        assert_eq!(text.as_deref(), Some(zh.ok_launched));
+
+        // 均无 → None。
+        let idle = UpdateState::Idle;
+        let view = status_view(&zh, Some("1.4.8"), true, &idle, false, None, None);
+        let mut text = Some("x".to_string());
+        let mut full = ctx.run_ui(raw, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                text = status_bar_notice(ui, &view);
+            });
+        });
+        full.textures_delta.clear();
+        assert!(text.is_none());
     }
     // ---- Steam 核心兼容性（T5）----
 
