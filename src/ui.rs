@@ -54,9 +54,15 @@ const BADGE_AMBER: egui::Color32 = egui::Color32::from_rgb(0xFE, 0xF3, 0xC7);
 const BADGE_RED: egui::Color32 = egui::Color32::from_rgb(0xFE, 0xE2, 0xE2);
 const BADGE_GRAY: egui::Color32 = egui::Color32::from_rgb(0xF1, 0xF5, 0xF9);
 
-/// 设置弹窗 Footer 预留高度（分隔线 + 按钮行 + 间距 + 边距）。
-/// 滚动区高度 = 当前可用高度 − 此预留，随窗口缩放自适应（SPEC AC5：根除固定魔法常数）。
-const FOOTER_RESERVE: f32 = 56.0;
+/// 设置弹窗垂直固定占用（Modal 内标题/页签/状态行/Footer/窗口边距的估计）。
+/// 编辑区高度锚定到「视口高度 − 此预留」，而非 Modal 剩余可用高度——
+/// 后者与自身内容形成反馈环：Modal(Area) 高度 = 内容高度，内容含编辑区，
+/// 编辑区又按可用高度反推，每帧 −10px 收缩直至触底（弹窗抖动、编辑区
+/// 被压到最小、Footer 按钮位置漂移导致无法关闭）。
+const SETTINGS_DIALOG_VERTICAL_RESERVE: f32 = 226.0;
+/// 编辑区高度下限/上限（防极小窗口出屏 / 超大窗口失控）。
+const SETTINGS_EDITOR_MIN_H: f32 = 120.0;
+const SETTINGS_EDITOR_MAX_H: f32 = 560.0;
 fn install_theme(ctx: &egui::Context) {
     let mut visuals = egui::Visuals::light();
     visuals.panel_fill = PANEL_BG;
@@ -1519,7 +1525,10 @@ impl App {
                     }
 
                     // 中间滚动：仅编辑器。
-                    let h_mid = (ui.available_height() - FOOTER_RESERVE).max(120.0);
+                    // 编辑区高度锚定视口（见 SETTINGS_DIALOG_VERTICAL_RESERVE 注释：
+                    // 用 available_height 会与 Modal 内容形成反馈环，每帧收缩触底）。
+                    let h_mid = (ui.ctx().viewport_rect().height() - SETTINGS_DIALOG_VERTICAL_RESERVE)
+                        .clamp(SETTINGS_EDITOR_MIN_H, SETTINGS_EDITOR_MAX_H);
                     let mut text_edit_id = None;
                     let editor = egui::ScrollArea::vertical()
                         .max_height(h_mid)
@@ -1591,8 +1600,9 @@ impl App {
                             ui.add_space(6.0);
                         }
 
-                        // 中间滚动：AppID 输入 + Lua 候选。
-                        let h_mid = (ui.available_height() - FOOTER_RESERVE).max(120.0);
+                        // 中间滚动：AppID 输入 + 候选（高度锚定视口，同 ConfigEditor 反馈环修复）。
+                        let h_mid = (ui.ctx().viewport_rect().height() - SETTINGS_DIALOG_VERTICAL_RESERVE)
+                            .clamp(SETTINGS_EDITOR_MIN_H, SETTINGS_EDITOR_MAX_H);
                         egui::ScrollArea::vertical().max_height(h_mid).show(ui, |ui| {
                             ui.horizontal_wrapped(|ui| {
                                 ui.label(self.strings.of_appid_label);
@@ -3373,5 +3383,95 @@ mod tests {
         });
         full.textures_delta.clear();
         assert_eq!(picked, Some(480));
+    }
+
+    // ---- 回归：设置弹窗编辑区高度锚定视口，布局跨帧稳定（诊断反馈环修复） ----
+
+    /// 复刻设置弹窗 ConfigEditor 页签的 Modal 结构，多帧渲染（含页签切换）
+    /// 断言编辑区高度（h_mid）零漂移且 Footer「关闭」按钮始终在视口内。
+    ///
+    /// 背景：h_mid 原按 `available_height` 计算，而 Modal(Area) 高度 = 内容高度
+    /// （内容含编辑区）→ 每帧 −10px 收缩触底，编辑区被压到最小、按钮位置漂移
+    /// 导致无法点击关闭。修复后 h_mid 锚定视口高度（稳定基准），不再反馈。
+    #[test]
+    fn cfg_editor_layout_stable_across_frames() {
+        let ctx = egui::Context::default();
+        let mut text = (1..40)
+            .map(|i| format!("key_{i} = \"value_{i}\""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let raw = headless_raw();
+        let expected_h_mid = (520.0 - SETTINGS_DIALOG_VERTICAL_RESERVE)
+            .clamp(SETTINGS_EDITOR_MIN_H, SETTINGS_EDITOR_MAX_H);
+        let mut prev_close_rect: Option<egui::Rect> = None;
+        let mut last_was_editor = false;
+        let mut stable_frames = 0u32;
+        for frame in 0..60 {
+            let mut h_mid = 0.0f32;
+            let mut close_btn_rect: Option<egui::Rect> = None;
+            // 帧 20-24 模拟切到其他页签（编辑器不渲染）。
+            let editor_tab = !(20..25).contains(&frame);
+            let mut full = ctx.run_ui(raw.clone(), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    egui::Modal::new(egui::Id::new("settings_dialog")).show(ui.ctx(), |ui| {
+                        ui.set_width(560.0);
+                        ui.heading("设置");
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            let _ = ui.selectable_label(true, "配置编辑器");
+                        });
+                        ui.add_space(6.0);
+                        ui.separator();
+                        ui.add_space(6.0);
+                        if editor_tab {
+                            h_mid = (ui.ctx().viewport_rect().height()
+                                - SETTINGS_DIALOG_VERTICAL_RESERVE)
+                                .clamp(SETTINGS_EDITOR_MIN_H, SETTINGS_EDITOR_MAX_H);
+                            let _ = egui::ScrollArea::vertical()
+                                .id_salt("probe_scroll")
+                                .max_height(h_mid)
+                                .show(ui, |ui| {
+                                    ui.add_sized(
+                                        egui::vec2(ui.available_width(), (h_mid - 20.0).max(100.0)),
+                                        egui::TextEdit::multiline(&mut text)
+                                            .id_salt("settings_cfg_text")
+                                            .code_editor()
+                                            .desired_width(f32::INFINITY),
+                                    );
+                                });
+                        } else {
+                            ui.label("其他页签内容");
+                        }
+                        ui.add_space(8.0);
+                        ui.separator();
+                        ui.add_space(8.0);
+                        ui.horizontal(|ui| {
+                            let close = ui.button("关闭");
+                            close_btn_rect = Some(close.rect);
+                        });
+                    });
+                });
+            });
+            full.textures_delta.clear();
+            // h_mid 必须等于视口锚定公式值（而非每帧收缩）。
+            if editor_tab {
+                assert_eq!(h_mid, expected_h_mid, "frame {frame}: h_mid 应为视口锚定值");
+                // 布局收敛（连续 3 帧按钮位置相同）后，位置必须保持稳定
+                // （修复前每帧收缩，永不收敛 → 用户点不到关闭按钮）。
+                if last_was_editor && stable_frames >= 3 {
+                    assert_eq!(
+                        close_btn_rect, prev_close_rect,
+                        "frame {frame}: 布局收敛后关闭按钮位置漂移（无法点击）"
+                    );
+                }
+                if last_was_editor && close_btn_rect == prev_close_rect {
+                    stable_frames += 1;
+                } else {
+                    stable_frames = 0;
+                }
+                prev_close_rect = close_btn_rect;
+            }
+            last_was_editor = editor_tab;
+        }
     }
 }
