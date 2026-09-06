@@ -10,17 +10,6 @@ pub enum Lang {
     En,
 }
 
-impl Lang {
-
-    /// 手动切换按钮上的文案：中文界面显示 "EN"，英文界面显示 "中文"。
-    pub fn toggle_label(self) -> &'static str {
-        match self {
-            Lang::Zh => "EN",
-            Lang::En => "中文",
-        }
-    }
-}
-
 /// 检测系统语言：`GetUserDefaultUILanguage` 返回 0x0804/0x1004（简体中文）→ 中文，否则英文。
 pub fn detect_system_lang() -> Lang {
     #[cfg(windows)]
@@ -71,13 +60,6 @@ impl LanguagePreference {
         }
     }
 
-    /// 顶栏切换语义（T4 移除前兼容）：从当前有效语言切到对侧并显式化（不再跟随系统）。
-    pub fn toggled_from(current: Lang) -> Self {
-        match current {
-            Lang::Zh => Self::En,
-            Lang::En => Self::Zh,
-        }
-    }
 }
 
 /// 全部界面文案，按语言取值。
@@ -138,7 +120,10 @@ pub struct Strings {
     pub btn_uninstall: &'static str,
     /// 托盘菜单「最小化时自动隐藏到托盘」勾选项。
     pub tray_minimize: &'static str,
+    /// 顶栏「设置」按钮（⚙ 图标，28×28 固定方形；悬停提示见 settings_title，双语同形）。
     pub btn_settings: &'static str,
+    /// 顶栏 GitHub 外链按钮（仓库主页，双语同文案）。
+    pub btn_github: &'static str,
     pub settings_title: &'static str,
     /// 设置对话框「配置编辑器」页签标签（OnlineFix 页签复用 of_title）。
     pub settings_tab_config: &'static str,
@@ -342,7 +327,8 @@ impl Strings {
             tray_quit: "退出",
             btn_uninstall: "卸载补丁",
             tray_minimize: "最小化时自动隐藏到托盘",
-            btn_settings: "设置",
+            btn_settings: "⚙",
+            btn_github: "GitHub",
             settings_title: "设置",
             settings_tab_config: "配置编辑器",
             settings_tab_general: "常规偏好",
@@ -456,7 +442,8 @@ impl Strings {
             tray_quit: "Quit",
             btn_uninstall: "Remove Patch",
             tray_minimize: "Minimize to tray automatically",
-            btn_settings: "Settings",
+            btn_settings: "⚙",
+            btn_github: "GitHub",
             settings_title: "Settings",
             settings_tab_config: "Config Editor",
             settings_tab_general: "General",
@@ -622,17 +609,5 @@ mod tests {
         assert_eq!(LanguagePreference::En.resolve(), Lang::En);
         // Auto → 系统检测（与 detect_system_lang 一致）。
         assert_eq!(LanguagePreference::Auto.resolve(), detect_system_lang());
-    }
-
-    #[test]
-    fn language_preference_toggled_from_switches_to_opposite() {
-        assert_eq!(
-            LanguagePreference::toggled_from(Lang::Zh),
-            LanguagePreference::En
-        );
-        assert_eq!(
-            LanguagePreference::toggled_from(Lang::En),
-            LanguagePreference::Zh
-        );
     }
 }

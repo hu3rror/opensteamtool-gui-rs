@@ -9,6 +9,7 @@ use egui::Frame;
 
 use crate::compat;
 use crate::config_editor;
+use crate::external;
 use crate::onlinefix;
 use crate::dll::{self, DeployStatus};
 use crate::paths;
@@ -121,7 +122,7 @@ enum ButtonStyle {
     Primary,
     /// 次灰按钮（检查更新/浏览/取消）。
     Secondary,
-    /// 语言切换按钮（白底蓝字，固定小尺寸）。
+    /// 顶栏入口按钮（GitHub 外链 / 设置 ⚙，白底蓝字，固定小尺寸）。
     Lang,
 }
 
@@ -189,6 +190,28 @@ fn styled_button(
     let font_id = egui::FontId::proportional(13.0);
     let text_w = ui.painter().layout_no_wrap(text.to_owned(), font_id, style.fg).size().x;
     let size = egui::vec2(size.x.max(text_w + 28.0), size.y);
+    paint_py_button(ui, text, style, size, enabled)
+}
+
+/// 固定尺寸版（不随文本宽度自适应）：T4 设置按钮 ⚙ 恒为 28×28 正方形。
+fn styled_fixed_button(
+    ui: &mut egui::Ui,
+    text: &str,
+    style: ButtonStyle,
+    size: egui::Vec2,
+    enabled: bool,
+) -> egui::Response {
+    paint_py_button(ui, text, style.style(), size, enabled)
+}
+
+/// Python 风格按钮绘制核心：按给定尺寸画底/描边/文字（无自适应撑宽）。
+fn paint_py_button(
+    ui: &mut egui::Ui,
+    text: &str,
+    style: PyStyle,
+    size: egui::Vec2,
+    enabled: bool,
+) -> egui::Response {
     let sense = if enabled {
         egui::Sense::click()
     } else {
@@ -221,6 +244,60 @@ fn styled_button(
         );
     }
     response
+}
+
+/// 顶栏右侧按钮组（T4 AC1）：`[ GitHub ]` 外链 + `[ ⚙ ]` 设置（28×28 固定方形，无布局抖动）。
+/// 语言切换按钮已移除（入口在常规偏好页，SPEC §8.4）。
+/// RTL 布局：设置位于最右；返回 (GitHub, 设置) 两个按钮响应（测试据此定位点击坐标）。
+fn top_bar_buttons(ui: &mut egui::Ui, strings: &Strings) -> (egui::Response, egui::Response) {
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let settings = styled_fixed_button(
+            ui,
+            strings.btn_settings,
+            ButtonStyle::Lang,
+            egui::vec2(28.0, 28.0),
+            true,
+        );
+        ui.add_space(8.0);
+        let github = styled_button(
+            ui,
+            strings.btn_github,
+            ButtonStyle::Lang,
+            egui::vec2(28.0, 28.0),
+            true,
+        );
+        (github, settings)
+    })
+    .inner
+}
+
+/// 顶栏（T4 AC1）：标题 + 右侧按钮组。GitHub 点击经分派器调起仓库 URL；
+/// 设置点击置位 `open_settings`（由调用方执行打开逻辑）。
+/// 返回两个按钮响应（测试据此定位点击坐标）。
+fn render_top_bar(
+    ui: &mut egui::Ui,
+    strings: &Strings,
+    dispatcher: &dyn external::ExternalSystemDispatcher,
+    open_settings: &mut bool,
+) -> (egui::Response, egui::Response) {
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(strings.app_title)
+                .size(16.0)
+                .strong()
+                .color(TEXT_INK),
+        );
+        let (github, settings) = top_bar_buttons(ui, strings);
+        if github.clicked() {
+            let _ = dispatcher.open_browser_url(external::GITHUB_REPO_URL);
+        }
+        let settings = settings.on_hover_text(strings.settings_title);
+        if settings.clicked() {
+            *open_settings = true;
+        }
+        (github, settings)
+    })
+    .inner
 }
 
 /// 卡片标题：3px 蓝色 accent bar + 标题（Python 版样式）。
@@ -613,6 +690,8 @@ pub struct App {
     ctx: egui::Context,
     /// Windows 系统托盘（可能创建失败）。
     tray: Option<Tray>,
+    /// 外部系统分派器（T4：GitHub 外链经此调起默认浏览器；测试注入 mock）。
+    dispatcher: Box<dyn external::ExternalSystemDispatcher>,
     /// 窗口当前是否可见（托盘显隐切换用）。
     window_visible: bool,
     /// 首次帧后按内容高度自适应窗口（消除底部大留白）。
@@ -747,6 +826,7 @@ impl App {
             rx,
             ctx: cc.egui_ctx.clone(),
             tray,
+            dispatcher: Box::new(external::CmdStartDispatcher),
             window_visible: true,
             autosized: false,
             pending_focus: false,
@@ -967,18 +1047,6 @@ impl App {
         });
     }
 
-    fn toggle_lang(&mut self) {
-        // 三态兼容（T4 移除顶栏按钮前）：切到当前有效语言的对侧并显式化（不再跟随系统），
-        // 变更即时写盘持久化（SPEC §8.6 AC4）。
-        let pref = LanguagePreference::toggled_from(self.lang);
-        self.gui_config.language = pref;
-        self.lang = pref.resolve();
-        self.strings = Strings::new(self.lang);
-        self.ctx.send_viewport_cmd(egui::ViewportCommand::Title(
-            self.strings.window_title.to_owned(),
-        ));
-        let _ = self.gui_config.save(&paths::resolver().config_path());
-    }
 
     fn check_update(&mut self, ctx: &egui::Context) {
         if self.busy {
@@ -1324,23 +1392,16 @@ impl App {
     // ---------- UI ----------
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new(self.strings.app_title)
-                    .size(16.0)
-                    .strong()
-                    .color(TEXT_INK),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if styled_button(ui, self.lang.toggle_label(), ButtonStyle::Lang, egui::vec2(56.0, 26.0), true).clicked() {
-                    self.toggle_lang();
-                }
-                // 设置按钮（RTL 布局中位于语言按钮左侧；样式与语言按钮一致）。
-                if styled_button(ui, self.strings.btn_settings, ButtonStyle::Lang, egui::vec2(56.0, 26.0), true).clicked() {
-                    self.open_settings();
-                }
-            });
-        });
+        let mut open_settings = false;
+        let _ = render_top_bar(
+            ui,
+            &self.strings,
+            self.dispatcher.as_ref(),
+            &mut open_settings,
+        );
+        if open_settings {
+            self.open_settings();
+        }
         ui.add_space(6.0);
     }
 
@@ -2089,6 +2150,188 @@ mod tests {
             long > short_en,
             "Download & Extract New Version 应比 Check Update 更宽，实际 {long}px"
         );
+    }
+
+    // ---- 顶栏（T4 #10）----
+
+    /// 测试用分派器：记录调起的 URL，不真正拉起浏览器。
+    #[derive(Default)]
+    struct RecordingDispatcher {
+        urls: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl RecordingDispatcher {
+        fn urls(&self) -> Vec<String> {
+            self.urls.lock().unwrap().clone()
+        }
+    }
+
+    impl external::ExternalSystemDispatcher for RecordingDispatcher {
+        fn open_browser_url(&self, url: &str) -> Result<(), String> {
+            self.urls.lock().unwrap().push(url.to_owned());
+            Ok(())
+        }
+    }
+
+    fn headless_raw() -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(640.0, 520.0),
+            )),
+            ..Default::default()
+        }
+    }
+
+    /// 向 raw input 注入一次主键点击（按下+抬起同帧；点击命中基于上一帧 widget 矩形）。
+    fn click_at(raw: &mut egui::RawInput, pos: egui::Pos2) {
+        let modifiers = egui::Modifiers::default();
+        raw.events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers,
+        });
+        raw.events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers,
+        });
+    }
+
+    /// 无头渲染顶栏一帧（不点击），返回 (github, settings) 按钮响应。
+    fn render_top_bar_headless(
+        ctx: &egui::Context,
+        raw: &egui::RawInput,
+        strings: &Strings,
+        mock: &RecordingDispatcher,
+    ) -> (egui::Response, egui::Response) {
+        let mut out = None;
+        let mut full = ctx.run_ui(raw.clone(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let mut open_settings = false;
+                out = Some(render_top_bar(ui, strings, mock, &mut open_settings));
+                assert!(!open_settings, "无点击帧不应产生设置意图");
+            });
+        });
+        full.textures_delta.clear();
+        out.unwrap()
+    }
+
+    /// AC1：设置按钮恒为 28×28 正方形；中英文与重绘帧之间位置尺寸零抖动。
+    #[test]
+    fn settings_button_fixed_28x28_no_layout_jitter() {
+        let ctx = egui::Context::default();
+        let raw = headless_raw();
+        let mock = RecordingDispatcher::default();
+
+        let (github_zh, settings_zh) =
+            render_top_bar_headless(&ctx, &raw, &Strings::new(Lang::Zh), &mock);
+        let (github_en, settings_en) =
+            render_top_bar_headless(&ctx, &raw, &Strings::new(Lang::En), &mock);
+        let (_, settings_re) = render_top_bar_headless(&ctx, &raw, &Strings::new(Lang::Zh), &mock);
+
+        // 设置按钮恒为 28×28 正方形。
+        assert_eq!(settings_zh.rect.width(), 28.0, "设置按钮宽度应为 28");
+        assert_eq!(settings_zh.rect.height(), 28.0, "设置按钮高度应为 28");
+        // 语言切换（标题长度不同）与重绘均不引起抖动。
+        assert_eq!(settings_en.rect, settings_zh.rect, "语言切换不得引起设置按钮位置抖动");
+        assert_eq!(settings_re.rect, settings_zh.rect, "重绘帧不得引起设置按钮位置抖动");
+        // 布局：设置位于最右，GitHub 在其左侧。
+        assert!(
+            settings_zh.rect.min.x >= github_zh.rect.max.x,
+            "设置按钮应位于 GitHub 按钮右侧"
+        );
+        assert!(
+            github_en.rect.width() > 28.0,
+            "GitHub 文本按钮应自适应宽于方形图标"
+        );
+    }
+
+    /// AC1：点击 GitHub 经分派器调起仓库 URL（mock 记录；不真正拉起浏览器）。
+    #[test]
+    fn github_button_click_dispatches_repo_url() {
+        let ctx = egui::Context::default();
+        let raw = headless_raw();
+        let mock = RecordingDispatcher::default();
+
+        // 帧 1：定位 GitHub 按钮（同时注册 widget 矩形，供下一帧点击命中）。
+        let (github, _) = render_top_bar_headless(&ctx, &raw, &Strings::new(Lang::Zh), &mock);
+        assert!(mock.urls().is_empty(), "无点击不应触发分派");
+        let github_rect = github.rect;
+
+        // 帧 2：点击 GitHub → 经分派器调起仓库 URL。
+        let mut click = raw.clone();
+        click_at(&mut click, github_rect.center());
+        let mut open_settings = false;
+        let mut full = ctx.run_ui(click, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let _ = render_top_bar(ui, &Strings::new(Lang::Zh), &mock, &mut open_settings);
+            });
+        });
+        full.textures_delta.clear();
+        assert_eq!(mock.urls(), vec![external::GITHUB_REPO_URL.to_string()]);
+        assert!(!open_settings, "GitHub 点击不应触发设置");
+    }
+
+    /// AC1：点击 ⚙ 设置按钮置位打开意图（分派器不被调用）。
+    #[test]
+    fn settings_button_click_sets_open_intent() {
+        let ctx = egui::Context::default();
+        let raw = headless_raw();
+        let mock = RecordingDispatcher::default();
+
+        let (_, settings) = render_top_bar_headless(&ctx, &raw, &Strings::new(Lang::Zh), &mock);
+        let settings_rect = settings.rect;
+
+        let mut click = raw.clone();
+        click_at(&mut click, settings_rect.center());
+        let mut open_settings = false;
+        let mut full = ctx.run_ui(click, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let _ = render_top_bar(ui, &Strings::new(Lang::Zh), &mock, &mut open_settings);
+            });
+        });
+        full.textures_delta.clear();
+        assert!(open_settings, "点击设置应置位打开意图");
+        assert!(mock.urls().is_empty(), "设置点击不应触发浏览器分派");
+    }
+
+    /// AC1：设置按钮 ⚙ 字形必须可渲染（默认字体或 CJK 回退），否则顶栏出现豆腐块。
+    #[test]
+    fn gear_glyph_renderable_with_top_bar_fonts() {
+        // 默认字体（内置 NotoEmoji 等）应含 U+2699。
+        let defaults = egui::FontDefinitions::default();
+        let mut fonts =
+            egui::epaint::text::Fonts::new(egui::epaint::text::TextOptions::default(), defaults);
+        assert!(
+            fonts.has_glyph(&egui::FontId::proportional(13.0), '⚙'),
+            "egui 默认字体应含 ⚙ 字形"
+        );
+        // 注册 CJK 回退后仍可渲染（Windows 目标顶栏实际字体链）。
+        let Some(data) = read_system_cjk_font() else {
+            return; // 无系统字体的 CI 环境跳过（Windows 目标永不触发）。
+        };
+        let mut defs = egui::FontDefinitions::default();
+        defs.font_data
+            .insert("cjk-test".into(), std::sync::Arc::new(data));
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            defs.families.entry(family).or_default().push("cjk-test".into());
+        }
+        let mut fonts =
+            egui::epaint::text::Fonts::new(egui::epaint::text::TextOptions::default(), defs);
+        assert!(fonts.has_glyph(&egui::FontId::proportional(13.0), '⚙'));
+    }
+
+    /// AC1：顶栏词条——GitHub 双语同文案；设置按钮为 ⚙ 图标（固定方形前提）。
+    #[test]
+    fn top_bar_labels_github_and_gear_icon() {
+        for lang in [Lang::Zh, Lang::En] {
+            let s = Strings::new(lang);
+            assert_eq!(s.btn_github, "GitHub");
+            assert_eq!(s.btn_settings, "⚙");
+        }
     }
 
     // ---- Steam 核心兼容性（T5）----
