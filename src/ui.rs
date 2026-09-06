@@ -12,7 +12,8 @@ use crate::config_editor;
 use crate::onlinefix;
 use crate::dll::{self, DeployStatus};
 use crate::paths;
-use crate::i18n::{Lang, Strings};
+use crate::gui_config::GuiConfig;
+use crate::i18n::{Lang, LanguagePreference, Strings};
 use crate::process::{self, SteamEvent, SteamMonitor};
 use crate::settings::{ConfigEditError, ConfigEditorState, OfError, OfStatus, OnlineFixState};
 use crate::steam;
@@ -484,6 +485,8 @@ fn should_auto_precache(report: &compat::OverallHealthReport, precaching: bool) 
     !precaching && compat_summary(false, Some(report)) == CompatSummary::Online
 }
 pub struct App {
+    /// 全局偏好（gui_config.toml 持久化状态）。
+    gui_config: GuiConfig,
     lang: Lang,
     strings: Strings,
     steam_path: String,
@@ -594,7 +597,8 @@ impl App {
         install_cjk_font(&cc.egui_ctx);
         install_theme(&cc.egui_ctx);
         let (tx, rx) = mpsc::channel();
-        let lang = crate::i18n::detect_system_lang();
+        let gui_config = GuiConfig::load(&paths::resolver().config_path());
+        let lang = gui_config.language.resolve();
         let strings = Strings::new(lang);
         // 窗口标题随语言（zh: OpenSteamTool 一键管理工具 / en: OpenSteamTool Manager）。
         cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Title(
@@ -611,16 +615,19 @@ impl App {
         let steam_state = Arc::new(SteamState::new());
         let steam_monitor = SteamMonitor::new(&steam_state);
         let steam_running = steam_monitor.is_running();
+        let minimize_to_tray = gui_config.minimize_to_tray;
         let tray = Tray::new(
             crate::tray::load_icon(),
             strings.app_title,
             strings.tray_show,
             strings.tray_quit,
             strings.tray_minimize,
+            gui_config.minimize_to_tray,
         );
 
         let app = Self {
             lang,
+            gui_config,
             strings,
             steam_path,
             status,
@@ -640,7 +647,7 @@ impl App {
             window_visible: true,
             autosized: false,
             pending_focus: false,
-            minimize_to_tray: true,
+            minimize_to_tray,
             was_minimized: false,
             settings_open: false,
             cfg: ConfigEditorState::new(),
@@ -710,7 +717,11 @@ impl App {
                 TrayAction::Quit => {
                     self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
-                TrayAction::ToggleMinimizeToTray => self.minimize_to_tray = minimize_checked,
+                TrayAction::ToggleMinimizeToTray => {
+                    self.minimize_to_tray = minimize_checked;
+                    self.gui_config.minimize_to_tray = minimize_checked;
+                    let _ = self.gui_config.save(&paths::resolver().config_path());
+                }
             }
         }
     }
@@ -854,11 +865,16 @@ impl App {
     }
 
     fn toggle_lang(&mut self) {
-        self.lang = self.lang.toggle();
+        // 三态兼容（T4 移除顶栏按钮前）：切到当前有效语言的对侧并显式化（不再跟随系统），
+        // 变更即时写盘持久化（SPEC §8.6 AC4）。
+        let pref = LanguagePreference::toggled_from(self.lang);
+        self.gui_config.language = pref;
+        self.lang = pref.resolve();
         self.strings = Strings::new(self.lang);
         self.ctx.send_viewport_cmd(egui::ViewportCommand::Title(
             self.strings.window_title.to_owned(),
         ));
+        let _ = self.gui_config.save(&paths::resolver().config_path());
     }
 
     fn check_update(&mut self, ctx: &egui::Context) {

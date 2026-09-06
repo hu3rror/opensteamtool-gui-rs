@@ -60,8 +60,7 @@ pub trait PathResolver: Send + Sync {
     /// T2（GuiConfig 持久化）起消费；此前无 bin 调用者。
     #[allow(dead_code)]
     fn mode(&self) -> StorageMode;
-    /// GUI 用户偏好配置文件（统一命名 gui_config.toml）。T2 起消费。
-    #[allow(dead_code)]
+    /// GUI 用户偏好配置文件（统一命名 gui_config.toml）。
     fn config_path(&self) -> PathBuf;
     /// 临时验证缓存目录（verified.toml 所在目录）。
     fn cache_dir(&self) -> PathBuf;

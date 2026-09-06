@@ -11,12 +11,6 @@ pub enum Lang {
 }
 
 impl Lang {
-    pub fn toggle(self) -> Self {
-        match self {
-            Lang::Zh => Lang::En,
-            Lang::En => Lang::Zh,
-        }
-    }
 
     /// 手动切换按钮上的文案：中文界面显示 "EN"，英文界面显示 "中文"。
     pub fn toggle_label(self) -> &'static str {
@@ -38,6 +32,52 @@ pub fn detect_system_lang() -> Lang {
         }
     }
     Lang::En
+}
+
+/// 界面语言偏好（gui_config.toml 存储值；SPEC §8.3）。
+/// `Auto` = 跟随系统检测（即 `detect_system_lang` 的行为）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LanguagePreference {
+    Auto,
+    Zh,
+    En,
+}
+
+impl LanguagePreference {
+    /// 配置字符串（gui_config.toml 存储值）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Zh => "zh",
+            Self::En => "en",
+        }
+    }
+
+    /// 从配置字符串解析；未知值回退 Auto。
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "zh" => Self::Zh,
+            "en" => Self::En,
+            _ => Self::Auto,
+        }
+    }
+
+    /// 解析为渲染用语言：Auto → 系统检测。
+    pub fn resolve(self) -> Lang {
+        match self {
+            Self::Auto => detect_system_lang(),
+            Self::Zh => Lang::Zh,
+            Self::En => Lang::En,
+        }
+    }
+
+    /// 顶栏切换语义（T4 移除前兼容）：从当前有效语言切到对侧并显式化（不再跟随系统）。
+    pub fn toggled_from(current: Lang) -> Self {
+        match current {
+            Lang::Zh => Self::En,
+            Lang::En => Self::Zh,
+        }
+    }
 }
 
 /// 全部界面文案，按语言取值。
@@ -537,5 +577,38 @@ mod tests {
             assert_eq!(s.busy_label(BusyKind::Downloading), s.busy_downloading);
             assert_eq!(s.busy_label(BusyKind::ClosingSteam), s.busy_killing);
         }
+    }
+
+    #[test]
+    fn language_preference_parse_roundtrip() {
+        for pref in [
+            LanguagePreference::Auto,
+            LanguagePreference::Zh,
+            LanguagePreference::En,
+        ] {
+            assert_eq!(LanguagePreference::parse(pref.as_str()), pref);
+        }
+        assert_eq!(LanguagePreference::parse("fr"), LanguagePreference::Auto);
+        assert_eq!(LanguagePreference::parse(""), LanguagePreference::Auto);
+    }
+
+    #[test]
+    fn language_preference_resolve_maps_to_lang() {
+        assert_eq!(LanguagePreference::Zh.resolve(), Lang::Zh);
+        assert_eq!(LanguagePreference::En.resolve(), Lang::En);
+        // Auto → 系统检测（与 detect_system_lang 一致）。
+        assert_eq!(LanguagePreference::Auto.resolve(), detect_system_lang());
+    }
+
+    #[test]
+    fn language_preference_toggled_from_switches_to_opposite() {
+        assert_eq!(
+            LanguagePreference::toggled_from(Lang::Zh),
+            LanguagePreference::En
+        );
+        assert_eq!(
+            LanguagePreference::toggled_from(Lang::En),
+            LanguagePreference::Zh
+        );
     }
 }

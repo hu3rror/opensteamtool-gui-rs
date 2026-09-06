@@ -6,6 +6,7 @@ mod compat;
 mod config_editor;
 mod dll;
 mod fsutil;
+mod gui_config;
 mod i18n;
 mod onlinefix;
 mod paths;

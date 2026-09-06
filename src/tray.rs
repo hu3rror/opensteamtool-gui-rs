@@ -30,10 +30,11 @@ impl Tray {
         show_label: &str,
         quit_label: &str,
         minimize_label: &str,
+        minimize_checked: bool,
     ) -> Option<Self> {
         let show_item = MenuItem::new(show_label, true, None);
         let quit_item = MenuItem::new(quit_label, true, None);
-        let minimize_item = CheckMenuItem::new(minimize_label, true, true, None);
+        let minimize_item = CheckMenuItem::new(minimize_label, true, minimize_checked, None);
         let menu = Menu::new();
         menu.append(&show_item).ok()?;
         menu.append(&minimize_item).ok()?;
