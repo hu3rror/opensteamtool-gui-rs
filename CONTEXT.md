@@ -145,8 +145,13 @@ _Avoid_: 验证记录、信任列表
 _Avoid_: 卡片 2、操作区
 
 **当前生效游戏（Active OnlineFix Game）**:
-某账号 `localconfig.vdf` 中带 `-onlinefix` 启动选项的 AppID（业务约束：同一时间仅一个 OnlineFix 游戏可运行）；OnlineFix 预设页顶部以看板形式高亮展示，提供快捷停用。
+当前选中账号 `localconfig.vdf` 中带 `-onlinefix` 启动选项的 AppID（业务约束：同一时间仅一个 OnlineFix 游戏可运行）；OnlineFix 预设页顶部以看板形式高亮展示 AppID 与名称并提供快捷停用，进入预设页自动同步 AppID 输入框。
 _Avoid_: 生效项、激活游戏
+
+
+**候选项（Candidate）**:
+OnlineFix 预设页候选胶囊背后的 AppID + 本地名称映射（代码 `CandidateGame`，SPEC §8.3）：名称来自本地 `appmanifest_<appid>.acf` 解析，ACF 缺失/畸变时名称为空，展示回退纯数字；点击胶囊填充 AppID 输入框。
+_Avoid_: 候选列表、建议
 
 **常规偏好（General）**:
 设置对话框第一页签，管理工具自身全局偏好：界面语言（自动检测/简体中文/English）与「最小化至托盘」，持久化于 `gui_config.toml`。
@@ -179,3 +184,4 @@ _Avoid_: 系统模式、管理员模式
 
 - 存储双模判定在启动时进行（exe 同级可写 → 便携模式，否则安装模式）；「生效 DLL 目录」层叠优先：更新目录三个目标 DLL 齐全则优先，否则回退自带目录；部署/卸载/版本读取统一走生效目录。
 - 「最小化至托盘」与「自动隐身」是两类行为：前者用户手动最小化触发（常规偏好勾选项，持久化），后者 Steam 启动/退出联动（固定策略，无设置项）。
+- 生效游戏看板的「停用」与 Footer「停用」同指一操作（同一写入门闩与停用动作）；停用后看板即时消失，AppID 输入框保留用户输入不被覆盖。
