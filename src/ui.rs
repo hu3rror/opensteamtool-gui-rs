@@ -300,6 +300,130 @@ fn render_top_bar(
     .inner
 }
 
+/// 通用 pill 徽章：浅色底 + 圆角 + 状态图标/文字（对齐「兼容性徽章」样式先例）。
+fn pill_badge(ui: &mut egui::Ui, icon: &str, text: &str, fg: egui::Color32, bg: egui::Color32) {
+    egui::Frame::new()
+        .fill(bg)
+        .corner_radius(egui::CornerRadius::same(12))
+        .inner_margin(egui::Margin::symmetric(10, 3))
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new(format!("{icon} {text}")).size(12.5).color(fg));
+        });
+}
+
+/// 部署状态徽章样式 → (图标, 文案, 前景色, 底色)。
+fn deploy_badge_style(
+    strings: &Strings,
+    status: DeployStatus,
+) -> (&'static str, &'static str, egui::Color32, egui::Color32) {
+    match status {
+        DeployStatus::Deployed => ("✔", strings.status_deployed, STATUS_INSTALLED, BADGE_GREEN),
+        DeployStatus::NotDeployed => ("●", strings.status_not_deployed, STATUS_WARN, BADGE_AMBER),
+        DeployStatus::InvalidPath => ("?", strings.status_invalid, TEXT_WEAK, BADGE_GRAY),
+    }
+}
+
+/// Steam 进程状态徽章样式（复用 2s 轮询的 steam_running）。
+fn steam_badge_style(
+    strings: &Strings,
+    running: bool,
+) -> (&'static str, &'static str, egui::Color32, egui::Color32) {
+    if running {
+        (
+            "●",
+            strings.status_steam_running,
+            STATUS_INSTALLED,
+            BADGE_GREEN,
+        )
+    } else {
+        ("○", strings.status_steam_not_running, TEXT_WEAK, BADGE_GRAY)
+    }
+}
+
+/// 已部署态卸载按钮文案：Steam 运行中 → 「退出 Steam 并卸载补丁」；已退出 → 直接「卸载补丁」。
+fn uninstall_label(strings: &Strings, steam_running: bool) -> &'static str {
+    if steam_running {
+        strings.btn_exit_and_uninstall
+    } else {
+        strings.btn_uninstall
+    }
+}
+
+/// 补丁控制台按钮点击意图（T5 AC2）。
+#[derive(Default)]
+struct PatchActions {
+    apply_and_launch: bool,
+    launch: bool,
+    exit_and_uninstall: bool,
+    uninstall_and_restart: bool,
+}
+
+/// 补丁控制台按钮行（T5 AC2）：未部署 → 应用补丁并启动 Steam / 正常启动 Steam；
+/// 已部署 → 退出并卸载 / 卸载并重启（Steam 未运行时退出项改「卸载补丁」）；路径无效 → 全禁用。
+/// 返回两个按钮响应（测试据此定位点击坐标）。
+fn patch_console_buttons(
+    ui: &mut egui::Ui,
+    strings: &Strings,
+    status: DeployStatus,
+    steam_running: bool,
+    enabled: bool,
+    actions: &mut PatchActions,
+) -> (egui::Response, egui::Response) {
+    let gap = 12.0;
+    let w = twin_button_width(ui.available_width(), gap, ui.spacing().item_spacing.x);
+    let size = egui::vec2(w, 36.0);
+    match status {
+        DeployStatus::Deployed => {
+            let first = styled_button(
+                ui,
+                uninstall_label(strings, steam_running),
+                ButtonStyle::UninstallExit,
+                size,
+                enabled,
+            );
+            if first.clicked() {
+                actions.exit_and_uninstall = true;
+            }
+            ui.add_space(gap);
+            let second = styled_button(
+                ui,
+                strings.btn_uninstall_and_restart,
+                ButtonStyle::UninstallRestart,
+                size,
+                enabled,
+            );
+            if second.clicked() {
+                actions.uninstall_and_restart = true;
+            }
+            (first, second)
+        }
+        DeployStatus::NotDeployed => {
+            let first = styled_button(
+                ui,
+                strings.btn_apply_and_launch,
+                ButtonStyle::Deploy,
+                size,
+                enabled,
+            );
+            if first.clicked() {
+                actions.apply_and_launch = true;
+            }
+            ui.add_space(gap);
+            let second = styled_button(ui, strings.btn_launch_normal, ButtonStyle::Launch, size, enabled);
+            if second.clicked() {
+                actions.launch = true;
+            }
+            (first, second)
+        }
+        DeployStatus::InvalidPath => {
+            let first = styled_button(ui, strings.btn_apply_and_launch, ButtonStyle::Deploy, size, false);
+            ui.add_space(gap);
+            let second = styled_button(ui, strings.btn_launch_normal, ButtonStyle::Launch, size, false);
+            (first, second)
+        }
+    }
+}
+
 /// 卡片标题：3px 蓝色 accent bar + 标题（Python 版样式）。
 fn card_title(ui: &mut egui::Ui, text: &str) {
     ui.horizontal(|ui| {
@@ -1572,13 +1696,7 @@ impl App {
             CompatSummary::Missing => ("?", self.strings.compat_status_missing, TEXT_WEAK, BADGE_GRAY),
             CompatSummary::Network => ("?", self.strings.compat_status_network, TEXT_WEAK, BADGE_GRAY),
         };
-        egui::Frame::new()
-            .fill(bg)
-            .corner_radius(egui::CornerRadius::same(12))
-            .inner_margin(egui::Margin::symmetric(10, 3))
-            .show(ui, |ui| {
-                ui.label(egui::RichText::new(format!("{icon} {text}")).size(12.5).color(fg));
-            });
+        pill_badge(ui, icon, text, fg, bg);
     }
 
     /// 单项探针状态文案与颜色（详情明细行）。
@@ -1637,74 +1755,45 @@ impl App {
         }
     }
 
-    fn card2(&mut self, ui: &mut egui::Ui) {
+    /// 补丁控制台（T5 AC2）：部署状态 pill 徽章 + Steam 进程状态 + 按钮行，同一卡片内边距。
+    fn patch_console(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
         card_frame().show(ui, |ui| {
             ui.set_width(ui.available_width()); // 卡片撑满窗口宽度
-            card_title(ui, self.strings.card2_title);
+            card_title(ui, self.strings.patch_console_title);
             ui.add_space(10.0);
 
-            // 部署状态：纯文字 + 颜色（效仿 Python，无圆点徽章）。
-            let (text, color) = match self.status {
-                DeployStatus::InvalidPath => (self.strings.status_invalid, TEXT_WEAK),
-                DeployStatus::Deployed => (self.strings.status_deployed, STATUS_INSTALLED),
-                DeployStatus::NotDeployed => (self.strings.status_not_deployed, TEXT_WEAK),
-            };
-            status_line(ui, text, color);
-        });
-        ui.add_space(10.0);
-    }
+            // 状态行：部署状态徽章 + Steam 进程状态徽章（复用 2s 轮询的 steam_running）。
+            ui.horizontal(|ui| {
+                let (icon, text, fg, bg) = deploy_badge_style(&self.strings, self.status);
+                pill_badge(ui, icon, text, fg, bg);
+                ui.add_space(6.0);
+                let (icon, text, fg, bg) = steam_badge_style(&self.strings, self.steam_running);
+                pill_badge(ui, icon, text, fg, bg);
+            });
+            ui.add_space(10.0);
 
-    /// 独立操作区：两大按钮等宽并排（效仿 Python action_frame，位于卡片 2 与卡片 3 之间）。
-    fn action_area(&mut self, ui: &mut egui::Ui) {
-        let ctx = ui.ctx().clone();
-        ui.horizontal(|ui| {
-            let gap = 12.0;
-            // 宽度公式必须扣除 egui 自动插入的 item_spacing（见 twin_button_width），
-            // 否则按钮行实际占宽溢出，把下方卡片（card3 依赖 available_width 撑满）顶到窗口右缘。
-            let w = twin_button_width(ui.available_width(), gap, ui.spacing().item_spacing.x);
-            let size = egui::vec2(w, 36.0);
-            match self.status {
-                DeployStatus::Deployed => {
-                    // Steam 运行中 →「退出 Steam 并卸载补丁」；已退出 → 直接「卸载补丁」。
-                    let uninstall_label = if self.steam_running {
-                        self.strings.btn_exit_and_uninstall
-                    } else {
-                        self.strings.btn_uninstall
-                    };
-                    if styled_button(ui, uninstall_label, ButtonStyle::UninstallExit, size, !self.busy).clicked() {
-                        self.request_action(&ctx, Action::ExitAndUninstall);
-                    }
-                    ui.add_space(gap);
-                    if styled_button(
-                        ui,
-                        self.strings.btn_uninstall_and_restart,
-                        ButtonStyle::UninstallRestart,
-                        size,
-                        !self.busy,
-                    )
-                    .clicked()
-                    {
-                        self.request_action(&ctx, Action::UninstallAndRestart);
-                    }
-                }
-                DeployStatus::NotDeployed => {
-                    if styled_button(ui, self.strings.btn_apply_and_launch, ButtonStyle::Deploy, size, !self.busy)
-                        .clicked()
-                    {
-                        self.request_action(&ctx, Action::ApplyAndLaunch);
-                    }
-                    ui.add_space(gap);
-                    if styled_button(ui, self.strings.btn_launch_normal, ButtonStyle::Launch, size, !self.busy).clicked()
-                    {
-                        self.request_action(&ctx, Action::Launch);
-                    }
-                }
-                DeployStatus::InvalidPath => {
-                    // 无有效路径时禁用操作按钮。
-                    styled_button(ui, self.strings.btn_apply_and_launch, ButtonStyle::Deploy, size, false);
-                    ui.add_space(gap);
-                    styled_button(ui, self.strings.btn_launch_normal, ButtonStyle::Launch, size, false);
-                }
+            // 按钮行：意图先收集后执行，避免借用冲突。
+            let mut actions = PatchActions::default();
+            let _ = patch_console_buttons(
+                ui,
+                &self.strings,
+                self.status,
+                self.steam_running,
+                !self.busy,
+                &mut actions,
+            );
+            if actions.apply_and_launch {
+                self.request_action(&ctx, Action::ApplyAndLaunch);
+            }
+            if actions.launch {
+                self.request_action(&ctx, Action::Launch);
+            }
+            if actions.exit_and_uninstall {
+                self.request_action(&ctx, Action::ExitAndUninstall);
+            }
+            if actions.uninstall_and_restart {
+                self.request_action(&ctx, Action::UninstallAndRestart);
             }
         });
         ui.add_space(10.0);
@@ -1914,8 +2003,7 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ui, |ui| {
             self.top_bar(ui);
             self.card1(ui);
-            self.card2(ui);
-            self.action_area(ui);
+            self.patch_console(ui);
             self.card3(ui);
             self.notice_bar(ui);
 
@@ -2334,6 +2422,179 @@ mod tests {
         }
     }
 
+    // ---- 补丁控制台（T5 #12）----
+
+    /// 无头渲染补丁控制台按钮行一帧（不点击），返回 (首按钮, 次按钮) 响应。
+    fn render_console_buttons(
+        ctx: &egui::Context,
+        raw: &egui::RawInput,
+        status: DeployStatus,
+        steam_running: bool,
+        enabled: bool,
+    ) -> (egui::Response, egui::Response) {
+        let mut out = None;
+        let mut full = ctx.run_ui(raw.clone(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let mut actions = PatchActions::default();
+                out = Some(patch_console_buttons(
+                    ui,
+                    &Strings::new(Lang::Zh),
+                    status,
+                    steam_running,
+                    enabled,
+                    &mut actions,
+                ));
+                assert!(!actions.apply_and_launch
+                    && !actions.launch
+                    && !actions.exit_and_uninstall
+                    && !actions.uninstall_and_restart,
+                    "无点击帧不应产生操作意图"
+                );
+            });
+        });
+        full.textures_delta.clear();
+        out.unwrap()
+    }
+
+    /// 点击给定按钮（帧 2），返回产生的操作意图。
+    fn click_console_button(
+        ctx: &egui::Context,
+        raw: &egui::RawInput,
+        status: DeployStatus,
+        steam_running: bool,
+        enabled: bool,
+        btn: egui::Response,
+    ) -> PatchActions {
+        let mut actions = PatchActions::default();
+        let mut click = raw.clone();
+        click_at(&mut click, btn.rect.center());
+        let mut full = ctx.run_ui(click, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let _ = patch_console_buttons(
+                    ui,
+                    &Strings::new(Lang::Zh),
+                    status,
+                    steam_running,
+                    enabled,
+                    &mut actions,
+                );
+            });
+        });
+        full.textures_delta.clear();
+        actions
+    }
+
+    /// AC2：三态按钮行为——未部署（应用+启动 / 正常启动）、已部署（退出卸载 / 卸载重启）、
+    /// 路径无效（全禁用，点击无意图）。
+    #[test]
+    fn patch_console_three_states_button_actions() {
+        let ctx = egui::Context::default();
+        let raw = headless_raw();
+
+        // 未部署：首按钮 → 应用补丁并启动；次按钮 → 正常启动。
+        let (first, second) =
+            render_console_buttons(&ctx, &raw, DeployStatus::NotDeployed, false, true);
+        let a = click_console_button(&ctx, &raw, DeployStatus::NotDeployed, false, true, first);
+        assert!(
+            a.apply_and_launch && !a.launch,
+            "未部署首按钮应触发应用补丁并启动"
+        );
+        let b = click_console_button(&ctx, &raw, DeployStatus::NotDeployed, false, true, second);
+        assert!(
+            b.launch && !b.apply_and_launch,
+            "未部署次按钮应触发正常启动"
+        );
+
+        // 已部署：首按钮 → 退出并卸载；次按钮 → 卸载并重启。
+        let (first, second) =
+            render_console_buttons(&ctx, &raw, DeployStatus::Deployed, true, true);
+        let a = click_console_button(&ctx, &raw, DeployStatus::Deployed, true, true, first);
+        assert!(a.exit_and_uninstall && !a.uninstall_and_restart);
+        let b = click_console_button(&ctx, &raw, DeployStatus::Deployed, true, true, second);
+        assert!(b.uninstall_and_restart && !b.exit_and_uninstall);
+
+        // 路径无效：全禁用，点击无意图。
+        let (first, second) =
+            render_console_buttons(&ctx, &raw, DeployStatus::InvalidPath, false, true);
+        let a = click_console_button(&ctx, &raw, DeployStatus::InvalidPath, false, true, first);
+        assert!(
+            !a.apply_and_launch && !a.launch && !a.exit_and_uninstall && !a.uninstall_and_restart
+        );
+        let b = click_console_button(&ctx, &raw, DeployStatus::InvalidPath, false, true, second);
+        assert!(
+            !b.apply_and_launch && !b.launch && !b.exit_and_uninstall && !b.uninstall_and_restart
+        );
+    }
+
+    /// AC2：部署状态徽章三态样式映射（图标/文案/前景/底色）。
+    #[test]
+    fn deploy_badge_styles_map_three_states() {
+        let zh = Strings::new(Lang::Zh);
+        let (icon, text, fg, bg) = deploy_badge_style(&zh, DeployStatus::Deployed);
+        assert_eq!(icon, "✔");
+        assert_eq!(text, zh.status_deployed);
+        assert_eq!(fg, STATUS_INSTALLED);
+        assert_eq!(bg, BADGE_GREEN);
+
+        let (icon, text, fg, bg) = deploy_badge_style(&zh, DeployStatus::NotDeployed);
+        assert_eq!(icon, "●");
+        assert_eq!(text, zh.status_not_deployed);
+        assert_eq!(fg, STATUS_WARN);
+        assert_eq!(bg, BADGE_AMBER);
+
+        let (icon, text, fg, bg) = deploy_badge_style(&zh, DeployStatus::InvalidPath);
+        assert_eq!(icon, "?");
+        assert_eq!(text, zh.status_invalid);
+        assert_eq!(fg, TEXT_WEAK);
+        assert_eq!(bg, BADGE_GRAY);
+    }
+
+    /// AC2：Steam 进程状态徽章（运行中 / 未运行）样式映射。
+    #[test]
+    fn steam_badge_styles_map_running() {
+        let zh = Strings::new(Lang::Zh);
+        let (icon, text, _, bg) = steam_badge_style(&zh, true);
+        assert_eq!(icon, "●");
+        assert_eq!(text, zh.status_steam_running);
+        assert_eq!(bg, BADGE_GREEN);
+
+        let (icon, text, _, bg) = steam_badge_style(&zh, false);
+        assert_eq!(icon, "○");
+        assert_eq!(text, zh.status_steam_not_running);
+        assert_eq!(bg, BADGE_GRAY);
+    }
+
+    /// AC2：已部署态卸载按钮文案随 Steam 进程切换（运行中 → 退出并卸载；已退出 → 直接卸载）。
+    #[test]
+    fn uninstall_label_varies_with_steam_running() {
+        let zh = Strings::new(Lang::Zh);
+        assert_eq!(uninstall_label(&zh, true), zh.btn_exit_and_uninstall);
+        assert_eq!(uninstall_label(&zh, false), zh.btn_uninstall);
+    }
+
+    /// AC2：三态徽章均可无头渲染（同一 pill 容器，无 panic、有图形产出）。
+    #[test]
+    fn patch_console_badges_render_all_states() {
+        let ctx = egui::Context::default();
+        let raw = headless_raw();
+        let zh = Strings::new(Lang::Zh);
+        let mut full = ctx.run_ui(raw, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                for status in [
+                    DeployStatus::Deployed,
+                    DeployStatus::NotDeployed,
+                    DeployStatus::InvalidPath,
+                ] {
+                    let (icon, text, fg, bg) = deploy_badge_style(&zh, status);
+                    pill_badge(ui, icon, text, fg, bg);
+                    let (icon, text, fg, bg) = steam_badge_style(&zh, false);
+                    pill_badge(ui, icon, text, fg, bg);
+                }
+            });
+        });
+        full.textures_delta.clear();
+        assert!(!full.shapes.is_empty(), "三态徽章渲染无图形产出");
+    }
     // ---- Steam 核心兼容性（T5）----
 
     /// 构造探针报告样本（cache_path 占位，summary 判定不依赖它）。
