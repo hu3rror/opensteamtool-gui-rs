@@ -329,3 +329,175 @@ pub struct OverallHealthReport { pub steamclient_pattern: ProbeReport, pub steam
    - 网络探针不依赖真实网络：HEAD 判定逻辑拆为纯函数（输入镜像链结果枚举 → 输出 `ProbeStatus`）单测覆盖决策矩阵全分支。
    - `config_editor`：`remote_url_template()` 覆盖文件缺失/无键/空值/有效值/自定义模板。
 6. **构建验收**：`cargo check` / `cargo test` 无错误（既有 `cargo fmt --check` 噪音与 1 条 clippy warning 与本功能无关，勿动）。
+
+# 8. UI 架构重构与交互规范
+
+> 本节定义主界面拓扑、设置弹窗、OnlineFix 感知与存储双模的架构重构。决策经 2026-09-05 grill-with-docs 三轮确认（见 §8.2 决策记录），是对既有 UI（§2.9/§2.10/§7.7）的修订，冲突处本节优先。
+
+## 8.1 Context & Motivation
+
+1. **主界面视线断裂与职责倒挂**：原「本地应用状态卡片」仅承载单行状态文本，与下方裸露的「操作按钮区」逻辑强绑定但视觉割裂；「在线版本更新卡片」占据近 1/4 视窗，把低频辅助功能置于主启动动线之下；顶栏缺源码仓库入口，语言切换按钮常驻顶栏造成噪音。
+2. **设置弹窗交互混乱**：弹窗内嵌页签专属按钮区与 Modal 通用底栏（`btn_close`）上下并存，双层操作栏分散焦点；弹窗仅含高级配置（TOML 编辑与 OnlineFix），缺乏软件自身全局偏好（语言、托盘行为）入口；编辑器滚动区高度依赖固定魔法常数（`CFG_FIXED_H = 300.0`、`OF_FIXED_H = 340.0`），缩放适应性差。
+3. **OnlineFix 启动预设感知盲区**：候选仅从 Lua 脚本扫出纯数字 AppID，未结合本地清单（`appmanifest_<appid>.acf`）解析游戏名称；未反查当前生效的 OnlineFix 游戏（现状仅「选中 (账号, AppID) 逐项查询」），用户无法获知当前激活状态。
+4. **存储与路径权限脆弱性**：配置、核心资产与临时验证缓存混杂于 `<exe>` 同级或 `<exe>/cache/`；在 Program Files 等 UAC 保护目录部署时写盘会 `PermissionDenied`；`gui_config.toml`（用户偏好）与 `cache/`（可清理缓存）分离后消除误伤风险。
+
+## 8.2 决策记录（三轮 grilling 确认）
+
+| # | 决策 | 结论 |
+| :--- | :--- | :--- |
+| R1 | 语言体系 | `LanguagePreference { Auto, Zh, En }` 三态，默认 `Auto`（= 跟随系统，即现状 `detect_system_lang`）；入口从顶栏移入常规偏好页 |
+| R2 | GuiConfig 范围 | 本期仅 `{ language, minimize_to_tray }`，**不含** `custom_steam_path`（另立 ticket）；配置文件统一 `gui_config.toml` |
+| R3 | 底部状态栏 | 与现状 `notice_bar` 合并**单行**：左 notice（busy/结果），右本地版本 + 检查更新；busy 时按钮禁用 |
+| R4 | OnlineFix 启用入口 | 页签 Footer 左侧 `[复制参数][启用][停用]`，右侧 `[关闭]`（AC5 修订） |
+| R5 | 术语 | UI 用口语化「最小化至托盘」（CONTEXT.md 词条同步，旧称「最小化隐身」废弃）；「自动隐身」不变 |
+| R6 | effective_dll_dir | 「有效」= 更新目录三个目标 DLL 全齐；部署/卸载/版本读取统一走生效目录 |
+| R7 | 生效游戏反查 | 只反查**当前选中账号**；进入页签自动同步 AppID 输入框，看板停用与 Footer 停用同指一操作 |
+| R8 | 设置弹窗默认页 | 默认「常规偏好（General）」；会话内记忆上次页签保留 |
+| R9 | 更新按钮文案 | 按钮文案改「立即更新」（i18n 新词条 `btn_update_now`）；流程术语「下载并解压」保留于 CONTEXT.md |
+| R10 | 配置文件命名 | Portable 与 Installed 统一 `gui_config.toml`，仅目录不同（AC7 的 `config.toml` 为笔误修正） |
+| R11 | 词表修订 | CONTEXT.md 全量修订：新增「补丁控制台」「当前生效游戏」「常规偏好」「便携模式/安装模式」 |
+| R12 | spec 落盘 | 本节（SPEC.md §8）；分支 `feat/ui-redesign` |
+
+## 8.3 领域模型（修订版）
+
+```rust
+use std::path::PathBuf;
+
+/// 运行环境存储策略：便携模式 vs 系统规范模式
+pub enum StorageMode {
+    /// 便携模式：exe 同级目录可写，配置/缓存/DLL 资产均收拢于 exe 同级
+    Portable,
+    /// 安装模式：exe 同级只读（如 Program Files），配置/缓存回退至 AppData
+    Installed,
+}
+
+/// 集中式路径解析器契约
+pub trait PathResolver: Send + Sync {
+    fn mode(&self) -> StorageMode;
+    /// GUI 用户偏好配置文件（统一命名 gui_config.toml）
+    fn config_path(&self) -> PathBuf;
+    /// 临时验证缓存目录（verified.toml 所在目录）
+    fn cache_dir(&self) -> PathBuf;
+    /// 打包自带只读 DLL 目录（<exe>/dlls）
+    fn bundled_dll_dir(&self) -> PathBuf;
+    /// 在线更新 DLL 写入目标（Portable → <exe>/dlls；Installed → %LOCALAPPDATA%/OpenSteamTool/dlls）
+    fn update_target_dll_dir(&self) -> PathBuf;
+    /// 生效 DLL 目录：更新目录三个目标 DLL 全齐则优先，否则回退自带目录
+    fn effective_dll_dir(&self) -> PathBuf;
+}
+
+/// GUI 全局偏好（gui_config.toml）；缺失/损坏 → 静默回退默认（Auto + 勾选）
+pub struct GuiConfig {
+    pub language: LanguagePreference,
+    pub minimize_to_tray: bool,
+}
+
+pub enum LanguagePreference { Auto, Zh, En }
+
+/// 解析后的游戏候选项（AppID + 本地名称映射；ACF 缺失时 name 为 None）
+pub struct CandidateGame {
+    pub appid: u32,
+    pub name: Option<String>,
+}
+
+/// 当前生效的 OnlineFix 游戏（选中账号 localconfig.vdf 中带 -onlinefix 的 AppID）
+pub struct ActiveOnlineFixGame {
+    pub appid: u32,
+    pub name: Option<String>,
+}
+
+/// 设置弹窗页签（默认 General，会话内记忆上次页签）
+pub enum SettingsTab { General, ConfigEditor, OnlineFix }
+
+/// 状态栏内联更新操作态
+pub enum InlineUpdateStatus {
+    Idle,
+    Checking,
+    UpToDate { version: String },
+    UpdateAvailable { current: String, latest: String, zip_url: String },
+    Downloading,
+    Failed { reason: String },
+}
+```
+
+## 8.4 系统边界（In-Scope）与非目标（Non-goals）
+
+**In-Scope**：
+- 顶栏右侧固定 `[ GitHub ]` + `[ ⚙ ]`（28×28）；移除语言切换按钮（入口移至常规偏好页）。
+- 合并 Card 2 与操作区为「补丁控制台」；移除 Card 3，压缩为窗口底部固定单行状态栏（§8.6 AC3）。
+- 设置弹窗三页签（常规偏好 / 配置编辑器 / OnlineFix 预设）+ 全局单行动态 Footer；根除内容区局部按钮条与滚动区魔法常数。
+- OnlineFix：选中账号 `localconfig.vdf` 反查生效游戏（看板 + 快捷停用）；`appmanifest_<appid>.acf` 名称解析。
+- 双模路径体系：全局 `PathResolver` 解析 `gui_config.toml`、`verified.toml`、`dlls/` 在便携/安装模式下的落点与层叠回退。
+
+**Non-goals**（延续既有约束，均已在现行代码中落实）：
+- 不引入 TOML 结构化表单控件（保持全文本编辑，兼容上游字段演进）。
+- 禁止外部网络接口解析游戏元数据（ACF 缺失直接回退纯数字）。
+- 禁止 UAC 提权（受保护目录无感回退 AppData）。
+- 不引入重量级 VDF 解析库（保持自研行级保真处理）。
+- 不扩展双语以外语种。
+- 新增依赖最小化：浏览器调起用 `cmd /c start`（零依赖），不新增 crate。
+
+## 8.5 测试接缝与隔离策略
+
+```rust
+/// 1. 环境只读探测接缝：解耦物理文件系统权限判定
+pub trait EnvironmentProbe: Send + Sync {
+    fn is_directory_writable(&self, path: &Path) -> bool;
+    fn get_appdata_dir(&self) -> Option<PathBuf>;
+    fn get_local_appdata_dir(&self) -> Option<PathBuf>;
+    fn get_exe_dir(&self) -> Option<PathBuf>;
+}
+
+/// 2. 本地清单读取接缝：解耦物理磁盘 ACF 文件 IO
+pub trait ManifestAccessor: Send + Sync {
+    fn read_manifest_content(&self, steam_dir: &Path, appid: u32) -> Option<String>;
+}
+
+/// 3. 外部进程与命令分派接缝：默认浏览器调起（cmd /c start 实现）
+pub trait ExternalSystemDispatcher: Send + Sync {
+    fn open_browser_url(&self, url: &str) -> Result<(), String>;
+}
+```
+
+**Mock 策略**：`MockEnvironmentProbe`（只读/可写路径）断言路径跳转；`MockManifestAccessor`（合规/畸变/缺失 ACF）断言候选解析；内存 VDF 字节串（多 AppID 混合/无标记/单标记/祖先链缺失）断言 `get_active_game`；`ctx.run_ui` 无头模式验证 Footer 按钮响应。
+
+## 8.6 验收标准（修订版）
+
+### AC 1: 顶栏导航与外部入口
+- 顶栏右侧仅 `[ GitHub ]` + `[ ⚙ ]`（28×28 正方形，语言切换不引起布局抖动）；无 `[ EN / 中文 ]` 按钮。
+- 点击 GitHub 经分派器调起默认浏览器访问 `https://github.com/hu3rror/opensteamtool-gui-rs`。
+
+### AC 2: 补丁控制台合并卡片
+- Card 2 与操作区合并为单一带框卡片；顶部为「部署状态」彩色 pill 徽章 + 「Steam 进程状态（运行中/未运行）」（复用 2s 轮询）。
+- 未部署：`[ ▶ 应用补丁并启动 Steam ]`（强调）+ `[ ▶ 正常启动 Steam ]`（次要）；已部署：卸载类动作（沿用现状四态）。
+- 按钮行与状态指示器处于同一卡片内边距作用域。
+
+### AC 3: 底部状态栏与内联更新
+- 窗口底部固定单行：左侧运行/执行提示（Notice，busy 或最近结果），右侧本地版本号 + 次要样式 `[ 检查更新 ]`。
+- 可更新：右侧转为可更新提示 + 强调色主按钮 `[ 立即更新 ]`；点击后原地进入「正在下载...」禁用态，不弹窗、不拉起卡片。
+
+### AC 4: 常规偏好与持久化
+- 首次进入设置弹窗默认展示「常规偏好」页签（会话内记忆保留）。
+- 含「界面语言」三选（自动检测/简体中文/English）与「最小化至托盘」复选框；变更即时生效并写盘 `gui_config.toml`。
+- 冷启动自动还原，不被系统默认环境覆盖。
+
+### AC 5: 消除设置弹窗双排按钮
+- 各页签子视图内部不得渲染局部 `ui.horizontal` 按钮条；弹窗底部仅一条全局单行 Footer。
+- General：Footer 仅右对齐 `[ 关闭 ]`。
+- ConfigEditor：Footer 左 `[ 从示例模板创建 ][ 撤销 ]`，右 `[ 保存 ][ 关闭 ]`。
+- OnlineFix：Footer 左 `[ 复制参数 ][ 启用 ][ 停用 ]`，右 `[ 关闭 ]`。
+- 滚动区高度由可用空间动态计算，根除 `CFG_FIXED_H`/`OF_FIXED_H` 魔法常数。
+
+### AC 6: OnlineFix 状态感知与名称映射
+- 选中账号 `localconfig.vdf` 存在带 `-onlinefix` 的 AppID（如 1812150）：页签顶部以看板高亮「当前生效游戏」（AppID + 名称）并提供 `[ 停用 ]`；进入页签自动同步 AppID 输入框。
+- `appmanifest_367520.acf` 存在且含名称：候选展示为 `[ 空洞骑士 (367520) ]` 胶囊；缺失安全回退 `[ 367520 ]`；点击胶囊填充输入框。
+
+### AC 7: 存储路径双模自适应回退
+- 可写目录：`mode()` 为 Portable，`config_path()` = `<exe>/gui_config.toml`，`cache_dir()` = `<exe>/cache/`。
+- 只读目录：`mode()` 为 Installed，`config_path()` = `%APPDATA%\OpenSteamTool\gui_config.toml`，`cache_dir()` = `%LOCALAPPDATA%\OpenSteamTool\cache\`，更新 DLL 写 `%LOCALAPPDATA%\OpenSteamTool\dlls\` 无 `PermissionDenied`；部署/卸载/版本读取统一走 `effective_dll_dir`（更新目录三个 DLL 全齐优先）。
+
+## 8.7 国际化词表变更（i18n.rs）
+
+**新增**：`btn_github`、`settings_tab_general`、`lang_auto`/`lang_zh`/`lang_en`、`status_steam_running`/`status_steam_not_running`、`btn_update_now`、`of_active_title`（当前生效游戏）、`of_deactivate`（停用）、`patch_console_title`（补丁控制台，替换 `card2_title`）。
+**改名**：`btn_download_and_extract` → `btn_update_now`（「立即更新」；流程术语「下载并解压」保留于 CONTEXT.md）。
+**保留**：`card3_title` 相关词条随 Card 3 移除而删除（若未被他处引用）。
