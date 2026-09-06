@@ -10,12 +10,28 @@
 //! 上游机制：游戏命令行含 `-onlinefix` 时，OpenSteamTool 将 AppID 重写为 480
 //! 实现在线修复（Hooks_Misc.cpp）。故本模块只负责把参数写进 Steam 的启动选项。
 
+use crate::external::ManifestAccessor;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
 /// OnlineFix 启动参数（附赠「复制」功能用，也是写入 LaunchOptions 的令牌）。
 pub const ONLINEFIX_ARG: &str = "-onlinefix";
+
+/// 解析后的游戏候选项（AppID + 本地名称映射；ACF 缺失/畸变时 name 为 None）。
+/// 展示为「名称 (appid)」胶囊；name 缺失回退纯数字（SPEC §8.3、AC6）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CandidateGame {
+    pub appid: u32,
+    pub name: Option<String>,
+}
+
+/// 当前生效的 OnlineFix 游戏（选中账号 localconfig.vdf 中带 `-onlinefix` 的 AppID）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveOnlineFixGame {
+    pub appid: u32,
+    pub name: Option<String>,
+}
 
 /// VDF 读写错误：IO 或结构异常（根块缺失等）。
 #[derive(Debug)]
@@ -141,6 +157,65 @@ pub fn is_onlinefix(vdf: &Path, appid: u32) -> Result<bool, VdfError> {
     Ok(read_launch_options(vdf, appid)?
         .map(|v| has_token(&v, ONLINEFIX_ARG))
         .unwrap_or(false))
+}
+
+/// 反查当前选中账号 localconfig.vdf 中带 `-onlinefix` 的 AppID（SPEC §8.2 R7：只反查当前选中账号）。
+///
+/// 纯函数：直接对字节内容解析（内存 VDF 单测入口，无 IO）。
+/// 业务约束：同一时间仅一个 OnlineFix 游戏可运行 → 命中第一个即返回。
+/// 祖先链缺失（无 UserLocalConfigStore/Software/Valve/Steam/Apps）→ None，
+/// 与「停用链缺失视为无操作」一致：尽力而为探测，不视为错误。
+pub fn get_active_game(bytes: &[u8]) -> Option<u32> {
+    let doc = Doc::parse(bytes);
+    let apps = doc.descend(&[
+        b"UserLocalConfigStore",
+        b"Software",
+        b"Valve",
+        b"Steam",
+        b"Apps",
+    ])?;
+    for block in doc.child_blocks(apps) {
+        let Some((_, key, _, _)) = classify(&doc.lines[block.key_line]) else {
+            continue;
+        };
+        let Ok(key_str) = std::str::from_utf8(key) else {
+            continue;
+        };
+        let Ok(appid) = key_str.parse::<u32>() else {
+            continue;
+        };
+        let Some(kv) = doc.find_kv(block, b"LaunchOptions") else {
+            continue;
+        };
+        if has_token(value_text(&doc.lines[kv]), ONLINEFIX_ARG) {
+            return Some(appid);
+        }
+    }
+    None
+}
+
+/// 读账号 VDF 反查生效游戏（路径缺失/读失败 → None，尽力而为探测）。
+pub fn get_active_game_file(vdf: &Path) -> Option<u32> {
+    get_active_game(&fs::read(vdf).ok()?)
+}
+
+/// 从 `appmanifest_<appid>.acf` 内容提取游戏名（纯函数；合规 → Some，畸变/缺失 → None）。
+pub fn acf_name_from_content(content: &str) -> Option<String> {
+    let doc = Doc::parse(content.as_bytes());
+    let appstate = doc.descend(&[b"AppState"])?;
+    let kv = doc.find_kv(appstate, b"name")?;
+    Some(value_text(&doc.lines[kv]).trim().to_owned())
+}
+
+/// 解析游戏名：经 `ManifestAccessor` 接缝读取 ACF 并提取 `name`（SPEC §8.5 #2）。
+/// 缺失/读失败/结构畸变 → None（UI 回退纯数字展示）。
+pub fn resolve_game_name(
+    manifest: &dyn ManifestAccessor,
+    steam_dir: &Path,
+    appid: u32,
+) -> Option<String> {
+    let content = manifest.read_manifest_content(steam_dir, appid)?;
+    acf_name_from_content(&content)
 }
 
 /// 备份 VDF 到 `<文件名>.bak-<unix秒>`，返回备份路径。
@@ -552,6 +627,52 @@ impl Doc {
             i += 1;
         }
         None
+    }
+
+    /// 枚举块内所有直接子块（键行 + 已配对的开闭括号；嵌套块内部内容跳过）。
+    /// 供「生效游戏反查」枚举 Apps 块内各 AppID 子块使用。
+    fn child_blocks(&self, parent: Block) -> Vec<Block> {
+        let mut out = Vec::new();
+        let mut i = parent.open + 1;
+        while i < parent.close {
+            match classify(&self.lines[i]) {
+                Some((LineKind::OpenKey, _, _, indent)) => {
+                    // 键行后紧邻的有效行须为 `{` 才算块（否则视为普通键行跳过）。
+                    let is_block = self.next_meaningful(i + 1).is_some_and(|open| {
+                        matches!(
+                            classify(&self.lines[open]),
+                            Some((LineKind::Brace, b, _, _)) if b == b"{"
+                        )
+                    });
+                    if is_block {
+                        let open = self.next_meaningful(i + 1).expect("上面已验证");
+                        if let Some(close) = self.match_close(open)
+                            && close < parent.close
+                        {
+                            out.push(Block {
+                                key_line: i,
+                                open,
+                                close,
+                                indent,
+                            });
+                            i = close + 1;
+                            continue;
+                        }
+                    }
+                    i += 1;
+                }
+                Some((LineKind::Brace, other, _, _)) => {
+                    // 孤立开括号：整块跳过（防御畸形输入，避免把内部内容当子块）。
+                    if other == b"{" && let Some(close) = self.match_close(i) {
+                        i = close + 1;
+                        continue;
+                    }
+                    i += 1;
+                }
+                _ => i += 1,
+            }
+        }
+        out
     }
 
     /// 在指定行前插入字节行，同时把其后所有行号整体后移（本实现按需返回即可）。
@@ -981,5 +1102,77 @@ ADDAPPID(3928722)
         assert_eq!(paths.len(), 1);
         assert!(paths[0].ends_with("111\\config\\localconfig.vdf"));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ---------- 生效游戏反查 + ACF 名称解析（T7 #11） ----------
+
+    /// 构造含多个 AppID 子块的 Apps 段（entries 为 (appid, LaunchOptions) 列表）。
+    fn sample_multi_apps(entries: &[(u32, Option<&str>)]) -> String {
+        let mut s = String::from(
+            "\"UserLocalConfigStore\"\n{\n\t\"Software\"\n\t{\n\t\t\"Valve\"\n\t\t{\n\t\t\t\"Steam\"\n\t\t\t{\n\t\t\t\t\"Apps\"\n\t\t\t\t{\n",
+        );
+        for (appid, launch) in entries {
+            s.push_str(&format!("\t\t\t\t\t\"{appid}\"\n\t\t\t\t\t{{\n"));
+            if let Some(v) = launch {
+                s.push_str(&format!("\t\t\t\t\t\t\"LaunchOptions\"\t\t\"{v}\"\n"));
+            }
+            s.push_str("\t\t\t\t\t}\n");
+        }
+        s.push_str("\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n}\n");
+        s
+    }
+
+    #[test]
+    fn get_active_game_multi_appid_mixed() {
+        // 多 AppID：仅 1361510 带 -onlinefix → 反查命中它。
+        let vdf = sample_multi_apps(&[(1361510, Some("-console -onlinefix")), (480, None)]);
+        assert_eq!(get_active_game(vdf.as_bytes()), Some(1361510));
+    }
+
+    #[test]
+    fn get_active_game_no_marker() {
+        // 多 AppID 均无 -onlinefix → 无生效游戏。
+        let vdf = sample_multi_apps(&[(1361510, Some("-console")), (480, Some("-beta beta"))]);
+        assert_eq!(get_active_game(vdf.as_bytes()), None);
+    }
+
+    #[test]
+    fn get_active_game_single_marked() {
+        let vdf = sample_multi_apps(&[(367520, Some("-onlinefix"))]);
+        assert_eq!(get_active_game(vdf.as_bytes()), Some(367520));
+    }
+
+    #[test]
+    fn get_active_game_missing_ancestor_chain() {
+        // 祖先链缺失（无 Apps/根块）→ 无生效游戏，不视为错误。
+        assert_eq!(get_active_game(b"\"Other\"\n{\n}\n"), None);
+        assert_eq!(get_active_game(b""), None);
+    }
+
+    #[test]
+    fn get_active_game_file_missing_path_is_none() {
+        let dir = tmp_dir("active-none");
+        let vdf = dir.join("localconfig.vdf"); // 不存在。
+        assert_eq!(get_active_game_file(&vdf), None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn acf_name_extracts_quoted_name() {
+        let acf = "\"AppState\"\n{\n\t\"appid\"\t\t\"367520\"\n\t\"name\"\t\t\"Hollow Knight\"\n\t\"StateFlags\"\t\t\"4\"\n}\n";
+        assert_eq!(acf_name_from_content(acf).as_deref(), Some("Hollow Knight"));
+    }
+
+    #[test]
+    fn acf_name_missing_or_malformed_is_none() {
+        // 无 AppState 根块。
+        assert_eq!(acf_name_from_content("\"Other\"\n{\n}\n"), None);
+        // 有块但缺 name 键。
+        assert_eq!(
+            acf_name_from_content("\"AppState\"\n{\n\t\"appid\"\t\t\"1\"\n}\n"),
+            None
+        );
+        // 空内容。
+        assert_eq!(acf_name_from_content(""), None);
     }
 }

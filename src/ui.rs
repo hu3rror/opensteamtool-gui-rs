@@ -634,6 +634,66 @@ fn of_status_line(strings: &Strings, status: &OfStatus) -> (String, egui::Color3
     }
 }
 
+/// T7：生效游戏看板（SPEC AC6）——「当前生效游戏」标题 + AppID/名称 + `[ 停用 ]`。
+/// 返回 (是否点击停用, 停用按钮响应)。看板停用与 Footer 停用同指一操作。
+fn render_active_board(
+    ui: &mut egui::Ui,
+    strings: &Strings,
+    active: &onlinefix::ActiveOnlineFixGame,
+) -> (bool, egui::Response) {
+    let mut deactivate = false;
+    let mut btn = None;
+    egui::Frame::group(ui.style())
+        .inner_margin(egui::Margin::symmetric(10, 6))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(strings.of_active_title).strong());
+                ui.add_space(6.0);
+                let label = match &active.name {
+                    Some(name) => format!("{name} ({})", active.appid),
+                    None => active.appid.to_string(),
+                };
+                ui.label(label);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let resp = styled_button(
+                        ui,
+                        strings.of_deactivate,
+                        ButtonStyle::Secondary,
+                        egui::vec2(64.0, 24.0),
+                        true,
+                    );
+                    if resp.clicked() {
+                        deactivate = true;
+                    }
+                    btn = Some(resp);
+                });
+            });
+        });
+    (deactivate, btn.expect("停用按钮必渲染"))
+}
+
+/// T7：候选胶囊——「名称 (appid)」/ 纯数字回退（SPEC AC6）。
+/// 返回 (点击的 AppID, 各胶囊按钮响应)。
+fn render_candidate_capsules(
+    ui: &mut egui::Ui,
+    candidates: &[onlinefix::CandidateGame],
+) -> (Option<u32>, Vec<egui::Response>) {
+    let mut picked = None;
+    let mut buttons = Vec::with_capacity(candidates.len());
+    for c in candidates {
+        let label = match &c.name {
+            Some(name) => format!("{name} ({})", c.appid),
+            None => c.appid.to_string(),
+        };
+        let resp = ui.small_button(label);
+        if resp.clicked() {
+            picked = Some(c.appid);
+        }
+        buttons.push(resp);
+    }
+    (picked, buttons)
+}
+
 /// 两枚等宽按钮并排时的单按钮宽度：`available` 减去手动 gap 与 egui 自动插入的
 /// item_spacing 后再均分。公式漏掉 item_spacing 会导致按钮行实际占宽超过可用宽度，
 /// 溢出并把下方依赖 `available_width` 撑满的卡片顶到窗口右缘（历史 bug）。
@@ -953,6 +1013,8 @@ pub struct App {
     tray: Option<Tray>,
     /// 外部系统分派器（T4：GitHub 外链经此调起默认浏览器；测试注入 mock）。
     dispatcher: Box<dyn external::ExternalSystemDispatcher>,
+    /// 本地清单读取接缝（T7：ACF 名称解析经此读盘；测试注入 mock）。
+    manifest: Box<dyn external::ManifestAccessor>,
     /// 窗口当前是否可见（托盘显隐切换用）。
     window_visible: bool,
     /// 首次帧后按内容高度自适应窗口（消除底部大留白）。
@@ -1088,6 +1150,7 @@ impl App {
             ctx: cc.egui_ctx.clone(),
             tray,
             dispatcher: Box::new(external::CmdStartDispatcher),
+            manifest: Box::new(external::FsManifestAccessor),
             window_visible: true,
             autosized: false,
             pending_focus: false,
@@ -1340,7 +1403,7 @@ impl App {
         self.cfg.mark_unloaded();
         // OnlineFix 区：按当前 Steam 路径刷新账号与 AppID 候选（进程组运行态写入门闩每次写前实时判定）。
         let steam_dir = Path::new(self.steam_path.trim());
-        self.of.refresh(steam_dir);
+        self.of.refresh(steam_dir, self.manifest.as_ref());
     }
 
     /// 设置对话框主体（模态；Steam 路径无效时仅提示 + 关闭）。
@@ -1514,9 +1577,19 @@ impl App {
                                 });
                             if let Some(i) = selected_idx {
                                 self.of.select_account(i);
+                                // 换账号 → 重查生效游戏并同步输入框（SPEC AC6）。
+                                self.of.refresh_active(steam_dir, self.manifest.as_ref());
                             }
                         });
                         ui.add_space(6.0);
+
+                        // 看板：当前生效游戏（SPEC AC6；看板停用与 Footer 停用同指一操作）。
+                        if let Some(active) = &self.of.active {
+                            if render_active_board(ui, &self.strings, active).0 {
+                                actions.disable = true;
+                            }
+                            ui.add_space(6.0);
+                        }
 
                         // 中间滚动：AppID 输入 + Lua 候选。
                         let h_mid = (ui.available_height() - FOOTER_RESERVE).max(120.0);
@@ -1533,13 +1606,10 @@ impl App {
                                 }
                                 if !self.of.candidates.is_empty() {
                                     ui.add_space(8.0);
-                                    let mut picked = None;
-                                    for &id in &self.of.candidates {
-                                        if ui.small_button(id.to_string()).clicked() {
-                                            picked = Some(id);
-                                        }
-                                    }
-                                    if let Some(id) = picked {
+                                    // 胶囊：ACF 含名称 → 「名称 (appid)」；缺失/畸变 → 纯数字（SPEC AC6）。
+                                    if let Some(id) =
+                                        render_candidate_capsules(ui, &self.of.candidates).0
+                                    {
                                         self.of.appid = id.to_string();
                                         self.of.appid_changed();
                                     }
@@ -1614,6 +1684,10 @@ impl App {
 
         if let Some(tab) = tab_clicked {
             self.settings_tab = tab; // 会话内记忆上次页签。
+            // T7：进入 OnlineFix 页签 → 反查生效游戏并同步 AppID 输入框（SPEC AC6）。
+            if tab == SettingsTab::OnlineFix {
+                self.of.refresh_active(steam_dir, self.manifest.as_ref());
+            }
         }
         if lang_changed {
             // 语言变更：即时生效（渲染 + 窗口标题）并写盘（SPEC AC4）。
@@ -1637,10 +1711,14 @@ impl App {
         if actions.enable {
             self.of
                 .enable(steam_dir, self.steam_running, &self.steam_state);
+            // 启用后反查生效游戏（看板即时出现；输入框已是该 AppID 不被覆盖）。
+            self.of.refresh_active(steam_dir, self.manifest.as_ref());
         }
         if actions.disable {
             self.of
                 .disable(steam_dir, self.steam_running, &self.steam_state);
+            // 停用后反查生效游戏（看板即时消失/切换）。
+            self.of.refresh_active(steam_dir, self.manifest.as_ref());
         }
         if actions.copy {
             ctx.copy_text(onlinefix::ONLINEFIX_ARG.to_owned());
@@ -3152,5 +3230,148 @@ mod tests {
         // 三个页签均完成渲染且有图形产出（按钮已绘制）。
         assert_eq!(rendered, 3);
         assert!(!full.shapes.is_empty(), "footer 渲染无图形产出");
+    }
+
+    // ---- T7：生效游戏看板 + 候选胶囊（#11） ----
+
+    /// 无头渲染看板一帧（不点击），返回 (是否停用, 停用按钮)。
+    fn render_active_board_headless(
+        ctx: &egui::Context,
+        raw: &egui::RawInput,
+        strings: &Strings,
+        active: &onlinefix::ActiveOnlineFixGame,
+    ) -> (bool, egui::Response) {
+        let mut out = None;
+        let mut full = ctx.run_ui(raw.clone(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                out = Some(render_active_board(ui, strings, active));
+            });
+        });
+        full.textures_delta.clear();
+        let (deact, btn) = out.unwrap();
+        assert!(!deact, "无点击帧不应产生停用意图");
+        (deact, btn)
+    }
+
+    /// 点击看板停用按钮（帧 2），返回是否产生停用意图。
+    fn click_active_board_deactivate(
+        ctx: &egui::Context,
+        raw: &egui::RawInput,
+        strings: &Strings,
+        active: &onlinefix::ActiveOnlineFixGame,
+        btn: egui::Response,
+    ) -> bool {
+        let mut click = raw.clone();
+        click_at(&mut click, btn.rect.center());
+        let mut out = None;
+        let mut full = ctx.run_ui(click, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                out = Some(render_active_board(ui, strings, active).0);
+            });
+        });
+        full.textures_delta.clear();
+        out.unwrap()
+    }
+
+    #[test]
+    fn active_board_deactivate_click_sets_disable_intent() {
+        let ctx = egui::Context::default();
+        let raw = headless_raw();
+        let zh = Strings::new(Lang::Zh);
+        let active = onlinefix::ActiveOnlineFixGame {
+            appid: 1361510,
+            name: Some("双人成行".to_owned()),
+        };
+        // 帧 1：渲染定位按钮（无点击无意图）。
+        let (deact, btn) = render_active_board_headless(&ctx, &raw, &zh, &active);
+        assert!(!deact);
+        assert!(btn.rect.width() > 0.0, "停用按钮应可点");
+        // 帧 2：点击停用 → 意图置位（与 Footer 停用同指一操作）。
+        assert!(
+            click_active_board_deactivate(&ctx, &raw, &zh, &active, btn),
+            "点击停用应产生停用意图"
+        );
+    }
+
+    #[test]
+    fn active_board_falls_back_to_plain_appid_without_name() {
+        let ctx = egui::Context::default();
+        let raw = headless_raw();
+        let zh = Strings::new(Lang::Zh);
+        let active = onlinefix::ActiveOnlineFixGame {
+            appid: 1812150,
+            name: None,
+        };
+        // ACF 缺失 → 看板回退纯数字（无 panic、有图形产出）。
+        let (_, btn) = render_active_board_headless(&ctx, &raw, &zh, &active);
+        assert!(btn.rect.width() > 0.0);
+    }
+
+    #[test]
+    fn candidate_capsules_show_name_and_click_fills_appid() {
+        let ctx = egui::Context::default();
+        let raw = headless_raw();
+        let candidates = vec![
+            onlinefix::CandidateGame {
+                appid: 367520,
+                name: Some("空洞骑士".to_owned()),
+            },
+            onlinefix::CandidateGame {
+                appid: 480,
+                name: None,
+            },
+        ];
+        // 帧 1：渲染（无点击无选择）。
+        let mut out = None;
+        let mut full = ctx.run_ui(raw.clone(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                out = Some(render_candidate_capsules(ui, &candidates));
+            });
+        });
+        full.textures_delta.clear();
+        let (picked, buttons) = out.unwrap();
+        assert!(picked.is_none());
+        assert_eq!(buttons.len(), 2);
+        // 帧 2：点击「名称 (appid)」胶囊 → 返回对应 AppID（填充输入框用）。
+        let mut click = raw.clone();
+        click_at(&mut click, buttons[0].rect.center());
+        let mut picked = None;
+        let mut full = ctx.run_ui(click, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                picked = render_candidate_capsules(ui, &candidates).0;
+            });
+        });
+        full.textures_delta.clear();
+        assert_eq!(picked, Some(367520));
+    }
+
+    #[test]
+    fn candidate_capsule_plain_appid_click_fills_numeric() {
+        let ctx = egui::Context::default();
+        let raw = headless_raw();
+        let candidates = vec![onlinefix::CandidateGame {
+            appid: 480,
+            name: None,
+        }];
+        // 帧 1 定位纯数字胶囊。
+        let mut out = None;
+        let mut full = ctx.run_ui(raw.clone(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                out = Some(render_candidate_capsules(ui, &candidates));
+            });
+        });
+        full.textures_delta.clear();
+        let (_, buttons) = out.unwrap();
+        // 帧 2：点击纯数字胶囊 → 返回对应 AppID。
+        let mut click = raw.clone();
+        click_at(&mut click, buttons[0].rect.center());
+        let mut picked = None;
+        let mut full = ctx.run_ui(click, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                picked = render_candidate_capsules(ui, &candidates).0;
+            });
+        });
+        full.textures_delta.clear();
+        assert_eq!(picked, Some(480));
     }
 }

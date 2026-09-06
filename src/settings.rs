@@ -5,11 +5,11 @@
 //! 依赖（Steam 路径、进程运行态、共享 SteamState）从方法参数注入。
 //! 渲染层（egui 模态对话框本体）仍在 `ui::App`，本模块只持有状态与 handler。
 
-use std::path::{Path, PathBuf};
-
 use crate::config_editor::{self, ConfigError};
-use crate::onlinefix::{self, VdfError};
+use crate::external::ManifestAccessor;
+use crate::onlinefix::{self, ActiveOnlineFixGame, CandidateGame, VdfError};
 use crate::steam_state::SteamState;
+use std::path::{Path, PathBuf};
 
 // ===================== 配置编辑器状态 =====================
 
@@ -133,7 +133,7 @@ pub enum OfStatus {
     Error(OfError),
 }
 
-/// 「OnlineFix 启动预设」状态：可用账号、AppID 输入/候选、展示状态与写入门闩。
+/// 「OnlineFix 启动预设」状态：可用账号、AppID 输入/候选、生效游戏看板与写入门闩。
 pub struct OnlineFixState {
     /// 可用账号（`userdata/*/config/localconfig.vdf`，打开对话框时刷新）。
     pub accounts: Vec<PathBuf>,
@@ -141,8 +141,10 @@ pub struct OnlineFixState {
     pub account_idx: usize,
     /// 手动输入/候选取用的 AppID。
     pub appid: String,
-    /// Lua config 扫描的候选 AppID。
-    pub candidates: Vec<u32>,
+    /// Lua 扫描的候选 AppID + ACF 名称映射（ACF 缺失/畸变 name 为 None，UI 回退纯数字）。
+    pub candidates: Vec<CandidateGame>,
+    /// 当前生效的 OnlineFix 游戏（选中账号反查；看板展示，SPEC AC6）。
+    pub active: Option<ActiveOnlineFixGame>,
     /// 当前选中 (账号, AppID) 的展示状态。
     status: Option<OfStatus>,
     /// 上次计算状态时的 (账号 idx, AppID)，避免每帧重读 VDF。
@@ -156,18 +158,49 @@ impl OnlineFixState {
             account_idx: 0,
             appid: String::new(),
             candidates: Vec::new(),
+            active: None,
             status: None,
             status_key: None,
         }
     }
 
-    /// 打开对话框时刷新账号与 AppID 候选（进程组运行态写入门闩每次写前实时判定，不在此采样）。
-    pub fn refresh(&mut self, steam_dir: &Path) {
+    /// 打开对话框时刷新账号、候选（Lua AppID + ACF 名称）与生效游戏看板。
+    /// 进程组运行态写入门闩每次写前实时判定，不在此采样。
+    pub fn refresh(&mut self, steam_dir: &Path, manifest: &dyn ManifestAccessor) {
         self.accounts = onlinefix::account_vdf_paths(steam_dir);
         self.account_idx = self.account_idx.min(self.accounts.len().saturating_sub(1));
-        self.candidates = onlinefix::scan_lua_appids(steam_dir);
+        self.candidates = onlinefix::scan_lua_appids(steam_dir)
+            .into_iter()
+            .map(|appid| CandidateGame {
+                appid,
+                name: onlinefix::resolve_game_name(manifest, steam_dir, appid),
+            })
+            .collect();
+        // 反查生效游戏并同步输入框（进入页签/打开对话框共用入口）。
+        self.refresh_active(steam_dir, manifest);
         self.status = None;
         self.status_key = None;
+    }
+
+    /// 反查当前选中账号的生效游戏，同步 `appid` 输入框（SPEC AC6「进入页签自动同步」）。
+    /// 启用/停用/换账号后由 UI 层再次调用以刷新看板。
+    pub fn refresh_active(&mut self, steam_dir: &Path, manifest: &dyn ManifestAccessor) {
+        let active_appid = self
+            .accounts
+            .get(self.account_idx)
+            .and_then(|vdf| onlinefix::get_active_game_file(vdf));
+        self.active = active_appid.map(|appid| ActiveOnlineFixGame {
+            appid,
+            name: onlinefix::resolve_game_name(manifest, steam_dir, appid),
+        });
+        // 生效游戏存在时覆盖输入框（「进入页签自动同步」；停用后无生效游戏则不打扰当前输入）。
+        if let Some(appid) = active_appid {
+            let id = appid.to_string();
+            if self.appid.trim() != id {
+                self.appid = id;
+                self.status_key = None;
+            }
+        }
     }
 
     /// 账号展示名：`userdata/<id>/config/localconfig.vdf` → `<id>`。
@@ -477,5 +510,135 @@ mod tests {
     fn account_name_derives_userdata_id() {
         let vdf = Path::new(r"C:\Steam\userdata\12345678\config\localconfig.vdf");
         assert_eq!(OnlineFixState::account_name(vdf), "12345678");
+    }
+
+    // ---- T7：ACF 名称映射 + 生效游戏反查（#11） ----
+
+    /// 可控 ACF 读取桩：appid → ACF 内容（None = 缺失；由调用方决定合规/畸变）。
+    struct MockManifest {
+        acfs: std::collections::HashMap<u32, Option<String>>,
+    }
+    impl ManifestAccessor for MockManifest {
+        fn read_manifest_content(&self, _steam_dir: &Path, appid: u32) -> Option<String> {
+            self.acfs.get(&appid).cloned().flatten()
+        }
+    }
+
+    /// 构造含多 AppID 子块 + LaunchOptions 的 localconfig.vdf。
+    fn sample_vdf_multi(entries: &[(u32, Option<&str>)]) -> String {
+        let mut s = String::from(
+            "\"UserLocalConfigStore\"\n{\n\t\"Software\"\n\t{\n\t\t\"Valve\"\n\t\t{\n\t\t\t\"Steam\"\n\t\t\t{\n\t\t\t\t\"Apps\"\n\t\t\t\t{\n",
+        );
+        for (appid, launch) in entries {
+            s.push_str(&format!("\t\t\t\t\t\"{appid}\"\n\t\t\t\t\t{{\n"));
+            if let Some(v) = launch {
+                s.push_str(&format!("\t\t\t\t\t\t\"LaunchOptions\"\t\t\"{v}\"\n"));
+            }
+            s.push_str("\t\t\t\t\t}\n");
+        }
+        s.push_str("\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n}\n");
+        s
+    }
+
+    #[test]
+    fn refresh_maps_candidate_names_via_manifest() {
+        let dir = tmp_steam("names");
+        std::fs::create_dir_all(&dir).unwrap();
+        // 候选 AppID 由 Lua 扫描注入（config/lua/*.lua）。
+        let lua = dir.join("config").join("lua");
+        std::fs::create_dir_all(&lua).unwrap();
+        std::fs::write(
+            lua.join("app.lua"),
+            "addappid(367520)\naddappid(480)\naddappid(9999)\n",
+        )
+        .unwrap();
+        let mut manifest = MockManifest {
+            acfs: std::collections::HashMap::new(),
+        };
+        // 合规 ACF → 名称；畸变 ACF → 纯数字回退；缺失 ACF → 纯数字回退。
+        manifest.acfs.insert(
+            367520,
+            Some("\"AppState\"\n{\n\t\"name\"\t\t\"空洞骑士\"\n}\n".into()),
+        );
+        manifest.acfs.insert(480, Some("garbage".into()));
+        let mut st = OnlineFixState::new();
+        st.refresh(&dir, &manifest);
+        let by_id = |id: u32| st.candidates.iter().find(|c| c.appid == id).unwrap();
+        assert_eq!(by_id(367520).name.as_deref(), Some("空洞骑士"));
+        assert_eq!(by_id(480).name, None, "畸变 ACF 回退纯数字");
+        assert_eq!(by_id(9999).name, None, "缺失 ACF 回退纯数字");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn refresh_active_finds_marked_game_and_syncs_input() {
+        let dir = tmp_steam("active");
+        std::fs::create_dir_all(&dir).unwrap();
+        let vdf = dir.join("localconfig.vdf");
+        // 多 AppID：仅 1361510 带 -onlinefix。
+        std::fs::write(
+            &vdf,
+            sample_vdf_multi(&[(1361510, Some("-onlinefix")), (480, None)]),
+        )
+        .unwrap();
+        let mut manifest = MockManifest {
+            acfs: std::collections::HashMap::new(),
+        };
+        manifest.acfs.insert(
+            1361510,
+            Some("\"AppState\"\n{\n\t\"name\"\t\t\"双人成行\"\n}\n".into()),
+        );
+        let mut st = OnlineFixState::new();
+        st.accounts = vec![vdf.clone()];
+        st.appid = "0".into(); // 会被同步覆盖。
+        st.refresh_active(&dir, &manifest);
+        let active = st.active.as_ref().expect("应反查到生效游戏");
+        assert_eq!(active.appid, 1361510);
+        assert_eq!(active.name.as_deref(), Some("双人成行"));
+        // 进入页签自动同步 AppID 输入框。
+        assert_eq!(st.appid, "1361510");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn refresh_active_after_disable_clears_board() {
+        let dir = tmp_steam("active-none");
+        std::fs::create_dir_all(&dir).unwrap();
+        let vdf = dir.join("localconfig.vdf");
+        std::fs::write(&vdf, sample_vdf_multi(&[(480, None)])).unwrap();
+        let manifest = MockManifest {
+            acfs: std::collections::HashMap::new(),
+        };
+        let mut st = OnlineFixState::new();
+        st.accounts = vec![vdf];
+        st.appid = "480".into();
+        st.refresh_active(&dir, &manifest);
+        assert!(st.active.is_none(), "无标记 → 无看板");
+        // 无生效游戏时输入框不被覆盖。
+        assert_eq!(st.appid, "480");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn refresh_active_follows_account_switch() {
+        let dir = tmp_steam("switch");
+        std::fs::create_dir_all(&dir).unwrap();
+        let vdf_a = dir.join("a.vdf");
+        let vdf_b = dir.join("b.vdf");
+        std::fs::write(&vdf_a, sample_vdf_multi(&[(1361510, Some("-onlinefix"))])).unwrap();
+        std::fs::write(&vdf_b, sample_vdf_multi(&[(480, None)])).unwrap();
+        let manifest = MockManifest {
+            acfs: std::collections::HashMap::new(),
+        };
+        let mut st = OnlineFixState::new();
+        st.accounts = vec![vdf_a, vdf_b];
+        st.refresh_active(&dir, &manifest);
+        assert_eq!(st.active.as_ref().map(|a| a.appid), Some(1361510));
+        // 换账号 → 反查新账号（无标记 → 看板消失，输入框保留）。
+        st.select_account(1);
+        st.refresh_active(&dir, &manifest);
+        assert!(st.active.is_none());
+        assert_eq!(st.appid, "1361510", "换账号后无生效游戏不覆盖输入框");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
