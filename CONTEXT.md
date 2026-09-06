@@ -148,6 +148,9 @@ _Avoid_: 卡片 2、操作区
 当前选中账号 `localconfig.vdf` 中带 `-onlinefix` 启动选项的 AppID（业务约束：同一时间仅一个 OnlineFix 游戏可运行）；OnlineFix 预设页顶部以看板形式高亮展示 AppID 与名称并提供快捷停用，进入预设页自动同步 AppID 输入框。
 _Avoid_: 生效项、激活游戏
 
+**当前已启用（Currently Enabled）**:
+OnlineFix 预设页账号选择下方常驻的状态条文案：所选账号存在带 `-onlinefix` 的生效游戏时显示「当前已启用：<名称> (AppID)」，否则显示「当前未启用」；与「当前生效游戏」看板互补——看板带停用操作，状态条纯文本反馈。
+_Avoid_: 已激活、激活状态
 
 **候选项（Candidate）**:
 OnlineFix 预设页候选胶囊背后的 AppID + 本地名称映射（代码 `CandidateGame`，SPEC §8.3）：名称来自本地 `appmanifest_<appid>.acf` 解析，ACF 缺失/畸变时名称为空，展示回退纯数字；点击胶囊填充 AppID 输入框。
@@ -156,6 +159,10 @@ _Avoid_: 候选列表、建议
 **常规偏好（General）**:
 设置对话框第一页签，管理工具自身全局偏好：界面语言（自动检测/简体中文/English）与「最小化至托盘」，持久化于 `gui_config.toml`。
 _Avoid_: 通用设置、常规设置
+
+**关于软件（About）**:
+设置对话框「常规偏好」页底部的小区块：展示工具名称（`app_title`）、当前版本（Cargo.toml 版本号 `v` 前缀，与补丁「本地版本」区分）与 GitHub 源码仓库链接按钮；点击链接经分派器调起默认浏览器。
+_Avoid_: 关于本程序、About 页
 
 **便携模式（Portable Mode）**:
 exe 同级目录可写时采用的存储模式：配置（`gui_config.toml`）、缓存（`cache/`）与 DLL 资产（`dlls/`）全部收拢于 exe 同级。

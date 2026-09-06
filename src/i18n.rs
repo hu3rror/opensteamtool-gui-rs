@@ -176,6 +176,16 @@ pub struct Strings {
     pub of_active_title: &'static str,
     /// 看板停用按钮（T7，与 Footer「停用 OnlineFix」同指一操作）。
     pub of_deactivate: &'static str,
+    /// 设置对话框「常规偏好」页底部「关于软件」区块标题（填补下截留白）。
+    pub about_title: &'static str,
+    /// 「关于软件」区块「当前版本：」前缀（值为工具自身版本，取 Cargo.toml 版本）。
+    pub about_version: &'static str,
+    /// 「关于软件」区块 GitHub 源码仓库链接按钮。
+    pub about_github: &'static str,
+    /// OnlineFix 预设页「当前已启用：」状态条前缀（账号下方常驻；词表「当前已启用」）。
+    pub of_current_enabled: &'static str,
+    /// OnlineFix 预设页状态条：当前无生效游戏时的文案。
+    pub of_current_none: &'static str,
     /// Steam 核心兼容性（SPEC.md §7.8）。
     pub compat_title: &'static str,
     pub compat_checking: &'static str,
@@ -369,6 +379,11 @@ impl Strings {
             of_single_limit: "注意：同一时间仅一个 onlinefix 游戏可运行",
             of_active_title: "当前生效游戏",
             of_deactivate: "停用",
+            about_title: "关于软件",
+            about_version: "当前版本：",
+            about_github: "GitHub 源码仓库",
+            of_current_enabled: "当前已启用：",
+            of_current_none: "当前未启用",
             compat_title: "Steam 核心兼容性",
             compat_checking: "正在检查兼容性...",
             compat_status_ready: "完美兼容 (已缓存)",
@@ -484,6 +499,11 @@ impl Strings {
             of_single_limit: "Note: only one onlinefix game can run at a time",
             of_active_title: "Active OnlineFix Game",
             of_deactivate: "Disable",
+            about_title: "About",
+            about_version: "Version: ",
+            about_github: "GitHub Repository",
+            of_current_enabled: "Currently enabled: ",
+            of_current_none: "Nothing enabled",
             compat_title: "Steam Core Compatibility",
             compat_checking: "Checking compatibility...",
             compat_status_ready: "Fully Compatible",

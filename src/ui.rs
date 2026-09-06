@@ -63,6 +63,15 @@ const SETTINGS_DIALOG_VERTICAL_RESERVE: f32 = 226.0;
 /// 编辑区高度下限/上限（防极小窗口出屏 / 超大窗口失控）。
 const SETTINGS_EDITOR_MIN_H: f32 = 120.0;
 const SETTINGS_EDITOR_MAX_H: f32 = 560.0;
+/// 工具自身版本展示（「关于软件」区块；Cargo.toml 版本号，与补丁「本地版本」区分）。
+const APP_VERSION_DISPLAY: &str = concat!("v", env!("CARGO_PKG_VERSION"));
+
+/// OnlineFix 预设页候选胶囊区的固定高度上限（图4 死约束）：
+/// 候选刷新增长不得把 Modal 撑到超出屏幕（外层仍套视口锚定滚动兜底）。
+const ONLINEFIX_CANDIDATES_MAX_H: f32 = 180.0;
+/// OnlineFix 页相对 ConfigEditor 多出的固定内容（当前已启用状态条 + 生效游戏看板）预留。
+/// 外层滚动高度 = 视口 − 基础预留 − 此额外预留；不动 SETTINGS_DIALOG_VERTICAL_RESERVE（回归测试锁定）。
+const ONLINEFIX_EXTRA_RESERVE: f32 = 72.0;
 fn install_theme(ctx: &egui::Context) {
     let mut visuals = egui::Visuals::light();
     visuals.panel_fill = PANEL_BG;
@@ -375,10 +384,13 @@ fn patch_console_buttons(
     enabled: bool,
     actions: &mut PatchActions,
 ) -> (egui::Response, egui::Response) {
+    // 按钮行：两枚等宽按钮横向并排（twin_button_width 均分可用宽，SPEC AC2）。
+    // 必须在 horizontal 布局内渲染——父卡片是纵向（top_down）布局，
+    // 直接 add 会把两枚按钮竖排堆叠（图1 回归：缺 ui.horizontal 包裹）。
     let gap = 12.0;
     let w = twin_button_width(ui.available_width(), gap, ui.spacing().item_spacing.x);
     let size = egui::vec2(w, 36.0);
-    match status {
+    ui.horizontal(|ui| match status {
         DeployStatus::Deployed => {
             let first = styled_button(
                 ui,
@@ -390,7 +402,7 @@ fn patch_console_buttons(
             if first.clicked() {
                 actions.exit_and_uninstall = true;
             }
-            ui.add_space(gap);
+            ui.add_space(gap); // 横向 gap（horizontal 内 add_space 沿主轴前进）。
             let second = styled_button(
                 ui,
                 strings.btn_uninstall_and_restart,
@@ -427,13 +439,12 @@ fn patch_console_buttons(
             let second = styled_button(ui, strings.btn_launch_normal, ButtonStyle::Launch, size, false);
             (first, second)
         }
-    }
+    })
+    .inner
 }
 
-/// 底部状态栏：右侧（版本 + 按钮）预留宽度，左侧提示超长截断防溢出。
+/// 底部状态栏：右侧（版本 + 按钮）预留宽度——左上提示自适应取 min(文本宽, 可用宽 − 此预留)。
 const STATUS_BAR_RIGHT_RESERVE: f32 = 340.0;
-/// 底部状态栏：版本文本最大宽度（超长截断，防挤压按钮行）。
-const STATUS_BAR_VERSION_MAX: f32 = 220.0;
 
 /// 底部状态栏渲染输入（T6 AC3 视图模型，聚合渲染所需状态）。
 struct StatusBarView<'a> {
@@ -529,8 +540,10 @@ fn status_bar_right(
             .layout_no_wrap(text.clone(), egui::FontId::proportional(12.5), color)
             .size()
             .x;
+        // 版本 Label 宽度 = min(文本宽, 按钮左侧剩余宽)：长版本串（如英文
+        // "Current Local Version: v0.7.0-beta..."）不再被 220px 死宽提前截断。
         let version = ui.add_sized(
-            egui::vec2(text_w.min(STATUS_BAR_VERSION_MAX), 18.0),
+            egui::vec2(text_w.min(ui.available_width().max(60.0)), 18.0),
             egui::Label::new(egui::RichText::new(text).size(12.5).color(color)).truncate(),
         );
         (version, btn)
@@ -560,11 +573,16 @@ fn status_bar_notice(ui: &mut egui::Ui, view: &StatusBarView<'_>) -> Option<Stri
         let (rect, _) = ui.allocate_exact_size(egui::vec2(7.0, 7.0), egui::Sense::hover());
         ui.painter().circle_filled(rect.center(), 3.5, dot_color);
         ui.add_space(6.0);
+        // 左侧 Label 自适应：宽度 = min(文本宽, 可用宽 − 右侧预览)，
+        // 长提示不再被固定预留宽提前截成省略号（防右侧按钮被挤出）。
+        let text_w = ui
+            .painter()
+            .layout_no_wrap(text.clone(), egui::FontId::proportional(12.5), color)
+            .size()
+            .x;
+        let max_w = (ui.available_width() - STATUS_BAR_RIGHT_RESERVE).max(60.0);
         ui.add_sized(
-            egui::vec2(
-                (ui.available_width() - STATUS_BAR_RIGHT_RESERVE).max(60.0),
-                16.0,
-            ),
+            egui::vec2(text_w.min(max_w), 16.0),
             egui::Label::new(egui::RichText::new(text.clone()).size(12.5).color(color)).truncate(),
         );
     });
@@ -802,6 +820,28 @@ fn footer_layout(tab: SettingsTab) -> (&'static [FooterAction], &'static [Footer
     }
 }
 
+/// 单个 Footer 按钮的固定尺寸（render_footer_button 与布局宽度估算共用同一事实源）。
+fn footer_button_size(action: FooterAction) -> egui::Vec2 {
+    match action {
+        FooterAction::Close => egui::vec2(80.0, 30.0),
+        FooterAction::Save => egui::vec2(80.0, 30.0),
+        FooterAction::LoadTemplate => egui::vec2(150.0, 30.0),
+        FooterAction::Undo => egui::vec2(64.0, 30.0),
+        FooterAction::Copy => egui::vec2(84.0, 30.0),
+        FooterAction::Enable => egui::vec2(120.0, 30.0),
+        FooterAction::Disable => egui::vec2(120.0, 30.0),
+    }
+}
+
+/// 一组 Footer 按钮沿主轴占用的总宽度（含内部 item_spacing；RTL 组同样适用）。
+fn footer_group_width(actions: &[FooterAction], item_spacing: f32) -> f32 {
+    if actions.is_empty() {
+        return 0.0;
+    }
+    actions.iter().map(|a| footer_button_size(*a).x).sum::<f32>()
+        + (actions.len() - 1) as f32 * item_spacing
+}
+
 /// 渲染单个 Footer 按钮并收集点击意图（SPEC AC5 单行动态 Footer）。
 fn render_footer_button(
     ui: &mut egui::Ui,
@@ -809,43 +849,16 @@ fn render_footer_button(
     action: FooterAction,
     actions: &mut SettingsActions,
 ) {
-    let (label, style, size) = match action {
-        FooterAction::Close => (
-            strings.btn_close,
-            ButtonStyle::Secondary,
-            egui::vec2(80.0, 30.0),
-        ),
-        FooterAction::Save => (
-            strings.btn_save,
-            ButtonStyle::Primary,
-            egui::vec2(80.0, 30.0),
-        ),
-        FooterAction::LoadTemplate => (
-            strings.btn_load_template,
-            ButtonStyle::Secondary,
-            egui::vec2(150.0, 30.0),
-        ),
-        FooterAction::Undo => (
-            strings.btn_undo,
-            ButtonStyle::Secondary,
-            egui::vec2(64.0, 30.0),
-        ),
-        FooterAction::Copy => (
-            strings.of_btn_copy,
-            ButtonStyle::Secondary,
-            egui::vec2(84.0, 30.0),
-        ),
-        FooterAction::Enable => (
-            strings.of_btn_enable,
-            ButtonStyle::Primary,
-            egui::vec2(120.0, 30.0),
-        ),
-        FooterAction::Disable => (
-            strings.of_btn_disable,
-            ButtonStyle::Secondary,
-            egui::vec2(120.0, 30.0),
-        ),
+    let (label, style) = match action {
+        FooterAction::Close => (strings.btn_close, ButtonStyle::Secondary),
+        FooterAction::Save => (strings.btn_save, ButtonStyle::Primary),
+        FooterAction::LoadTemplate => (strings.btn_load_template, ButtonStyle::Secondary),
+        FooterAction::Undo => (strings.btn_undo, ButtonStyle::Secondary),
+        FooterAction::Copy => (strings.of_btn_copy, ButtonStyle::Secondary),
+        FooterAction::Enable => (strings.of_btn_enable, ButtonStyle::Primary),
+        FooterAction::Disable => (strings.of_btn_disable, ButtonStyle::Secondary),
     };
+    let size = footer_button_size(action);
     if styled_button(ui, label, style, size, true).clicked() {
         match action {
             FooterAction::Close => actions.close = true,
@@ -1424,6 +1437,8 @@ impl App {
         let file_exists = steam_ok && target.exists();
         let mut actions = SettingsActions::default();
         let mut template_confirm = false;
+        // 配置编辑器状态反馈（下沉到 Footer 中间状态槽，两端对齐布局）。
+        let mut cfg_status: Option<(String, egui::Color32)> = None;
         let mut tab_clicked = None;
         let mut lang_changed = false;
         let mut minimize_changed = false;
@@ -1496,6 +1511,54 @@ impl App {
                     if self.gui_config.minimize_to_tray != minimize_before {
                         minimize_changed = true;
                     }
+
+                    // 关于软件小区块（填补常规偏好页下半截留白）：App 名称 + 当前版本 + 源码链接卡。
+                    ui.add_space(12.0);
+                    egui::Frame::group(ui.style())
+                        .inner_margin(egui::Margin::symmetric(10, 8))
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.label(
+                                egui::RichText::new(self.strings.about_title)
+                                    .size(13.5)
+                                    .strong()
+                                    .color(TEXT_INK),
+                            );
+                            ui.add_space(6.0);
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(self.strings.app_title)
+                                        .size(12.5)
+                                        .color(TEXT_SUB),
+                                );
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{}{}",
+                                            self.strings.about_version,
+                                            APP_VERSION_DISPLAY
+                                        ))
+                                        .size(12.5)
+                                        .color(TEXT_SUB),
+                                    );
+                                });
+                            });
+                            ui.add_space(6.0);
+                            ui.separator();
+                            ui.add_space(6.0);
+                            if styled_button(
+                                ui,
+                                self.strings.about_github,
+                                ButtonStyle::Lang,
+                                egui::vec2(160.0, 28.0),
+                                true,
+                            )
+                            .on_hover_text(external::GITHUB_REPO_URL)
+                            .clicked()
+                            {
+                                let _ = self.dispatcher.open_browser_url(external::GITHUB_REPO_URL);
+                            }
+                        });
                 }
                 SettingsTab::ConfigEditor => {
                     // 懒加载：首次进入该页签才读盘。
@@ -1549,15 +1612,16 @@ impl App {
                     }
                     ui.add_space(6.0);
 
-                    // 底部固定行：状态 + 按钮。
-                    if let Some(err) = &self.cfg.err {
-                        status_line(ui, &config_err_text(&self.strings, self.lang, err), ERR_RED);
+                    // 状态反馈下沉到 Footer 中间状态槽（两端对齐：左[模板][撤销] 中[状态] 右[保存][关闭]）。
+                    cfg_status = if let Some(err) = &self.cfg.err {
+                        Some((config_err_text(&self.strings, self.lang, err), ERR_RED))
                     } else if self.cfg.saved {
-                        status_line(ui, self.strings.ok_config_saved, STATUS_INSTALLED);
+                        Some((self.strings.ok_config_saved.to_string(), STATUS_INSTALLED))
                     } else if !file_exists {
-                        status_line(ui, self.strings.settings_file_missing, TEXT_WEAK);
-                    }
-                    ui.add_space(10.0);
+                        Some((self.strings.settings_file_missing.to_string(), TEXT_WEAK))
+                    } else {
+                        None
+                    };
                 }
                 SettingsTab::OnlineFix => {
                     // 写入门闩：快速判定（仅看 steam.exe，2s 缓存）；残留 webhelper 等孤儿由写时实时复查兜底。
@@ -1592,6 +1656,24 @@ impl App {
                         });
                         ui.add_space(6.0);
 
+                        // 「当前已启用」状态条（账号下方常驻一行；词表「当前已启用」）：
+                        // 无论是否生效都给出一行文本反馈，不依赖看板是否渲染。
+                        let strip = match &self.of.active {
+                            Some(active) => {
+                                let label = match &active.name {
+                                    Some(name) => format!("{name} ({})", active.appid),
+                                    None => active.appid.to_string(),
+                                };
+                                (
+                                    format!("{}{}", self.strings.of_current_enabled, label),
+                                    STATUS_INSTALLED,
+                                )
+                            }
+                            None => (self.strings.of_current_none.to_string(), TEXT_WEAK),
+                        };
+                        status_line(ui, &strip.0, strip.1);
+                        ui.add_space(6.0);
+
                         // 看板：当前生效游戏（SPEC AC6；看板停用与 Footer 停用同指一操作）。
                         if let Some(active) = &self.of.active {
                             if render_active_board(ui, &self.strings, active).0 {
@@ -1600,11 +1682,16 @@ impl App {
                             ui.add_space(6.0);
                         }
 
-                        // 中间滚动：AppID 输入 + 候选（高度锚定视口，同 ConfigEditor 反馈环修复）。
-                        let h_mid = (ui.ctx().viewport_rect().height() - SETTINGS_DIALOG_VERTICAL_RESERVE)
+                        // 中间滚动（外层兜底）：AppID 输入 + 候选胶囊区。
+                        // 高度锚定视口（同 ConfigEditor 反馈环修复），并扣除 OnlineFix 额外预留
+                        // （当前已启用状态条 + 看板），内容增长绝不把 Modal 撑出屏幕。
+                        let h_mid = (ui.ctx().viewport_rect().height()
+                            - SETTINGS_DIALOG_VERTICAL_RESERVE
+                            - ONLINEFIX_EXTRA_RESERVE)
                             .clamp(SETTINGS_EDITOR_MIN_H, SETTINGS_EDITOR_MAX_H);
                         egui::ScrollArea::vertical().max_height(h_mid).show(ui, |ui| {
-                            ui.horizontal_wrapped(|ui| {
+                            // 输入行（固定，不随候选数量增长）。
+                            ui.horizontal(|ui| {
                                 ui.label(self.strings.of_appid_label);
                                 let resp = ui.add(
                                     egui::TextEdit::singleline(&mut self.of.appid)
@@ -1614,17 +1701,29 @@ impl App {
                                 if resp.changed() {
                                     self.of.appid_changed();
                                 }
-                                if !self.of.candidates.is_empty() {
-                                    ui.add_space(8.0);
-                                    // 胶囊：ACF 含名称 → 「名称 (appid)」；缺失/畸变 → 纯数字（SPEC AC6）。
-                                    if let Some(id) =
-                                        render_candidate_capsules(ui, &self.of.candidates).0
-                                    {
-                                        self.of.appid = id.to_string();
-                                        self.of.appid_changed();
-                                    }
-                                }
                             });
+
+                            // 候选胶囊区：装在带固定高度上限的滚动区域（图4 死约束
+                            // max_height(180)），海量候选只在内部滚动、不撑爆 Modal。
+                            if !self.of.candidates.is_empty() {
+                                ui.add_space(6.0);
+                                egui::ScrollArea::vertical()
+                                    .id_salt("of_candidate_scroll")
+                                    .max_height(ONLINEFIX_CANDIDATES_MAX_H)
+                                    .show(ui, |ui| {
+                                        ui.horizontal_wrapped(|ui| {
+                                            // 胶囊：ACF 含名称 → 「名称 (appid)」；缺失/畸变 → 纯数字（SPEC AC6）。
+                                            if let Some(id) = render_candidate_capsules(
+                                                ui, &self.of.candidates,
+                                            )
+                                            .0
+                                            {
+                                                self.of.appid = id.to_string();
+                                                self.of.appid_changed();
+                                            }
+                                        });
+                                    });
+                            }
                         });
                         ui.add_space(6.0);
 
@@ -1651,6 +1750,32 @@ impl App {
                 for action in left {
                     render_footer_button(ui, &self.strings, *action, &mut actions);
                 }
+
+                // 中间状态槽（仅配置编辑器）：左端[模板][撤销]与右端[保存][关闭]之间预留
+                // status_line 位——状态出现/消失不引起两端按钮跳动（底部两端对齐布局）。
+                if self.settings_tab == SettingsTab::ConfigEditor {
+                    let right_w = footer_group_width(right, ui.spacing().item_spacing.x);
+                    let mid_w = (ui.available_width() - right_w).max(0.0);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(mid_w, 30.0),
+                        egui::Layout::centered_and_justified(egui::Direction::TopDown),
+                        |ui| {
+                            if let Some((text, color)) = &cfg_status {
+                                let resp = ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(text.as_str())
+                                            .size(13.0)
+                                            .strong()
+                                            .color(*color),
+                                    )
+                                    .truncate(),
+                                );
+                                let _ = resp.on_hover_text(text.clone());
+                            }
+                        },
+                    );
+                }
+
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     for action in right {
                         render_footer_button(ui, &self.strings, *action, &mut actions);
@@ -2039,9 +2164,13 @@ impl App {
             notice: self.notice.as_ref(),
         };
         let mut actions = StatusBarActions::default();
+        // 底栏（T6 AC3）：ui.horizontal + 左侧 Label 自适应 + 右侧 with_layout(right_to_left)
+        // （版本 + 更新按钮贴右缘；左侧提示不再被右侧预留宽提前截断）。
         ui.horizontal(|ui| {
             let _ = status_bar_notice(ui, &view);
-            let _ = status_bar_right(ui, &view, &mut actions);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let _ = status_bar_right(ui, &view, &mut actions);
+            });
         });
         if actions.check {
             self.check_update(&ctx);
@@ -3384,6 +3513,170 @@ mod tests {
         full.textures_delta.clear();
         assert_eq!(picked, Some(480));
     }
+    // ---- 回归：图1 补丁控制台按钮横向并排 ----
+
+    /// 两枚操作按钮必须在同一行横向并排（首在左、次在右），且不溢出窗口。
+    /// 背景：父卡片是纵向（top_down）布局，`patch_console_buttons` 缺 `ui.horizontal`
+    /// 包裹，按钮被竖排堆叠成两行（每次各占半宽、整体失衡）。
+    #[test]
+    fn patch_console_buttons_side_by_side_row() {
+        let ctx = egui::Context::default();
+        let raw = headless_raw();
+        for status in [DeployStatus::NotDeployed, DeployStatus::Deployed] {
+            let (first, second) = render_console_buttons(&ctx, &raw, status, false, true);
+            assert!(
+                (first.rect.center().y - second.rect.center().y).abs() < 1.0,
+                "status={status:?}: 两按钮应同一行，y1={} y2={}",
+                first.rect.center().y,
+                second.rect.center().y
+            );
+            assert!(
+                first.rect.right() < second.rect.left(),
+                "status={status:?}: 首按钮应位于次按钮左侧"
+            );
+            assert!(
+                first.rect.width() > 0.0 && second.rect.left() < first.rect.right() + 200.0,
+                "status={status:?}: 双按钮排布异常"
+            );
+        }
+    }
+
+    // ---- 回归：图1 底栏版本文案不再被死宽截断 ----
+
+    /// 长版本串（英文 UI）宽度自适应到 min(文本宽, 按钮左侧剩余宽)。
+    /// 背景：原 `STATUS_BAR_VERSION_MAX=220` 死宽 + truncate，英文长版本号
+    /// （"Current Local Version: v0.7.0-beta.2+win64" ≈ 260px）被提前截断。
+    #[test]
+    fn status_bar_version_long_text_not_truncated() {
+        let ctx = egui::Context::default();
+        let raw = headless_raw();
+        let en = Strings::new(Lang::En);
+        let view = status_view(
+            &en,
+            Some("0.7.0-beta.2+win64"),
+            true,
+            &UpdateState::Idle,
+            false,
+            None,
+            None,
+        );
+        let (version, _) = render_status_right(&ctx, &raw, &view);
+        assert!(
+            version.rect.width() > 220.0,
+            "版本 Label 宽度 {} 仍被旧 220px 死宽截断",
+            version.rect.width()
+        );
+        assert!(
+            version.rect.right() <= 640.0 + 0.5,
+            "版本 Label 不得溢出窗口右缘"
+        );
+    }
+
+    // ---- 回归：图4 OnlineFix 候选胶囊区限高滚动 + Modal 不溢出屏幕 ----
+
+    /// 复刻 OnlineFix 页签 Modal 结构（账号行 + 状态条 + 看板 + 输入行 + 候选滚动 + Footer），
+    /// 注入 30 个候选：断言胶囊区高度 ≤ 180 + 余量（限高滚动生效），
+    /// 且 Footer 关闭按钮底边不超出视口（海量候选不再把 Modal 撑出屏幕）。
+    #[test]
+    fn onlinefix_modal_bounded_with_many_candidates() {
+        let ctx = egui::Context::default();
+        let raw = headless_raw();
+        let mut capsule_area_h = 0.0f32;
+        let mut close_btn_bottom: Option<f32> = None;
+        let mut full = ctx.run_ui(raw, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                egui::Modal::new(egui::Id::new("settings_dialog")).show(ui.ctx(), |ui| {
+                    ui.set_width(560.0);
+                    ui.heading("设置");
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        let _ = ui.selectable_label(true, "OnlineFix 启动预设");
+                    });
+                    ui.add_space(6.0);
+                    ui.separator();
+                    ui.add_space(6.0);
+
+                    // 账号行（占位）。
+                    ui.horizontal(|ui| {
+                        ui.label("账号：");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut String::from("User")).desired_width(150.0),
+                        );
+                    });
+                    ui.add_space(6.0);
+                    // 「当前已启用」状态条。
+                    ui.label(egui::RichText::new("当前已启用：示例 (12345)").strong());
+                    ui.add_space(6.0);
+                    // 看板（占位）。
+                    egui::Frame::group(ui.style()).show(ui, |ui| {
+                        ui.label("当前生效游戏 示例 (12345)");
+                    });
+                    ui.add_space(6.0);
+
+                    // 输入行 + 候选胶囊滚动（复刻真实结构）。
+                    let h_mid = (ui.ctx().viewport_rect().height()
+                        - SETTINGS_DIALOG_VERTICAL_RESERVE
+                        - ONLINEFIX_EXTRA_RESERVE)
+                        .clamp(SETTINGS_EDITOR_MIN_H, SETTINGS_EDITOR_MAX_H);
+                    egui::ScrollArea::vertical().max_height(h_mid).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("游戏 AppID：");
+                            ui.add(
+                                egui::TextEdit::singleline(&mut String::from("12345"))
+                                    .desired_width(96.0)
+                                    .hint_text("0"),
+                            );
+                        });
+                        ui.add_space(6.0);
+                        let y0 = ui.cursor().top();
+                        let candidates: Vec<onlinefix::CandidateGame> = (0..30)
+                            .map(|i| onlinefix::CandidateGame {
+                                appid: 1000 + i as u32,
+                                name: Some(format!("Game {i}")),
+                            })
+                            .collect();
+                        egui::ScrollArea::vertical()
+                            .id_salt("of_candidate_scroll")
+                            .max_height(ONLINEFIX_CANDIDATES_MAX_H)
+                            .show(ui, |ui| {
+                                ui.horizontal_wrapped(|ui| {
+                                    let _ = render_candidate_capsules(ui, &candidates);
+                                });
+                            });
+                        capsule_area_h = ui.cursor().top() - y0;
+                    });
+                    ui.add_space(6.0);
+
+                    // 底部状态行 + 提示 + Footer。
+                    ui.label("该游戏已启用 -onlinefix");
+                    ui.add_space(8.0);
+                    ui.label("注意：同一时间仅一个 onlinefix 游戏可运行");
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        let close = ui.button("关闭");
+                        close_btn_bottom = Some(close.rect.bottom());
+                    });
+                });
+            });
+        });
+        full.textures_delta.clear();
+        assert!(
+            capsule_area_h > 0.0,
+            "候选胶囊区应实际渲染"
+        );
+        assert!(
+            capsule_area_h <= ONLINEFIX_CANDIDATES_MAX_H + 24.0,
+            "候选胶囊区高度 {capsule_area_h} 超出限高（图4 死约束失效）"
+        );
+        let bottom = close_btn_bottom.expect("关闭按钮必渲染");
+        assert!(
+            bottom <= 520.0 + 0.5,
+            "关闭按钮底 {bottom} 超出视口 520（Modal 被内容撑出屏幕）"
+        );
+    }
+
 
     // ---- 回归：设置弹窗编辑区高度锚定视口，布局跨帧稳定（诊断反馈环修复） ----
 
