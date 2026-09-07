@@ -1,7 +1,7 @@
 # 便携版构建打包脚本：cargo build --release + 打 ZIP（exe + dlls/ 占位）。
 # 本地与 CI（.github/workflows/release.yml）共用。
 #
-# 用法：powershell -File tools/build-release.ps1 [-Version <字符串>]
+# 用法：pwsh -File tools/build-release.ps1 [-Version <字符串>]（需 pwsh 7+）
 #   默认 Version=0.0.0，产物 opensteamtool-manager-<Version>.zip 于仓库根目录。
 
 param(
@@ -26,11 +26,7 @@ $placeholder = @"
 - 点「检查更新」+「下载并解压新版本」可自动拉取目标 DLL 到此目录；
 - 也可手动解压 OpenSteamTool 发布包，把上述三个 DLL 放到这里。
 "@
-[System.IO.File]::WriteAllText(
-    (Join-Path $dllDir "README.txt"),
-    $placeholder,
-    [System.Text.UTF8Encoding]::new($false)
-)
+[System.IO.File]::WriteAllText((Join-Path $dllDir "README.txt"), $placeholder)  # 默认无 BOM UTF-8
 
 $zip = Join-Path (Get-Location) "opensteamtool-manager-$Version.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }

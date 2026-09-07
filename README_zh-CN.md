@@ -33,10 +33,10 @@ cargo build --release
 # 产物：target/release/opensteamtool-manager.exe（约 6.8 MB）
 ```
 
-打包便携版 ZIP（本地与 CI 同脚本）：
+打包便携版 ZIP（本地与 CI 同脚本；需要 PowerShell 7+，即 `pwsh`）：
 
 ```sh
-powershell -File tools/build-release.ps1 -Version <版本>
+pwsh -File tools/build-release.ps1 -Version <版本>
 ```
 
 测试：

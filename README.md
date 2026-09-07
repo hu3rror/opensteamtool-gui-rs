@@ -33,10 +33,10 @@ cargo build --release
 # Output: target/release/opensteamtool-manager.exe (~6.8 MB)
 ```
 
-Package the portable ZIP (same script local and CI use):
+Package the portable ZIP (same script local and CI use; requires PowerShell 7+, `pwsh`):
 
 ```sh
-powershell -File tools/build-release.ps1 -Version <version>
+pwsh -File tools/build-release.ps1 -Version <version>
 ```
 
 Tests:

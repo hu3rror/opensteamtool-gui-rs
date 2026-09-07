@@ -1,4 +1,4 @@
-# 分析截图各行像素颜色，定位黑色区域范围。用法: powershell -File tools/analyze_shot.ps1 [-Png xxx.png]
+# 分析截图各行像素颜色，定位黑色区域范围。用法: pwsh -File tools/analyze_shot.ps1 [-Png xxx.png]（需 pwsh 7+）
 param([string]$Png = "shot_baseline.png")
 Add-Type -AssemblyName System.Drawing
 $bmp = [System.Drawing.Bitmap]::FromFile((Join-Path (Get-Location) $Png))

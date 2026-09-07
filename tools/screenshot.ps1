@@ -1,4 +1,4 @@
-# 捕获窗口截图（PrintWindow，可对后台窗口生效）。用法: powershell -File screenshot.ps1 [-ProcName xxx] [-Out png]
+# 捕获窗口截图（PrintWindow，可对后台窗口生效）。用法: pwsh -File tools/screenshot.ps1 [-ProcName xxx] [-Out png]（需 pwsh 7+）
 param(
     [string]$ProcName = "opensteamtool-manager",
     [string]$Out = "shot.png"
