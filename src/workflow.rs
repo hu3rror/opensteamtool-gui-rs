@@ -22,11 +22,15 @@ pub enum Action {
     ExitAndUninstall,
     /// 卸载补丁并重启 Steam。
     UninstallAndRestart,
+    /// 重启 Steam（关闭进程组后重新启动，不含补丁操作）。
+    Restart,
 }
 
 impl Action {
-    /// 需要先关闭 Steam 才能执行的操作。
-    pub fn needs_close(self) -> bool {
+    /// 点击时若 Steam 在运行**需要先弹「关闭确认」框**的操作（确认流判定）。
+    /// 注意：`Restart` 恒含关闭步骤但不弹确认框（按钮语义即「关闭并重启」，
+    /// 再确认是冗余打扰）；`plan` 对 `Restart` 无条件先关闭。
+    pub fn asks_to_close_steam(self) -> bool {
         matches!(
             self,
             Action::ApplyAndLaunch | Action::ExitAndUninstall | Action::UninstallAndRestart
@@ -94,7 +98,7 @@ pub struct WorkflowError {
 
 /// 动作判定表 + 前置校验。返回有序执行步骤；前置不满足返回 `Precheck`。
 ///
-/// `kill_first` 表示先关闭 Steam（确认弹窗同意后为 true；仅 `needs_close`
+/// `kill_first` 表示先关闭 Steam（确认弹窗同意后为 true；仅 `asks_to_close_steam`
 /// 的动作会走到该分支）。
 pub fn plan(
     action: Action,
@@ -111,7 +115,7 @@ pub fn plan(
     }
     let needs_exe = matches!(
         action,
-        Action::Launch | Action::ApplyAndLaunch | Action::UninstallAndRestart
+        Action::Launch | Action::ApplyAndLaunch | Action::UninstallAndRestart | Action::Restart
     );
     if needs_exe && !steam_dir.join("steam.exe").is_file() {
         return Err(Precheck::NoSteamExe);
@@ -131,6 +135,14 @@ pub fn plan(
         Action::ExitAndUninstall => ops.push(Op::Uninstall),
         Action::UninstallAndRestart => {
             ops.push(Op::Uninstall);
+            ops.push(Op::Launch);
+        }
+        Action::Restart => {
+            // 重启恒含关闭步骤；kill_first 由确认流产生，Restart 不经确认直接执行，
+            // 但 `plan(Restart, true)` 组合下避免重复关闭（二次关闭幂等无害，保表整洁）。
+            if !kill_first {
+                ops.push(Op::CloseSteam);
+            }
             ops.push(Op::Launch);
         }
     }
@@ -213,6 +225,15 @@ mod tests {
             plan(Action::UninstallAndRestart, true, &steam, &dlls).unwrap(),
             vec![Op::CloseSteam, Op::Uninstall, Op::Launch]
         );
+        // 重启：恒含关闭+启动，不经确认（kill_first 组合下也不重复关闭）。
+        assert_eq!(
+            plan(Action::Restart, false, &steam, &dlls).unwrap(),
+            vec![Op::CloseSteam, Op::Launch]
+        );
+        assert_eq!(
+            plan(Action::Restart, true, &steam, &dlls).unwrap(),
+            vec![Op::CloseSteam, Op::Launch]
+        );
 
         std::fs::remove_dir_all(&dlls).ok();
         std::fs::remove_dir_all(&steam).ok();
@@ -246,6 +267,10 @@ mod tests {
         );
         assert_eq!(
             plan(Action::UninstallAndRestart, false, &steam_no_exe, &dlls),
+            Err(Precheck::NoSteamExe)
+        );
+        assert_eq!(
+            plan(Action::Restart, false, &steam_no_exe, &dlls),
             Err(Precheck::NoSteamExe)
         );
         std::fs::remove_dir_all(&dlls).ok();
@@ -330,12 +355,14 @@ mod tests {
         std::fs::remove_dir_all(&steam).ok();
     }
 
-    // 6. Action::needs_close 表：三个需关 Steam，Launch 不需。
+    // 6. Action::asks_to_close_steam 表：三个需先弹确认，Launch 不需（Restart 恒关闭但不弹）。
     #[test]
-    fn action_needs_close_table() {
-        assert!(Action::ApplyAndLaunch.needs_close());
-        assert!(!Action::Launch.needs_close());
-        assert!(Action::ExitAndUninstall.needs_close());
-        assert!(Action::UninstallAndRestart.needs_close());
+    fn action_asks_to_close_steam_table() {
+        assert!(Action::ApplyAndLaunch.asks_to_close_steam());
+        assert!(!Action::Launch.asks_to_close_steam());
+        assert!(Action::ExitAndUninstall.asks_to_close_steam());
+        assert!(Action::UninstallAndRestart.asks_to_close_steam());
+        // 重启语义即「关闭并重启」，不经确认框。
+        assert!(!Action::Restart.asks_to_close_steam());
     }
 }

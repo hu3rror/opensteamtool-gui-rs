@@ -291,11 +291,14 @@ fn of_status_line(strings: &Strings, status: &OfStatus) -> (String, egui::Color3
     }
 }
 
-/// 两枚等宽按钮并排时的单按钮宽度：`available` 减去手动 gap 与 egui 自动插入的
-/// item_spacing 后再均分。公式漏掉 item_spacing 会导致按钮行实际占宽超过可用宽度，
-/// 溢出并把下方依赖 `available_width` 撑满的卡片顶到窗口右缘（历史 bug）。
-fn twin_button_width(available: f32, gap: f32, item_spacing: f32) -> f32 {
-    ((available - gap - item_spacing) / 2.0).max(150.0)
+/// n 枚等宽按钮并排时的单按钮宽度：`available` 减去 (n-1) 个手动 gap 与
+/// (n-1) 个 egui 自动插入的 item_spacing 后再均分（egui 在每个 widget 后
+/// 都追加 item_spacing，见 `Layout::advance_after_rects`）。公式漏掉任一项
+/// 会导致按钮行实际占宽超过可用宽度，溢出并把下方依赖 `available_width`
+/// 撑满的卡片顶到窗口右缘（历史 bug）。
+fn row_button_width(available: f32, gap: f32, item_spacing: f32, count: u32) -> f32 {
+    let n = count.max(1) as f32;
+    ((available - (n - 1.0) * (gap + item_spacing)) / n).max(150.0)
 }
 /// 版本信息行：整行单 label（效仿 Python 纯文本，非胶囊标签）。
 fn version_line(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
@@ -615,9 +618,10 @@ impl App {
             strings.tray_show,
             strings.tray_quit,
             strings.tray_minimize,
+            strings.tray_restart,
         );
 
-        let app = Self {
+        let mut app = Self {
             lang,
             strings,
             steam_path,
@@ -649,6 +653,8 @@ impl App {
             compat: CompatUiState::checking(),
             compat_path: probe_path.clone(),
         };
+        // 初始同步托盘「重启 Steam」可用性（跟随初始 Steam 运行状态）。
+        app.sync_tray_restart_enabled();
         // 启动即触发首次体检（初始 checking 骨架态，零白屏）。
         app.spawn(&cc.egui_ctx, move || {
             Msg::Compat(compat::probe_all(Path::new(&probe_path)))
@@ -691,9 +697,17 @@ impl App {
         }
     }
 
+    /// 按当前 Steam 运行状态同步托盘「重启 Steam」项可用性（未运行置灰）。
+    /// 在 `steam_running` 每次变化处调用（初始 / 后台操作完成重扫 / 边沿事件）。
+    fn sync_tray_restart_enabled(&mut self) {
+        if let Some(tray) = &self.tray {
+            tray.set_restart_enabled(self.steam_running);
+        }
+    }
     /// 处理托盘事件：切换显隐 / 显示 / 退出。
     fn handle_tray_events(&mut self) {
         let Some(tray) = &self.tray else { return };
+        let ctx = self.ctx.clone(); // 避免 `&self.ctx` 与 `&mut self` 借用冲突。
         // 先收集动作再逐个处理，避免 tray 借用与 &mut self 冲突。
         let mut actions = Vec::new();
         while let Some(action) = tray.poll() {
@@ -709,6 +723,7 @@ impl App {
                     self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
                 TrayAction::ToggleMinimizeToTray => self.minimize_to_tray = minimize_checked,
+                TrayAction::RestartSteam => self.request_action(&ctx, Action::Restart),
             }
         }
     }
@@ -744,6 +759,7 @@ impl App {
                         self.refresh_status();
                     }
                     self.steam_running = self.steam_monitor.rescan();
+                    self.sync_tray_restart_enabled();
                     // 启动/重启类成功后 Steam 已运行 → 直接隐藏到托盘（不依赖边沿检测）；
                     // 仅退出并卸载（ExitAndUninstall）Steam 未运行 → 保持显示。
                     self.hide_if_steam_running();
@@ -809,7 +825,7 @@ impl App {
         if self.busy {
             return;
         }
-        if action.needs_close() && self.steam_running {
+        if action.asks_to_close_steam() && self.steam_running {
             self.confirm = Some(action);
             return;
         }
@@ -1460,24 +1476,73 @@ impl App {
         ui.add_space(10.0);
     }
 
-    /// 独立操作区：两大按钮等宽并排（效仿 Python action_frame，位于卡片 2 与卡片 3 之间）。
+    /// 独立操作区：等宽按钮并排（效仿 Python action_frame，位于卡片 2 与卡片 3 之间）。
+    /// 已应用且 Steam 运行中时为三枚（退出并卸载 / 重启 Steam / 卸载并重启），其余两枚。
     fn action_area(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         ui.horizontal(|ui| {
             let gap = 12.0;
-            // 宽度公式必须扣除 egui 自动插入的 item_spacing（见 twin_button_width），
+            let spacing = ui.spacing().item_spacing.x;
+            // 宽度公式必须扣除 egui 自动插入的 item_spacing 与手动 gap（见 row_button_width），
             // 否则按钮行实际占宽溢出，把下方卡片（card3 依赖 available_width 撑满）顶到窗口右缘。
-            let w = twin_button_width(ui.available_width(), gap, ui.spacing().item_spacing.x);
-            let size = egui::vec2(w, 36.0);
             match self.status {
+                DeployStatus::Deployed if self.steam_running => {
+                    // 「退出 Steam 并卸载补丁」/「重启 Steam」/「卸载补丁并重启 Steam」。
+                    let size = egui::vec2(
+                        row_button_width(ui.available_width(), gap, spacing, 3),
+                        36.0,
+                    );
+                    if styled_button(
+                        ui,
+                        self.strings.btn_exit_and_uninstall,
+                        ButtonStyle::UninstallExit,
+                        size,
+                        !self.busy,
+                    )
+                    .clicked()
+                    {
+                        self.request_action(&ctx, Action::ExitAndUninstall);
+                    }
+                    ui.add_space(gap);
+                    if styled_button(
+                        ui,
+                        self.strings.btn_restart_steam,
+                        ButtonStyle::Launch,
+                        size,
+                        !self.busy,
+                    )
+                    .clicked()
+                    {
+                        self.request_action(&ctx, Action::Restart);
+                    }
+                    ui.add_space(gap);
+                    if styled_button(
+                        ui,
+                        self.strings.btn_uninstall_and_restart,
+                        ButtonStyle::UninstallRestart,
+                        size,
+                        !self.busy,
+                    )
+                    .clicked()
+                    {
+                        self.request_action(&ctx, Action::UninstallAndRestart);
+                    }
+                }
                 DeployStatus::Deployed => {
-                    // Steam 运行中 →「退出 Steam 并卸载补丁」；已退出 → 直接「卸载补丁」。
-                    let uninstall_label = if self.steam_running {
-                        self.strings.btn_exit_and_uninstall
-                    } else {
-                        self.strings.btn_uninstall
-                    };
-                    if styled_button(ui, uninstall_label, ButtonStyle::UninstallExit, size, !self.busy).clicked() {
+                    // Steam 已退出 → 直接「卸载补丁」/「卸载补丁并重启 Steam」。
+                    let size = egui::vec2(
+                        row_button_width(ui.available_width(), gap, spacing, 2),
+                        36.0,
+                    );
+                    if styled_button(
+                        ui,
+                        self.strings.btn_uninstall,
+                        ButtonStyle::UninstallExit,
+                        size,
+                        !self.busy,
+                    )
+                    .clicked()
+                    {
                         self.request_action(&ctx, Action::ExitAndUninstall);
                     }
                     ui.add_space(gap);
@@ -1494,22 +1559,55 @@ impl App {
                     }
                 }
                 DeployStatus::NotDeployed => {
-                    if styled_button(ui, self.strings.btn_apply_and_launch, ButtonStyle::Deploy, size, !self.busy)
-                        .clicked()
+                    let size = egui::vec2(
+                        row_button_width(ui.available_width(), gap, spacing, 2),
+                        36.0,
+                    );
+                    if styled_button(
+                        ui,
+                        self.strings.btn_apply_and_launch,
+                        ButtonStyle::Deploy,
+                        size,
+                        !self.busy,
+                    )
+                    .clicked()
                     {
                         self.request_action(&ctx, Action::ApplyAndLaunch);
                     }
                     ui.add_space(gap);
-                    if styled_button(ui, self.strings.btn_launch_normal, ButtonStyle::Launch, size, !self.busy).clicked()
+                    if styled_button(
+                        ui,
+                        self.strings.btn_launch_normal,
+                        ButtonStyle::Launch,
+                        size,
+                        !self.busy,
+                    )
+                    .clicked()
                     {
                         self.request_action(&ctx, Action::Launch);
                     }
                 }
                 DeployStatus::InvalidPath => {
                     // 无有效路径时禁用操作按钮。
-                    styled_button(ui, self.strings.btn_apply_and_launch, ButtonStyle::Deploy, size, false);
+                    let size = egui::vec2(
+                        row_button_width(ui.available_width(), gap, spacing, 2),
+                        36.0,
+                    );
+                    styled_button(
+                        ui,
+                        self.strings.btn_apply_and_launch,
+                        ButtonStyle::Deploy,
+                        size,
+                        false,
+                    );
                     ui.add_space(gap);
-                    styled_button(ui, self.strings.btn_launch_normal, ButtonStyle::Launch, size, false);
+                    styled_button(
+                        ui,
+                        self.strings.btn_launch_normal,
+                        ButtonStyle::Launch,
+                        size,
+                        false,
+                    );
                 }
             }
         });
@@ -1683,6 +1781,7 @@ impl eframe::App for App {
         // 定时监视 Steam 运行状态（边沿事件 → 自动隐身策略）。
         if let Some(event) = self.steam_monitor.tick() {
             self.steam_running = event == SteamEvent::Started;
+            self.sync_tray_restart_enabled();
             if let Some(visible) = auto_tray_policy(event, self.window_visible) {
                 self.set_window_visible(visible);
             }
@@ -1893,23 +1992,32 @@ mod tests {
         }
     }
 
-    /// 布局回归：两枚等宽按钮 + 手动 gap + 自动 item_spacing 必须恰好等于可用宽度，
-    /// 不得溢出（历史 bug：溢出把下方 card3 顶到窗口右缘贴边）。
+    /// 布局回归：等宽按钮 + (n-1) 个手动 gap + (n-1) 个自动 item_spacing 必须恰好
+    /// 等于可用宽度，不得溢出（历史 bug：溢出把下方 card3 顶到窗口右缘贴边）。
     #[test]
-    fn twin_button_width_exactly_fills_row() {
+    fn row_button_width_exactly_fills_row() {
         let gap = 12.0;
         for available in [500.0, 580.0, 620.0, 800.0, 1000.0] {
             for item_spacing in [6.0, 8.0, 10.0, 12.0] {
-                let w = twin_button_width(available, gap, item_spacing);
+                // 双按钮行（未部署 / 已应用未运行 / 路径无效）。
+                let w = row_button_width(available, gap, item_spacing, 2);
                 let total = w * 2.0 + gap + item_spacing;
                 assert!(
                     (total - available).abs() < 0.01,
-                    "available={available} gap={gap} spacing={item_spacing} -> w={w}, total={total} 应等于可用宽度"
+                    "n=2 available={available} gap={gap} spacing={item_spacing} -> w={w}, total={total} 应等于可用宽度"
+                );
+                // 三按钮行（已应用且 Steam 运行中）。
+                let w3 = row_button_width(available, gap, item_spacing, 3);
+                let total3 = w3 * 3.0 + 2.0 * (gap + item_spacing);
+                assert!(
+                    (total3 - available).abs() < 0.01,
+                    "n=3 available={available} gap={gap} spacing={item_spacing} -> w={w3}, total={total3} 应等于可用宽度"
                 );
             }
         }
         // 极窄窗口：最小宽度兜底（max(150)），允许溢出避免按钮被压扁。
-        assert_eq!(twin_button_width(200.0, 12.0, 10.0), 150.0);
+        assert_eq!(row_button_width(200.0, 12.0, 10.0, 2), 150.0);
+        assert_eq!(row_button_width(200.0, 12.0, 10.0, 3), 150.0);
     }
 
     /// 回归：英文长文案按钮（"Download & Extract New Version"）不能被固定宽度 150px 裁剪，

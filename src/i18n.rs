@@ -56,6 +56,8 @@ pub struct Strings {
     pub btn_launch_normal: &'static str,
     pub btn_exit_and_uninstall: &'static str,
     pub btn_uninstall_and_restart: &'static str,
+    /// 「重启 Steam」（已应用且 Steam 运行中时显示；纯 Steam 操作，无补丁）。
+    pub btn_restart_steam: &'static str,
     pub card3_title: &'static str,
     pub local_version: &'static str,
     pub local_ver_ready_no_record: &'static str,
@@ -86,6 +88,7 @@ pub struct Strings {
     pub ok_deployed: &'static str,
     pub ok_uninstalled: &'static str,
     pub ok_launched: &'static str,
+    pub ok_restarted: &'static str,
     pub ok_downloaded: &'static str,
     pub busy_deploying: &'static str,
     pub busy_uninstalling: &'static str,
@@ -98,6 +101,8 @@ pub struct Strings {
     pub btn_uninstall: &'static str,
     /// 托盘菜单「最小化时自动隐藏到托盘」勾选项。
     pub tray_minimize: &'static str,
+    /// 托盘菜单「重启 Steam」入口。
+    pub tray_restart: &'static str,
     pub btn_settings: &'static str,
     pub settings_title: &'static str,
     /// 设置对话框「配置编辑器」页签标签（OnlineFix 页签复用 of_title）。
@@ -213,6 +218,7 @@ impl Strings {
             Action::ApplyAndLaunch => self.ok_deployed,
             Action::Launch => self.ok_launched,
             Action::ExitAndUninstall | Action::UninstallAndRestart => self.ok_uninstalled,
+            Action::Restart => self.ok_restarted,
         }
     }
 
@@ -250,6 +256,7 @@ impl Strings {
             btn_launch_normal: "▶ 正常启动 Steam",
             btn_exit_and_uninstall: "◀ 退出 Steam 并卸载补丁",
             btn_uninstall_and_restart: "◀ 卸载补丁并重启 Steam",
+            btn_restart_steam: "↻ 重启 Steam",
             card3_title: "在线版本更新",
             local_version: "当前本地版本：",
             local_ver_ready_no_record: "已本地就绪 (未记录版本)",
@@ -280,6 +287,7 @@ impl Strings {
             ok_deployed: "已部署补丁",
             ok_uninstalled: "已卸载补丁",
             ok_launched: "Steam 已启动",
+            ok_restarted: "Steam 已重启",
             ok_downloaded: "新版本下载并解压完成",
             busy_deploying: "正在部署...",
             busy_uninstalling: "正在卸载...",
@@ -290,6 +298,7 @@ impl Strings {
             tray_quit: "退出",
             btn_uninstall: "卸载补丁",
             tray_minimize: "最小化时自动隐藏到托盘",
+            tray_restart: "重启 Steam",
             btn_settings: "设置",
             settings_title: "设置",
             settings_tab_config: "配置编辑器",
@@ -358,6 +367,7 @@ impl Strings {
             btn_launch_normal: "▶ Launch Steam Normally",
             btn_exit_and_uninstall: "◀ Exit Steam & Uninstall Patch",
             btn_uninstall_and_restart: "◀ Uninstall Patch & Restart Steam",
+            btn_restart_steam: "↻ Restart Steam",
             card3_title: "ONLINE VERSION & UPDATE",
             local_version: "Current Local Version: ",
             local_ver_ready_no_record: "Ready locally (No version log)",
@@ -388,6 +398,7 @@ impl Strings {
             ok_deployed: "Patch deployed",
             ok_uninstalled: "Patch removed",
             ok_launched: "Steam launched",
+            ok_restarted: "Steam restarted",
             ok_downloaded: "New version downloaded & extracted",
             busy_deploying: "Deploying...",
             busy_uninstalling: "Uninstalling...",
@@ -398,6 +409,7 @@ impl Strings {
             tray_quit: "Quit",
             btn_uninstall: "Remove Patch",
             tray_minimize: "Minimize to tray automatically",
+            tray_restart: "Restart Steam",
             btn_settings: "Settings",
             settings_title: "Settings",
             settings_tab_config: "Config Editor",
@@ -522,6 +534,7 @@ mod tests {
                 s.success_text(Action::UninstallAndRestart),
                 s.ok_uninstalled
             );
+            assert_eq!(s.success_text(Action::Restart), s.ok_restarted);
         }
     }
 

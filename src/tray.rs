@@ -12,6 +12,8 @@ pub enum TrayAction {
     Quit,
     /// 勾选/取消「最小化时自动隐藏到托盘」。
     ToggleMinimizeToTray,
+    /// 菜单「重启 Steam」（仅 Steam 运行中可用）。
+    RestartSteam,
 }
 
 pub struct Tray {
@@ -21,6 +23,8 @@ pub struct Tray {
     quit_item: MenuItem,
     /// 「最小化时自动隐藏到托盘」勾选项。
     minimize_item: CheckMenuItem,
+    /// 菜单「重启 Steam」（Steam 未运行时置灰，见 `set_restart_enabled`）。
+    restart_item: MenuItem,
 }
 
 impl Tray {
@@ -30,13 +34,17 @@ impl Tray {
         show_label: &str,
         quit_label: &str,
         minimize_label: &str,
+        restart_label: &str,
     ) -> Option<Self> {
         let show_item = MenuItem::new(show_label, true, None);
         let quit_item = MenuItem::new(quit_label, true, None);
         let minimize_item = CheckMenuItem::new(minimize_label, true, true, None);
+        let restart_item = MenuItem::new(restart_label, true, None);
         let menu = Menu::new();
         menu.append(&show_item).ok()?;
         menu.append(&minimize_item).ok()?;
+        // 顺序：显示 / 最小化勾选 / 重启 Steam / 退出。
+        menu.append(&restart_item).ok()?;
         menu.append(&quit_item).ok()?;
 
         let tray = TrayIconBuilder::new()
@@ -53,7 +61,13 @@ impl Tray {
             show_item,
             quit_item,
             minimize_item,
+            restart_item,
         })
+    }
+
+    /// 按 Steam 运行状态置灰/启用「重启 Steam」菜单项（未运行置灰）。
+    pub fn set_restart_enabled(&self, enabled: bool) {
+        self.restart_item.set_enabled(enabled);
     }
 
     /// 「最小化时自动隐藏到托盘」是否勾选。
@@ -84,6 +98,9 @@ impl Tray {
             }
             if event.id == self.minimize_item.id() {
                 return Some(TrayAction::ToggleMinimizeToTray);
+            }
+            if event.id == self.restart_item.id() {
+                return Some(TrayAction::RestartSteam);
             }
             if event.id == self.quit_item.id() {
                 return Some(TrayAction::Quit);
