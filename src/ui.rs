@@ -7,6 +7,7 @@ use std::sync::Arc;
 use eframe::egui;
 use egui::Frame;
 
+use crate::busy::{BusyGate, BusyKind};
 use crate::compat;
 use crate::compat_flow::{self, CompatFlow, CompatSummary};
 use crate::config_editor;
@@ -19,7 +20,7 @@ use crate::steam;
 use crate::steam_state::SteamState;
 use crate::tray::{Tray, TrayAction};
 use crate::updater::{self, OnlineInfo, UpdateError};
-use crate::workflow::{self, Action, BusyKind};
+use crate::workflow::{self, Action};
 
 // ---------- 效仿 Python 版外观（opensteamtool-gui-py THEME 色板） ----------
 // 蓝 accent（#0f6cbd）+ 中性灰底 + hairline 卡片；无渐变/毛玻璃/发光点。
@@ -374,9 +375,8 @@ pub struct App {
     steam_state: Arc<SteamState>,
     local_version: Option<String>,
     update_state: UpdateState,
-    busy: bool,
-    /// 忙碌时当前操作类型（用于显示进度文案）。
-    busy_kind: Option<BusyKind>,
+    /// 交互类后台操作互斥门禁（同时刻仅一个操作在途；见 CONTEXT.md「忙碌门禁」）。
+    gate: BusyGate,
     /// 待确认「关闭 Steam」的操作。
     confirm: Option<Action>,
     /// 最近一次结果提示（成功/失败），渲染时按当前语言生成文案。
@@ -513,8 +513,7 @@ impl App {
             steam_state,
             local_version,
             update_state: UpdateState::Idle,
-            busy: false,
-            busy_kind: None,
+            gate: BusyGate::new(),
             confirm: None,
             notice: None,
             tx,
@@ -616,24 +615,21 @@ impl App {
     fn handle_messages(&mut self) {
         while let Ok(msg) = self.rx.try_recv() {
             match msg {
-                Msg::Phase(kind) => self.busy_kind = Some(kind),
+                Msg::Phase(kind) => self.gate.replace(kind),
                 Msg::UpdateChecked(res) => {
-                    self.busy = false;
-                    self.busy_kind = None;
+                    self.gate.clear();
                     self.notice = Some(Notice::UpdateChecked(res.clone()));
                     self.update_state = UpdateState::Checked(res);
                 }
                 Msg::Downloaded(res) => {
-                    self.busy = false;
-                    self.busy_kind = None;
+                    self.gate.clear();
                     self.notice = Some(Notice::Downloaded(res.clone()));
                     if let Ok(()) = res {
                         self.local_version = dll::read_local_version(&dll::dll_dir());
                     }
                 }
                 Msg::WorkflowDone(action, res) => {
-                    self.busy = false;
-                    self.busy_kind = None;
+                    self.gate.clear();
                     self.notice = Some(Notice::WorkflowDone(action, res.clone()));
                     if let Ok(()) = res {
                         self.refresh_status();
@@ -671,7 +667,7 @@ impl App {
 
     /// 用户点击操作按钮：Steam 在运行且操作需关闭 Steam → 弹确认框；否则直接执行。
     fn request_action(&mut self, ctx: &egui::Context, action: Action) {
-        if self.busy {
+        if self.gate.is_busy() {
             return;
         }
         if action.asks_to_close_steam() && self.steam_running {
@@ -695,8 +691,10 @@ impl App {
             }
         };
 
-        self.busy = true;
-        self.busy_kind = Some(ops.first().expect("plan never returns empty").phase()); // 同步首阶段，点击即见阶段文案
+        // 门禁此刻必空闲（request_action 已查过、确认弹窗悬挂期 Modal 阻断交互）。
+        let first_phase = ops.first().expect("plan never returns empty").phase();
+        let started = self.gate.start(first_phase); // 同步首阶段，点击即见阶段文案
+        debug_assert!(started, "动作开始时门禁应空闲");
         self.confirm = None;
 
         let ctx2 = ctx.clone();
@@ -724,21 +722,17 @@ impl App {
     }
 
     fn check_update(&mut self, ctx: &egui::Context) {
-        if self.busy {
+        if !self.gate.start(BusyKind::Checking) {
             return;
         }
-        self.busy = true;
-        self.busy_kind = Some(BusyKind::Checking);
         self.update_state = UpdateState::Checking;
         self.spawn(ctx, || Msg::UpdateChecked(updater::check_update()));
     }
 
     fn download_update(&mut self, ctx: &egui::Context, info: OnlineInfo) {
-        if self.busy {
+        if !self.gate.start(BusyKind::Downloading) {
             return;
         }
-        self.busy = true;
-        self.busy_kind = Some(BusyKind::Downloading);
         let dll_dir = dll::dll_dir();
         self.spawn(ctx, move || {
             Msg::Downloaded(updater::download_and_extract(&info, &dll_dir))
@@ -1358,7 +1352,7 @@ impl App {
                         self.strings.btn_exit_and_uninstall,
                         ButtonStyle::UninstallExit,
                         size,
-                        !self.busy,
+                        !self.gate.is_busy(),
                     )
                     .clicked()
                     {
@@ -1370,7 +1364,7 @@ impl App {
                         self.strings.btn_restart_steam,
                         ButtonStyle::Launch,
                         size,
-                        !self.busy,
+                        !self.gate.is_busy(),
                     )
                     .clicked()
                     {
@@ -1382,7 +1376,7 @@ impl App {
                         self.strings.btn_uninstall_and_restart,
                         ButtonStyle::UninstallRestart,
                         size,
-                        !self.busy,
+                        !self.gate.is_busy(),
                     )
                     .clicked()
                     {
@@ -1400,7 +1394,7 @@ impl App {
                         self.strings.btn_uninstall,
                         ButtonStyle::UninstallExit,
                         size,
-                        !self.busy,
+                        !self.gate.is_busy(),
                     )
                     .clicked()
                     {
@@ -1412,7 +1406,7 @@ impl App {
                         self.strings.btn_uninstall_and_restart,
                         ButtonStyle::UninstallRestart,
                         size,
-                        !self.busy,
+                        !self.gate.is_busy(),
                     )
                     .clicked()
                     {
@@ -1429,7 +1423,7 @@ impl App {
                         self.strings.btn_apply_and_launch,
                         ButtonStyle::Deploy,
                         size,
-                        !self.busy,
+                        !self.gate.is_busy(),
                     )
                     .clicked()
                     {
@@ -1441,7 +1435,7 @@ impl App {
                         self.strings.btn_launch_normal,
                         ButtonStyle::Launch,
                         size,
-                        !self.busy,
+                        !self.gate.is_busy(),
                     )
                     .clicked()
                     {
@@ -1549,7 +1543,7 @@ impl App {
                     self.strings.btn_check_update,
                     ButtonStyle::Secondary,
                     egui::vec2(96.0, 32.0),
-                    !self.busy,
+                    !self.gate.is_busy(),
                 )
                 .clicked()
                 {
@@ -1565,7 +1559,7 @@ impl App {
                             self.strings.btn_download_and_extract,
                             ButtonStyle::Primary,
                             egui::vec2(150.0, 32.0),
-                            !self.busy,
+                            !self.gate.is_busy(),
                         )
                         .clicked()
                     {
@@ -1593,7 +1587,7 @@ impl App {
 
     fn notice_bar(&mut self, ui: &mut egui::Ui) {
         // busy / 成功改中性文字；错误保留红色（kill-ai-slop：收敛语义三连）。
-        if let Some(kind) = self.busy_kind {
+        if let Some(kind) = self.gate.current() {
             ui.horizontal(|ui| {
                 let (rect, _) = ui.allocate_exact_size(egui::vec2(7.0, 7.0), egui::Sense::hover());
                 ui.painter().circle_filled(rect.center(), 3.5, ACCENT);

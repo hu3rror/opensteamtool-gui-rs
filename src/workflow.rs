@@ -6,6 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::busy::BusyKind;
 use crate::dll::{self, TARGET_DLLS};
 use crate::steam;
 use crate::steam_state::SteamState;
@@ -36,17 +37,6 @@ impl Action {
             Action::ApplyAndLaunch | Action::ExitAndUninstall | Action::UninstallAndRestart
         )
     }
-}
-
-/// 后台操作期间显示的忙碌/阶段文案类型。
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum BusyKind {
-    Deploying,
-    Uninstalling,
-    Launching,
-    Checking,
-    Downloading,
-    ClosingSteam,
 }
 
 /// 一条执行步骤。

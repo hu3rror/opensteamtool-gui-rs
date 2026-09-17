@@ -348,3 +348,18 @@ pub struct OverallHealthReport { pub steamclient_pattern: ProbeReport, pub steam
    - 网络探针不依赖真实网络：HEAD 判定逻辑拆为纯函数（输入镜像链结果枚举 → 输出 `ProbeStatus`）单测覆盖决策矩阵全分支。
    - `config_editor`：`remote_url_template()` 覆盖文件缺失/无键/空值/有效值/自定义模板。
 6. **构建验收**：`cargo check` / `cargo test` 无错误（既有 `cargo fmt --check` 噪音与 1 条 clippy warning 与本功能无关，勿动）。
+
+### 7.10 忙碌门禁（交互类后台操作互斥）
+
+**范围**：忙碌互斥只覆盖交互类后台操作——「动作」（`Action` 组合）与「更新动作」（检查更新 / 下载并解压）。compat 探针/刷新/预热是只读后台操作，**不进忙碌门禁**（候选 1 Q5 既定：零点击后台、不冻结 UI）；其互斥由 `compat_flow` 自有的在途去重承担。
+
+**形态**（`src/busy.rs`）：`BusyGate` 纯模块，无 IO/线程/egui/i18n 依赖；持有唯一 `Option<BusyKind>`（类型即不变量，不存在「忙碌但无种类」失效态）。`BusyKind` 枚举（Deploying/Uninstalling/Launching/Checking/Downloading/ClosingSteam）从 `workflow` 迁入本模块，`workflow::Op::phase()` 改引用。接口：`start(kind) -> bool`（空闲放行并置位 / 忙碌拒绝返回 false，静默）、`replace(kind)`（阶段更新，仅忙碌时合法，debug_assert 兜底）、`clear()`（归位）、`current() -> Option<BusyKind>`、`is_busy()`。
+
+**契约**：
+- 被拒静默（忙碌时按钮本就禁用，`start` 返回 false 的路径理论不可达，不弹提示）。
+- 「关闭 Steam 确认弹窗」悬挂期不算忙碌：`request_action` 先查门禁（忙碌连确认框都不弹），真正 `start` 在确认后 `start_action` 才发生；悬挂期 Modal 自行阻断其余交互。
+- 三个完成消息臂（检查更新完成 / 下载完成 / 组合操作完成）统一 `clear()`；阶段消息 `Msg::Phase` 统一 `replace(kind)`。
+
+**渲染收敛**：动作区与更新按钮禁用源统一 `!gate.is_busy()`；底部忙碌文案取 `gate.current()`。语言/设置/路径输入/浏览按钮不禁用（现状保持）；compat 类按钮（预热/详情）继续由 `compat_flow` 在途标志禁用（不进忙碌门禁）。
+
+**验收**：`busy.rs` 门禁单测覆盖 start 防重入、clear 归位/幂等、replace 阶段更新/空闲断言、全变体完整性；`cargo test` 全绿，无新增 clippy/fmt 噪音。

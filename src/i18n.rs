@@ -1,9 +1,10 @@
 //! 双语文案与系统语言检测。
 
+use crate::busy::BusyKind;
 use crate::config_editor::ConfigError;
 use crate::onlinefix::VdfError;
 use crate::updater::UpdateError;
-use crate::workflow::{Action, BusyKind, Op, Precheck, WorkflowError};
+use crate::workflow::{Action, Op, Precheck, WorkflowError};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Lang {
     Zh,

@@ -2,6 +2,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod busy;
 mod compat;
 mod compat_flow;
 mod config_editor;
