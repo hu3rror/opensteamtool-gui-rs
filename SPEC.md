@@ -232,6 +232,9 @@ URL 占位符统一为 `{channel}` / `{component}` / `{sha256}`，解析顺序�
 无缓存启动即离开 Checking）。`Checking` 仅存续于本地哈希阶段（steamclient64.dll 哈希去重，Pattern/IPC 复用）。
 网络适配状态由 `probe_all_refresh` 后台异步补齐（快速报告含短路/乐观项即触发一次全量网络探测：
 短路项可升级 `RemoteAvailable{cached:true}`，乐观项 404 时降级 `IncompatiblePending`，汇总徽章随之更新）。
+刷新预算按体检代数计：**每代数至多一次全量网络探测**（预热完成后的复检不触发二次刷新），
+刷新完成无论成败（含 `NetworkError`）都视为已消耗本代数预算——一次性语义，不隐式重试；
+弱网下不会因复检/预热事件反复打上游镜像。
 探针超时 4s/5s 收紧至 2.5s/2.5s，无网络时快速失败。
 
 **验证缓存（增强）**：后台刷新确认适配（Found）的项持久化到 `<exe>/cache/verified.toml`
@@ -269,6 +272,19 @@ pub struct OverallHealthReport { pub steamclient_pattern: ProbeReport, pub steam
 - `probe_all(steam_dir) -> OverallHealthReport`：三探针循环，先本地（哈希/缓存）后网络（镜像链 HEAD）。
 - `precache(steam_dir, target, report) -> Result<(), CompatError>`：GET 拉取 TOML（复用 `download_agent` 超时模式），`fsutil::write_atomic` 原子写入缓存路径（先建目录）。
 
+**编排层（`compat_flow.rs`，体检流程状态机）**：体检生命周期（快速体检 → 网络刷新 → 预热 → 复检）收敛为
+纯状态机模块，与算子层（`compat.rs` 无状态探测算子）和渲染层（`ui.rs`）三权分立：
+
+- 接口：`step(Event) -> (Display, Vec<Effect>)`；App 只喂事件、执行返回的效果（spawn）、渲染展示态。
+- **代数戳**：`Epoch(u64)` 单调递增；路径变更（含启动首次）推进代数，预热完成后的复检不推进（同一体检会话）；
+  所有完成事件携带发起时代数，与当前代数不符 → 丢弃（陈旧防护，防跨路径覆盖）。
+- **每代数一次网络刷新**：代数内 `network_refreshed` 事实，产出刷新效果后置位；复检不再触发（见 §7.5）。
+- **刷新与预热并行、在途独立**：刷新在途不阻塞预热，`precaching`（含自动/手动模式）独立维护；
+  刷新完成只合并报告，不触碰预热标志与提示。
+- **自动预热**：体检落定 Online 且无预热进行中 → 自动产出预热效果（Auto 模式）；失败静默、手动入口保留。
+- **提示生命周期**：「缓存已就绪」在复检/刷新合并后保留，新预热开始或路径变更清除。
+- **路径防抖**：路径事件在流程内去重（与上次路径相同 → 无动作），取代 App 侧路径比对。
+
 ### 7.7 UI 布局与交互（`src/ui.rs`）
 
 **落位**：`card1()`（路径输入 + 浏览按钮下方）新增「Steam 核心兼容性」小节。注意：DLL 部署状态在 Card 2，Card 1 内无既有状态列表。
@@ -294,7 +310,7 @@ pub struct OverallHealthReport { pub steamclient_pattern: ProbeReport, pub steam
 - 「详细信息」展开/弹窗展示 3 行明细：`steamclient64.dll`（Pattern）、`steamui.dll`（Pattern）、`steamclient64.dll`（IPC），每行 = SHA-256 前 12 位 + 状态徽标。
 - 有 `RemoteAvailable{cached:false}` 项时显示 `[ 一键缓存签名 ]`：后台线程 GET 下载 → 建 `<Steam>/opensteamtool/{channel}/{component}/` → 原子写入 `<sha256>.toml` → 重跑本地探针刷新状态。
 - **自动预热（增强）**：体检落定为 Online（上游已适配未缓存）且无预热进行中时，自动触发同一下载链路——Steam 更新后首次启动零点击补缓存；自动失败静默（不弹错误、徽章保持 Online、手动入口保留），成功复用「缓存已就绪」提示，无新增文案。预热目标以签名缓存文件实际存在性为准（含验证缓存命中但未下载的情形）。
-- **触发防抖**：Steam 路径输入逐字符 `resp.changed()` 触发刷新——体检线程仅当路径与上次体检路径不同才 spawn（防每字符起线程）。
+- **触发防抖**：Steam 路径输入逐字符 `resp.changed()` 触发——路径去重在体检流程内完成（`compat_flow` 比对上次路径，相同则无动作；不同则推进代数并产出快速体检效果）。
 
 ### 7.8 国际化词表（`src/i18n.rs`）
 

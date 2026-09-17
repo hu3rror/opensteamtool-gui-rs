@@ -3,6 +3,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod compat;
+mod compat_flow;
 mod config_editor;
 mod dll;
 mod fsutil;
