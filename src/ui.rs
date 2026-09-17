@@ -19,6 +19,7 @@ use crate::settings::{ConfigEditError, ConfigEditorState, OfError, OfStatus, Onl
 use crate::steam;
 use crate::steam_state::SteamState;
 use crate::tray::{Tray, TrayAction};
+use crate::update_flow::{UpdateFlow, UpdateLine, UpdateNotice};
 use crate::updater::{self, OnlineInfo, UpdateError};
 use crate::workflow::{self, Action};
 
@@ -245,23 +246,26 @@ fn status_line(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
 }
 /// 渲染最近一次结果提示为当前语言文案。
 /// 纯函数（不依赖 App）：切换语言后无需重建 notice，重渲染即得新语言。
-/// 检查更新成功时与本地版本比较：相同 → 「已是最新」，否则 → 「发现可更新版本」。
-fn render_notice(s: &Strings, local_version: Option<&str>, notice: &Notice) -> (bool, String) {
+/// 检查更新结果的分类来自「更新流程」派生（`notice_text` 的 UpdateChecked 分支），此处不处理。
+fn render_notice(s: &Strings, notice: &Notice) -> (bool, String) {
     match notice {
-        Notice::UpdateChecked(Ok(info)) => {
-            let suffix = if local_version.unwrap_or("") == info.version {
-                s.up_to_date
-            } else {
-                s.new_version
-            };
-            (true, format!("v{} {}", info.version, suffix))
-        }
-        Notice::UpdateChecked(Err(e)) => (false, s.update_error(e)),
         Notice::Downloaded(Ok(())) => (true, s.ok_downloaded.to_string()),
         Notice::Downloaded(Err(e)) => (false, s.update_error(e)),
         Notice::WorkflowDone(action, Ok(())) => (true, s.success_text(*action).to_string()),
         Notice::WorkflowDone(_, Err(e)) => (false, s.workflow_error_text(e)),
         Notice::Precheck(p) => (false, s.precheck_text(p)),
+        Notice::UpdateChecked => {
+            unreachable!("检查更新通知经 notice_text 的 UpdateChecked 分支渲染")
+        }
+    }
+}
+
+/// 检查更新结果通知 → 当前语言文案（分类来自「更新流程」派生，比较已在流程内完成）。
+fn render_update_notice(s: &Strings, n: &UpdateNotice) -> (bool, String) {
+    match n {
+        UpdateNotice::UpToDate { version } => (true, format!("v{} {}", version, s.up_to_date)),
+        UpdateNotice::NewVersion { version } => (true, format!("v{} {}", version, s.new_version)),
+        UpdateNotice::CheckFailed(e) => (false, s.update_error(e)),
     }
 }
 
@@ -335,18 +339,11 @@ enum Msg {
     },
 }
 
-/// 线上更新状态。
-enum UpdateState {
-    Idle,
-    Checking,
-    Checked(Result<OnlineInfo, UpdateError>),
-}
-
 /// 最近一次结果提示的结构化数据。
 /// 渲染时（`notice_bar`）才按当前语言生成文案，切换语言无需重建。
 enum Notice {
-    /// 检查更新结果：成功携带线上版本（与本地版本比较决定最新/可更新文案）。
-    UpdateChecked(Result<OnlineInfo, UpdateError>),
+    /// 检查更新完成标记（无 payload）：结果文案由「更新流程」派生（单一事实源）。
+    UpdateChecked,
     /// 下载解压结果。
     Downloaded(Result<(), UpdateError>),
     /// 组合操作完成（成功/失败，携带动作以取成功文案）。
@@ -374,7 +371,8 @@ pub struct App {
     /// 共享 Steam 运行状态（进程表 + alive/group_running/kill 三查询）。
     steam_state: Arc<SteamState>,
     local_version: Option<String>,
-    update_state: UpdateState,
+    /// 在线更新「检查更新」流程（唯一事实源 + 派生，见 CONTEXT.md「更新流程」）。
+    update_flow: UpdateFlow,
     /// 交互类后台操作互斥门禁（同时刻仅一个操作在途；见 CONTEXT.md「忙碌门禁」）。
     gate: BusyGate,
     /// 待确认「关闭 Steam」的操作。
@@ -512,7 +510,7 @@ impl App {
             steam_monitor,
             steam_state,
             local_version,
-            update_state: UpdateState::Idle,
+            update_flow: UpdateFlow::new(),
             gate: BusyGate::new(),
             confirm: None,
             notice: None,
@@ -618,8 +616,8 @@ impl App {
                 Msg::Phase(kind) => self.gate.replace(kind),
                 Msg::UpdateChecked(res) => {
                     self.gate.clear();
-                    self.notice = Some(Notice::UpdateChecked(res.clone()));
-                    self.update_state = UpdateState::Checked(res);
+                    self.update_flow.check_done(res); // 结果只存这一份（单一事实源）
+                    self.notice = Some(Notice::UpdateChecked);
                 }
                 Msg::Downloaded(res) => {
                     self.gate.clear();
@@ -725,7 +723,7 @@ impl App {
         if !self.gate.start(BusyKind::Checking) {
             return;
         }
-        self.update_state = UpdateState::Checking;
+        self.update_flow.check_started();
         self.spawn(ctx, || Msg::UpdateChecked(updater::check_update()));
     }
 
@@ -1507,19 +1505,19 @@ impl App {
 
             // 线上版本行：未知 / 正在检查更新 / v+版本+后缀 / 检查失败。
             let prefix = self.strings.online_version;
-            let (online_text, online_color) = match &self.update_state {
-                UpdateState::Idle => (format!("{}{}", prefix, self.strings.unknown), TEXT_SUB),
-                UpdateState::Checking => (format!("{}{}", prefix, self.strings.checking), TEXT_SUB),
-                UpdateState::Checked(Ok(info)) => {
-                    let local = self.local_version.as_deref().unwrap_or("");
-                    let suffix = if local == info.version {
-                        self.strings.up_to_date
-                    } else {
-                        self.strings.new_version
-                    };
-                    (format!("{}v{} {}", prefix, info.version, suffix), TEXT_SUB)
-                }
-                UpdateState::Checked(Err(e)) => (
+            let derived = self.update_flow.derived(self.local_version.as_deref());
+            let (online_text, online_color) = match &derived.line {
+                UpdateLine::Unknown => (format!("{}{}", prefix, self.strings.unknown), TEXT_SUB),
+                UpdateLine::Checking => (format!("{}{}", prefix, self.strings.checking), TEXT_SUB),
+                UpdateLine::UpToDate { version } => (
+                    format!("{}v{} {}", prefix, version, self.strings.up_to_date),
+                    TEXT_SUB,
+                ),
+                UpdateLine::NewVersion { version } => (
+                    format!("{}v{} {}", prefix, version, self.strings.new_version),
+                    TEXT_SUB,
+                ),
+                UpdateLine::CheckFailed(e) => (
                     format!(
                         "{}{} ({})",
                         prefix,
@@ -1550,21 +1548,17 @@ impl App {
                     do_check = true;
                 }
 
-                if let UpdateState::Checked(Ok(info)) = &self.update_state {
-                    let local = self.local_version.as_deref().unwrap_or("");
-                    if info.version != local
-                        && !info.version.is_empty()
-                        && styled_button(
-                            ui,
-                            self.strings.btn_download_and_extract,
-                            ButtonStyle::Primary,
-                            egui::vec2(150.0, 32.0),
-                            !self.gate.is_busy(),
-                        )
-                        .clicked()
-                    {
-                        do_download = Some(info.clone());
-                    }
+                if let Some(info) = derived.download
+                    && styled_button(
+                        ui,
+                        self.strings.btn_download_and_extract,
+                        ButtonStyle::Primary,
+                        egui::vec2(150.0, 32.0),
+                        !self.gate.is_busy(),
+                    )
+                    .clicked()
+                {
+                    do_download = Some(info.clone());
                 }
             });
 
@@ -1580,9 +1574,15 @@ impl App {
 
     /// 最近一次结果提示 → 当前语言渲染（切换语言后无需重建 notice，逐帧取当前 strings）。
     fn notice_text(&self) -> Option<(bool, String)> {
-        self.notice
-            .as_ref()
-            .map(|n| render_notice(&self.strings, self.local_version.as_deref(), n))
+        match &self.notice {
+            Some(Notice::UpdateChecked) => self
+                .update_flow
+                .derived(self.local_version.as_deref())
+                .notice
+                .map(|n| render_update_notice(&self.strings, &n)),
+            Some(n) => Some(render_notice(&self.strings, n)),
+            None => None,
+        }
     }
 
     fn notice_bar(&mut self, ui: &mut egui::Ui) {
@@ -1774,36 +1774,36 @@ mod tests {
         assert_eq!(auto_tray_policy(SteamEvent::Stopped, true), None);
     }
 
-    /// 检查更新成功且本地已是最新 → 底部提示应显示「已是最新」，而非「发现可更新版本」。
+    /// 检查更新结果通知文案：分类（已最新/可更新/失败）由「更新流程」派生，此处验证文案映射。
     #[test]
-    fn update_checked_notice_shows_up_to_date_when_local_matches() {
+    fn update_notice_text_up_to_date_vs_new_version() {
         let zh = Strings::new(Lang::Zh);
-        let info = OnlineInfo {
-            version: "1.4.8".into(),
-            zip_url: "https://x/z.zip".into(),
-        };
-        let notice = Notice::UpdateChecked(Ok(info));
-        // 本地版本与线上一致 → up_to_date；不一致 → new_version。
-        let (ok, text) = render_notice(&zh, Some("1.4.8"), &notice);
-        assert!(ok);
         assert_eq!(
-            text, "v1.4.8 (本地已是最新版)",
-            "已最新不应显示「发现可更新版本」: {text}"
+            render_update_notice(&zh, &UpdateNotice::UpToDate { version: "1.4.8" }),
+            (true, "v1.4.8 (本地已是最新版)".to_string())
         );
-        let (_, text) = render_notice(&zh, Some("1.4.7"), &notice);
-        assert_eq!(text, "v1.4.8 (发现可更新版本)");
+        assert_eq!(
+            render_update_notice(&zh, &UpdateNotice::NewVersion { version: "1.4.8" }),
+            (true, "v1.4.8 (发现可更新版本)".to_string())
+        );
+        let e = updater::UpdateError::Network("t".into());
+        assert_eq!(
+            render_update_notice(&zh, &UpdateNotice::CheckFailed(&e)),
+            (false, zh.update_error(&e))
+        );
     }
 
-    /// 切换语言后，同一 notice 重新渲染即得新语言文案（无需重建 notice）。
+    /// 切换语言后，检查更新通知重新映射即得新语言文案（结构化分类不锁死语言）。
     #[test]
-    fn update_checked_notice_follows_language_switch() {
-        let info = OnlineInfo {
-            version: "1.4.8".into(),
-            zip_url: "https://x/z.zip".into(),
-        };
-        let notice = Notice::UpdateChecked(Ok(info));
-        let zh = render_notice(&Strings::new(Lang::Zh), Some("1.4.8"), &notice);
-        let en = render_notice(&Strings::new(Lang::En), Some("1.4.8"), &notice);
+    fn update_notice_follows_language_switch() {
+        let zh = render_update_notice(
+            &Strings::new(Lang::Zh),
+            &UpdateNotice::UpToDate { version: "1.4.8" },
+        );
+        let en = render_update_notice(
+            &Strings::new(Lang::En),
+            &UpdateNotice::UpToDate { version: "1.4.8" },
+        );
         assert_eq!(zh, (true, "v1.4.8 (本地已是最新版)".to_string()));
         assert_eq!(en, (true, "v1.4.8 (Up to date)".to_string()));
         // 英文界面不应出现中文。
@@ -1816,32 +1816,28 @@ mod tests {
         for lang in [Lang::Zh, Lang::En] {
             let s = Strings::new(lang);
             let e = updater::UpdateError::Network("t".into());
-            assert_eq!(
-                render_notice(&s, None, &Notice::UpdateChecked(Err(e.clone()))),
-                (false, s.update_error(&e))
-            );
             let wf = workflow::WorkflowError {
                 op: workflow::Op::Launch,
                 message: "m".into(),
             };
             assert_eq!(
-                render_notice(&s, None, &Notice::WorkflowDone(workflow::Action::Launch, Ok(()))),
+                render_notice(&s, &Notice::WorkflowDone(workflow::Action::Launch, Ok(()))),
                 (true, s.success_text(workflow::Action::Launch).to_string())
             );
             assert_eq!(
-                render_notice(&s, None, &Notice::WorkflowDone(workflow::Action::Launch, Err(wf.clone()))),
+                render_notice(&s, &Notice::WorkflowDone(workflow::Action::Launch, Err(wf.clone()))),
                 (false, s.workflow_error_text(&wf))
             );
             assert_eq!(
-                render_notice(&s, None, &Notice::Precheck(workflow::Precheck::NoSteamDir)),
+                render_notice(&s, &Notice::Precheck(workflow::Precheck::NoSteamDir)),
                 (false, s.precheck_text(&workflow::Precheck::NoSteamDir))
             );
             assert_eq!(
-                render_notice(&s, None, &Notice::Downloaded(Err(e.clone()))),
+                render_notice(&s, &Notice::Downloaded(Err(e.clone()))),
                 (false, s.update_error(&e))
             );
             assert_eq!(
-                render_notice(&s, None, &Notice::Downloaded(Ok(()))),
+                render_notice(&s, &Notice::Downloaded(Ok(()))),
                 (true, s.ok_downloaded.to_string())
             );
         }

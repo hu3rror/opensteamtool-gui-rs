@@ -21,13 +21,14 @@
     `BusyGate` 持有唯一 `Option<BusyKind>`（类型即不变量）；接口 start/replace/clear/current/is_busy；
     `BusyKind` 从 workflow 迁入 busy 模块；确认弹窗悬挂期不算忙碌；渲染禁用源统一 `!gate.is_busy()`。
 
-## 待办
+- [x] **候选 3 · 在线更新双源真相合并为 UpdateFlow**（Worth exploring，in-process）
+  - issue #16（关闭于本候选收尾）、commit（main，本地）
+  - 文档：SPEC.md §7.11；CONTEXT.md「更新流程」词条 + 规则
+  - 要点：检查结果唯一事实源（update_flow 模块），`Notice::UpdateChecked` 降级为无 payload 标记；
+    `derived` 一处派生行文案/通知/下载（`UpdateDerived { line, notice, download: Option<&OnlineInfo> }`）；
+    下载后 Checked 保留靠重派生（机制 = 版本相等，非「下载过就藏」）；检查/下载仍经忙碌门禁。
 
-- [ ] **候选 3 · 在线更新双源真相合并为 UpdateFlow**（Worth exploring，in-process）
-  - 问题：同一检查结果被 `UpdateState::Checked` 与 `Notice::UpdateChecked` 各存一份；
-    「本地版本 == 线上版本」比较逻辑在 render_notice / card3 线上行 / 下载按钮门控三处重复。
-  - 方案：单一事实源 + 单一派生（行文案、通知文案、下载按钮可用性都从同一状态计算）。
-  - 参考：评审报告卡片 #3。
+## 待办
 
 - [ ] **候选 4 · 错误→文案映射统一收拢**（Worth exploring，in-process）
   - 问题：8 个错误枚举的文案映射分居三处——5 个在 `i18n::Strings`、2 个是 ui.rs 自由函数、

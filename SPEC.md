@@ -363,3 +363,16 @@ pub struct OverallHealthReport { pub steamclient_pattern: ProbeReport, pub steam
 **渲染收敛**：动作区与更新按钮禁用源统一 `!gate.is_busy()`；底部忙碌文案取 `gate.current()`。语言/设置/路径输入/浏览按钮不禁用（现状保持）；compat 类按钮（预热/详情）继续由 `compat_flow` 在途标志禁用（不进忙碌门禁）。
 
 **验收**：`busy.rs` 门禁单测覆盖 start 防重入、clear 归位/幂等、replace 阶段更新/空闲断言、全变体完整性；`cargo test` 全绿，无新增 clippy/fmt 噪音。
+
+### 7.11 在线更新单一事实源（更新流程）
+
+**问题收敛**：同一检查结果不再双存——`update_flow` 模块持有唯一检查结果状态（Idle / Checking / Checked(Result)），`Notice::UpdateChecked` 降级为无 payload 标记（「显示检查结果」），渲染时从派生取分类映射文案。「本地版本 == 线上版本」比较只活在一处派生函数；行文案、通知文案、下载按钮可用性三处消费全部从同一派生产出。
+
+**形态**（`src/update_flow.rs`）：`UpdateFlow` 纯模块，无 IO/线程/egui/i18n 依赖。接口：`check_started()`（门禁放行后调用，→ Checking）、`check_done(result)`（→ Checked，结果只存这一份）、`derived(local_version) -> UpdateDerived`。`UpdateDerived { line, notice, download }`：`line` 行文案分类、`notice` 通知分类（Option，None=无检查结果）、`download: Option<&OnlineInfo>`（可下载时携带数据，NewVersion 且线上版本非空）。分类枚举：Unknown / Checking / UpToDate{version} / NewVersion{version} / CheckFailed(&UpdateError)。文案映射仍在 i18n/ui（`render_update_notice`），不越界到错误映射收拢（候选 4）。
+
+**语义**：
+- 下载成功后 flow 保持 Checked（记录「最后一次检查时的线上版本」）；本地版本更新后 `derived` 自然落 UpToDate、下载按钮消失——机制 = 本地版本与记录版本相等，非「下载过就隐藏」。行为与旧实现逐帧一致。
+- 重检覆盖：再点「检查更新」→ `check_started` 回 Checking → 新 `check_done` 覆盖旧结论。
+- 与忙碌门禁衔接：检查/下载仍经 `gate.start` 放行（交互类）；flow 的 Checking 是「结论未定」持久状态，gate 的 Checking 是瞬态互斥种类，二者语义不同不冲突。
+
+**验收**：`update_flow` 单测覆盖转移与 derived 全分支（同/异/本地缺失/空线上版本/Err/Idle/Checking/下载重派生/重检覆盖）；`cargo test` 全绿，无新增 clippy/fmt 噪音。

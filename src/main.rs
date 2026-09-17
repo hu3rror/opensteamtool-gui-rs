@@ -16,6 +16,7 @@ mod steam;
 mod steam_state;
 mod tray;
 mod ui;
+mod update_flow;
 mod updater;
 mod workflow;
 
