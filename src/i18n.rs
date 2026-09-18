@@ -1,8 +1,10 @@
 //! 双语文案与系统语言检测。
 
 use crate::busy::BusyKind;
+use crate::compat::CompatError;
 use crate::config_editor::ConfigError;
-use crate::onlinefix::VdfError;
+use crate::onlinefix::{VdfError, VdfStructureError};
+use crate::settings::{ConfigEditError, OfError};
 use crate::updater::UpdateError;
 use crate::workflow::{Action, Op, Precheck, WorkflowError};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -85,6 +87,8 @@ pub struct Strings {
     pub err_network: &'static str,
     pub err_no_zip: &'static str,
     pub err_parse_version: &'static str,
+    /// 兼容性体检本地文件操作失败（CompatError::Io）。
+    pub err_compat_io: &'static str,
     pub err_write_local: &'static str,
     pub ok_deployed: &'static str,
     pub ok_uninstalled: &'static str,
@@ -207,10 +211,32 @@ impl Strings {
     pub fn onlinefix_error(&self, e: &VdfError) -> String {
         match e {
             VdfError::Io(detail) => format!("{}: {detail}", self.err_of_op),
-            VdfError::Structure(code) => match *code {
-                "missing_root_chain" => self.of_err_root_chain.to_string(),
-                other => format!("{}: structure {other}", self.err_of_op),
+            VdfError::Structure(code) => match code {
+                VdfStructureError::MissingRootChain => self.of_err_root_chain.to_string(),
             },
+        }
+    }
+    /// 配置编辑器类型化错误 → 本地化文案（Load/Save 取前缀，Validation 穿透 lang）。
+    pub fn config_edit_error_text(&self, lang: Lang, e: &ConfigEditError) -> String {
+        match e {
+            ConfigEditError::Load(m) => format!("{}: {m}", self.err_config_load),
+            ConfigEditError::Validation(e) => self.config_error_text(lang, e),
+            ConfigEditError::Save(m) => format!("{}: {m}", self.err_config_save),
+        }
+    }
+    /// OnlineFix 类型化错误 → 当前语言提示文案。
+    pub fn of_error_text(&self, e: &OfError) -> String {
+        match e {
+            OfError::WriteBlocked => self.of_steam_running.to_string(),
+            OfError::InvalidAppid => self.err_of_invalid_appid.to_string(),
+            OfError::Vdf(e) => self.onlinefix_error(e),
+        }
+    }
+    /// 兼容性体检错误 → 当前语言提示文案（与 UpdateError 同等待遇；Display 只留给日志）。
+    pub fn compat_error_text(&self, e: &CompatError) -> String {
+        match e {
+            CompatError::Network(detail) => format!("{}: {detail}", self.err_network),
+            CompatError::Io(detail) => format!("{}: {detail}", self.err_compat_io),
         }
     }
     /// 「操作」成功后 → 当前语言提示文案。
@@ -284,6 +310,7 @@ impl Strings {
             err_network: "网络请求失败",
             err_no_zip: "发布包中没有 .zip 资产",
             err_parse_version: "解析线上版本失败",
+            err_compat_io: "本地文件操作失败",
             err_write_local: "写入本地文件失败",
             ok_deployed: "已部署补丁",
             ok_uninstalled: "已卸载补丁",
@@ -395,6 +422,7 @@ impl Strings {
             err_network: "Network request failed",
             err_no_zip: "No .zip asset in the release",
             err_parse_version: "Failed to parse online version",
+            err_compat_io: "Local file operation failed",
             err_write_local: "Failed to write local files",
             ok_deployed: "Patch deployed",
             ok_uninstalled: "Patch removed",
@@ -468,6 +496,94 @@ impl Strings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// CompatError → 双语文案：Network 复用 err_network、Io 用 err_compat_io（与 UpdateError 同等待遇）。
+    #[test]
+    fn compat_error_text_both_langs() {
+        for lang in [Lang::Zh, Lang::En] {
+            let s = Strings::new(lang);
+            assert_eq!(
+                s.compat_error_text(&CompatError::Network("x".into())),
+                format!("{}: x", s.err_network)
+            );
+            assert_eq!(
+                s.compat_error_text(&CompatError::Io("y".into())),
+                format!("{}: y", s.err_compat_io)
+            );
+        }
+    }
+
+    /// OfError → 双语文案：三变体各归其位（Vdf 转发 onlinefix_error）。
+    #[test]
+    fn of_error_text_maps_all_variants() {
+        for lang in [Lang::Zh, Lang::En] {
+            let s = Strings::new(lang);
+            assert_eq!(s.of_error_text(&OfError::WriteBlocked), s.of_steam_running);
+            assert_eq!(
+                s.of_error_text(&OfError::InvalidAppid),
+                s.err_of_invalid_appid
+            );
+            let vdf_err = VdfError::Io(std::io::Error::new(std::io::ErrorKind::Other, "t"));
+            assert_eq!(
+                s.of_error_text(&OfError::Vdf(vdf_err)),
+                s.onlinefix_error(&VdfError::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "t"
+                )))
+            );
+        }
+    }
+
+    /// ConfigEditError → 双语文案：Load/Validation/Save 三变体；Validation 穿透 lang（行列措辞因语言而异）。
+    #[test]
+    fn config_edit_error_text_maps_variants() {
+        for lang in [Lang::Zh, Lang::En] {
+            let s = Strings::new(lang);
+            assert_eq!(
+                s.config_edit_error_text(lang, &ConfigEditError::Load("m".into())),
+                format!("{}: m", s.err_config_load)
+            );
+            let ce = ConfigError {
+                line: 3,
+                col: 5,
+                message: "e".into(),
+            };
+            assert_eq!(
+                s.config_edit_error_text(lang, &ConfigEditError::Validation(ce.clone())),
+                s.config_error_text(lang, &ce)
+            );
+            assert_eq!(
+                s.config_edit_error_text(lang, &ConfigEditError::Save("m".into())),
+                format!("{}: m", s.err_config_save)
+            );
+        }
+        // 跨语言穿透：zh 实例 + En lang → Validation 按英文格式（措辞随 lang 参数而非实例）。
+        let zh = Strings::new(Lang::Zh);
+        let ce = ConfigError {
+            line: 3,
+            col: 5,
+            message: "e".into(),
+        };
+        let cross = zh.config_edit_error_text(Lang::En, &ConfigEditError::Validation(ce));
+        assert!(
+            cross.contains("line 3"),
+            "跨语言穿透应取 En 行列措辞: {cross}"
+        );
+    }
+
+    /// VdfError::Structure 错误码 → 双语文案（穷尽枚举映射：MissingRootChain → of_err_root_chain）。
+    #[test]
+    fn of_error_text_maps_structure_code() {
+        for lang in [Lang::Zh, Lang::En] {
+            let s = Strings::new(lang);
+            assert_eq!(
+                s.of_error_text(&OfError::Vdf(VdfError::Structure(
+                    VdfStructureError::MissingRootChain
+                ))),
+                s.of_err_root_chain
+            );
+        }
+    }
 
     #[test]
     fn update_error_maps_both_langs() {

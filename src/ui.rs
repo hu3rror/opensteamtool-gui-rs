@@ -15,7 +15,7 @@ use crate::onlinefix;
 use crate::dll::{self, DeployStatus};
 use crate::i18n::{Lang, Strings};
 use crate::process::{self, SteamEvent, SteamMonitor};
-use crate::settings::{ConfigEditError, ConfigEditorState, OfError, OfStatus, OnlineFixState};
+use crate::settings::{ConfigEditorState, OfStatus, OnlineFixState};
 use crate::steam;
 use crate::steam_state::SteamState;
 use crate::tray::{Tray, TrayAction};
@@ -269,31 +269,14 @@ fn render_update_notice(s: &Strings, n: &UpdateNotice) -> (bool, String) {
     }
 }
 
-/// 配置编辑器类型化错误 → 本地化文案（渲染闭包内调用，不借 App；语言切换后逐帧重新映射）。
-fn config_err_text(strings: &Strings, lang: Lang, err: &ConfigEditError) -> String {
-    match err {
-        ConfigEditError::Load(m) => format!("{}: {m}", strings.err_config_load),
-        ConfigEditError::Validation(e) => strings.config_error_text(lang, e),
-        ConfigEditError::Save(m) => format!("{}: {m}", strings.err_config_save),
-    }
-}
-
-/// OnlineFix 类型化错误 → 本地化文案。
-fn of_error_text(strings: &Strings, e: &OfError) -> String {
-    match e {
-        OfError::WriteBlocked => strings.of_steam_running.to_string(),
-        OfError::InvalidAppid => strings.err_of_invalid_appid.to_string(),
-        OfError::Vdf(e) => strings.onlinefix_error(e),
-    }
-}
-
 /// OnlineFix 展示状态 → (文案, 颜色)（状态模块存类型化错误，渲染时按当前语言映射）。
+/// 文案统一经 `Strings`（of_error_text），本函数只保留颜色映射。
 fn of_status_line(strings: &Strings, status: &OfStatus) -> (String, egui::Color32) {
     match status {
         OfStatus::Enabled => (strings.of_status_enabled.to_string(), STATUS_INSTALLED),
         OfStatus::Disabled => (strings.of_status_disabled.to_string(), TEXT_WEAK),
         OfStatus::Copied => (strings.of_copied.to_string(), STATUS_INSTALLED),
-        OfStatus::Error(e) => (of_error_text(strings, e), ERR_RED),
+        OfStatus::Error(e) => (strings.of_error_text(e), ERR_RED),
     }
 }
 
@@ -335,7 +318,7 @@ enum Msg {
     /// 缓存预热完成（成功/失败）。
     CompatPrecached {
         epoch: compat_flow::Epoch,
-        result: Result<(), String>,
+        result: Result<(), compat::CompatError>,
     },
 }
 
@@ -867,7 +850,11 @@ impl App {
 
                     // 底部固定行：状态 + 按钮。
                     if let Some(err) = &self.cfg.err {
-                        status_line(ui, &config_err_text(&self.strings, self.lang, err), ERR_RED);
+                        status_line(
+                            ui,
+                            &self.strings.config_edit_error_text(self.lang, err),
+                            ERR_RED,
+                        );
                     } else if self.cfg.saved {
                         status_line(ui, self.strings.ok_config_saved, STATUS_INSTALLED);
                     } else if !file_exists {
@@ -1139,10 +1126,9 @@ impl App {
                 } => {
                     let ctx = ctx.clone();
                     self.spawn(&ctx, move || {
-                        let result = targets.into_iter().try_for_each(|(target, sha)| {
-                            compat::precache(Path::new(&path), target, &sha)
-                                .map_err(|e| e.to_string())
-                        });
+                        let result = targets
+                            .into_iter()
+                            .try_for_each(|(target, sha)| compat::precache(Path::new(&path), target, &sha));
                         Msg::CompatPrecached { epoch, result }
                     });
                 }
@@ -1215,13 +1201,11 @@ impl App {
             });
         }
         if let Some(err) = &d.precache_error {
-            ui.label(
-                egui::RichText::new(
-                    self.strings.compat_precache_failed.replace("{err}", err),
-                )
-                .size(12.0)
-                .color(ERR_RED),
-            );
+            let text = self
+                .strings
+                .compat_precache_failed
+                .replace("{err}", &self.strings.compat_error_text(err));
+            ui.label(egui::RichText::new(text).size(12.0).color(ERR_RED));
         }
         if d.precache_done {
             ui.label(

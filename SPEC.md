@@ -376,3 +376,15 @@ pub struct OverallHealthReport { pub steamclient_pattern: ProbeReport, pub steam
 - 与忙碌门禁衔接：检查/下载仍经 `gate.start` 放行（交互类）；flow 的 Checking 是「结论未定」持久状态，gate 的 Checking 是瞬态互斥种类，二者语义不同不冲突。
 
 **验收**：`update_flow` 单测覆盖转移与 derived 全分支（同/异/本地缺失/空线上版本/Err/Idle/Checking/下载重派生/重检覆盖）；`cargo test` 全绿，无新增 clippy/fmt 噪音。
+
+### 7.12 错误→文案映射统一收拢
+
+**问题收敛**：8 个错误枚举的文案映射不再分居三处——全部收进 `Strings` 单一入口（每个错误枚举一个映射方法，签名同构）：新增 `config_edit_error_text(lang, e)` / `of_error_text(e)` / `compat_error_text(e)`，既有 5 方法（update_error / workflow_error_text / precheck_text / config_error_text / onlinefix_error）不动。ui.rs 不再持有文案知识（自由函数删除，`of_status_line` 只留颜色映射）。
+
+**签名同构**：lang 仅 ConfigError 家族多收——`config_error_text` 与 `config_edit_error_text`（行列定位措辞因语言而异，Validation 分支穿透 lang）；其余统一 `(&self, e)`。
+
+**CompatError 类型化**：不再经 Display 旁路——`Msg::CompatPrecached { result: Result<(), CompatError> }` 类型活到渲染，`compat_flow` 的 `precache_error` 字段为 `Option<CompatError>`，渲染处 `compat_error_text(err)` 逐分支双语映射（Network 复用 err_network、Io 用 err_compat_io）。Display 保留只给日志。
+
+**VdfStructureError 类型化**：`VdfError::Structure(&'static str)` → `Structure(VdfStructureError)`，`VdfStructureError { MissingRootChain }`——i18n 映射穷尽 match（MissingRootChain → of_err_root_chain），杜绝 magic string 手抄；Display 输出 `structure: missing_root_chain` 不变。
+
+**验收**：i18n.rs 新方法单测（compat_error_text / of_error_text / config_edit_error_text 双语 × 变体）；compat.rs `compat_error_display` 保留；compat_flow `precache_error` 断言改分支匹配；`cargo test` 全绿，无新增 clippy/fmt 噪音。

@@ -5,7 +5,7 @@
 //! App 只喂事件、执行返回的效果（spawn 后台线程）、渲染展示态。
 //! 状态转移全部可经 `step` 单测（接缝 = 状态机接口）。
 
-use crate::compat::{self, OverallHealthReport, ProbeTarget};
+use crate::compat::{self, CompatError, OverallHealthReport, ProbeTarget};
 
 /// 体检代数：路径变更推进；预热完成后的复检不推进（同一体检会话）。
 /// 所有完成事件携带发起时代数，与当前代数不符 → 丢弃（陈旧防护）。
@@ -37,7 +37,7 @@ pub enum Event {
     /// 预热完成。
     PrecacheDone {
         epoch: Epoch,
-        result: Result<(), String>,
+        result: Result<(), CompatError>,
     },
     /// 手动「一键缓存签名」（自动预热由流程内部在 ProbeDone 时触发）。
     PrecacheRequested,
@@ -78,8 +78,8 @@ pub struct Display {
     pub checking: bool,
     /// 预热进行中（按钮显示「正在缓存...」）。
     pub precaching: bool,
-    /// 预热失败文案（手动失败就地显示；自动失败静默）。
-    pub precache_error: Option<String>,
+    /// 预热失败错误（手动失败就地显示；自动失败静默）。
+    pub precache_error: Option<CompatError>,
     /// 预热成功提示（复检/刷新合并后保留；下次预热开始或路径变更清除）。
     pub precache_done: bool,
     /// 汇总分类（徽章渲染）。
@@ -96,7 +96,7 @@ pub struct CompatFlow {
     network_refreshed: bool,
     precaching: bool,
     precaching_auto: bool,
-    precache_error: Option<String>,
+    precache_error: Option<CompatError>,
     precache_done: bool,
 }
 
@@ -184,7 +184,7 @@ impl CompatFlow {
         Vec::new()
     }
 
-    fn on_precache_done(&mut self, epoch: Epoch, result: Result<(), String>) -> Vec<Effect> {
+    fn on_precache_done(&mut self, epoch: Epoch, result: Result<(), CompatError>) -> Vec<Effect> {
         if epoch != self.epoch {
             return Vec::new();
         }
@@ -731,7 +731,7 @@ mod tests {
         // 自动失败 → 静默：无错误提示，报告保持 Online（手动入口保留）。
         let (d, effects) = flow.step(Event::PrecacheDone {
             epoch,
-            result: Err("boom".into()),
+            result: Err(CompatError::Network("boom".into())),
         });
         assert!(effects.is_empty());
         assert!(!d.precaching);
@@ -769,7 +769,7 @@ mod tests {
         // 让在途预热完成（失败静默），再手动触发 → Manual 模式。
         let _ = flow.step(Event::PrecacheDone {
             epoch,
-            result: Err("auto boom".into()),
+            result: Err(CompatError::Network("auto boom".into())),
         });
         let (d, effects) = flow.step(Event::PrecacheRequested);
         assert!(d.precaching); // 手动预热已启动（模式经 Effect 断言）
@@ -779,12 +779,12 @@ mod tests {
             other => panic!("expected manual precache, got {other:?}"),
         }
 
-        // 手动失败 → 就地显示错误。
+        // 手动失败 → 就地显示错误（CompatError 类型活到渲染，逐分支双语映射）。
         let (d, _) = flow.step(Event::PrecacheDone {
             epoch,
-            result: Err("manual boom".into()),
+            result: Err(CompatError::Io("manual boom".into())),
         });
-        assert_eq!(d.precache_error.as_deref(), Some("manual boom"));
+        assert!(matches!(d.precache_error, Some(CompatError::Io(_))));
     }
 
     /// 预热成功 → 同代数复检；复检的短路项不再触发二次网络刷新（循环守卫盖全两条腿）。

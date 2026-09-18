@@ -17,12 +17,27 @@ use std::path::{Path, PathBuf};
 /// OnlineFix 启动参数（附赠「复制」功能用，也是写入 LaunchOptions 的令牌）。
 pub const ONLINEFIX_ARG: &str = "-onlinefix";
 
+/// VDF 结构异常的错误码（类型化：i18n 映射穷尽 match，杜绝手抄字符串）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VdfStructureError {
+    /// localconfig.vdf 缺少 `UserLocalConfigStore` 根块。
+    MissingRootChain,
+}
+
+impl std::fmt::Display for VdfStructureError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VdfStructureError::MissingRootChain => write!(f, "missing_root_chain"),
+        }
+    }
+}
+
 /// VDF 读写错误：IO 或结构异常（根块缺失等）。
 #[derive(Debug)]
 pub enum VdfError {
     Io(io::Error),
-    /// 结构不符合 localconfig.vdf 的实际形态。携带机器可读的错误码（i18n 映射）。
-    Structure(&'static str),
+    /// 结构不符合 localconfig.vdf 的实际形态。携带类型化错误码（i18n 映射穷尽 match）。
+    Structure(VdfStructureError),
 }
 
 impl std::fmt::Display for VdfError {
@@ -173,7 +188,7 @@ fn edit_vdf(
     // 根块缺失：启用 → 结构错误；停用 → 无操作。
     let Some(mut root) = doc.find_child_block_from(0, b"UserLocalConfigStore") else {
         return if create_chain {
-            Err(VdfError::Structure("missing_root_chain"))
+            Err(VdfError::Structure(VdfStructureError::MissingRootChain))
         } else {
             Ok(())
         };

@@ -28,15 +28,16 @@
     `derived` 一处派生行文案/通知/下载（`UpdateDerived { line, notice, download: Option<&OnlineInfo> }`）；
     下载后 Checked 保留靠重派生（机制 = 版本相等，非「下载过就藏」）；检查/下载仍经忙碌门禁。
 
+- [x] **候选 4 · 错误→文案映射统一收拢**（Worth exploring，in-process）
+  - issue #17（关闭于本候选收尾）、commit（main，本地）
+  - 文档：SPEC.md §7.12（无 CONTEXT.md 词条变更——错误映射为通用编程概念）
+  - 要点：8 枚举文案映射全部收进 Strings（新增 config_edit_error_text / of_error_text / compat_error_text，
+    既有 5 方法不动；lang 仅 ConfigError 家族多收）；CompatError 类型活到渲染（Msg/compat_flow
+    类型化，Display 只留日志）；`VdfStructureError { MissingRootChain }` 穷尽 match 杜绝 magic string。
+
 ## 待办
 
-- [ ] **候选 4 · 错误→文案映射统一收拢**（Worth exploring，in-process）
-  - 问题：8 个错误枚举的文案映射分居三处——5 个在 `i18n::Strings`、2 个是 ui.rs 自由函数、
-    `CompatError` 走 `Display` 旁路（英文串塞进本地化模板）；`VdfError::Structure` 用 magic string
-    跨模块手抄（onlinefix.rs 生产 / i18n.rs 消费）。
-  - 方案：全部映射收进 Strings（签名同构，仅 config_error_text 多收 lang）；VDF 结构错误码类型化；
-    `CompatError` 逐分支双语（与 UpdateError 同等待遇），Display 只留给日志。
-  - 参考：评审报告卡片 #4。
+评审报告的 4 个架构候选（候选 1–4）已全部走完管线，无遗留待办。
 
 ## 备注
 
