@@ -55,7 +55,6 @@ pub enum Effect {
         epoch: Epoch,
         path: String,
         targets: Vec<(ProbeTarget, String)>,
-        mode: PrecacheMode,
     },
 }
 
@@ -70,16 +69,16 @@ pub enum CompatSummary {
     Network,
 }
 
-/// 展示态（App 渲染；全部字段归流程所有，App 只读）。
+/// 展示态（App 渲染；全部字段归流程所有，App 只读）；report/precache_error 为流程内部引用，热路径零拷贝。
 #[derive(Clone, Debug)]
-pub struct Display {
-    pub report: Option<OverallHealthReport>,
+pub struct Display<'a> {
+    pub report: Option<&'a OverallHealthReport>,
     /// 体检/复检进行中（显示 Checking / 禁用按钮）。
     pub checking: bool,
     /// 预热进行中（按钮显示「正在缓存...」）。
     pub precaching: bool,
     /// 预热失败错误（手动失败就地显示；自动失败静默）。
-    pub precache_error: Option<CompatError>,
+    pub precache_error: Option<&'a CompatError>,
     /// 预热成功提示（复检/刷新合并后保留；下次预热开始或路径变更清除）。
     pub precache_done: bool,
     /// 汇总分类（徽章渲染）。
@@ -116,7 +115,7 @@ impl CompatFlow {
     }
 
     /// 推进事件：返回展示态与待办效果。App 执行效果、渲染展示态。
-    pub fn step(&mut self, event: Event) -> (Display, Vec<Effect>) {
+    pub fn step(&mut self, event: Event) -> (Display<'_>, Vec<Effect>) {
         let effects = match event {
             Event::PathChanged(path) => self.on_path_changed(path),
             Event::ProbeDone { epoch, report } => self.on_probe_done(epoch, report),
@@ -165,7 +164,7 @@ impl CompatFlow {
                 });
             }
         }
-        // 自动预热：体检落定 Online 且无预热进行中 → 自动下载缺失签名。
+        // 自动预热：体检落定 Online 且无预热进行中 → 自动触发。
         if should_auto_precache(&report, self.precaching) {
             let targets = precache_targets(&report);
             if !targets.is_empty() {
@@ -250,16 +249,16 @@ impl CompatFlow {
             epoch: self.epoch,
             path,
             targets,
-            mode,
         });
     }
 
-    pub fn display(&self) -> Display {
+    /// 展示态（借用流程内部状态，零拷贝；App 渲染后即释放借用）。
+    pub fn display(&self) -> Display<'_> {
         Display {
-            report: self.report.clone(),
+            report: self.report.as_ref(),
             checking: self.checking,
             precaching: self.precaching,
-            precache_error: self.precache_error.clone(),
+            precache_error: self.precache_error.as_ref(),
             precache_done: self.precache_done,
             summary: compat_summary(self.checking, self.report.as_ref()),
         }
@@ -304,13 +303,14 @@ pub fn compat_summary(checking: bool, report: Option<&OverallHealthReport>) -> C
     }
 }
 
-/// 待预热目标（RemoteAvailable{cached:false} 且已有哈希，或验证缓存命中但无签名缓存），
-/// 以 `cache_path` 实际文件存在性为准。App 详情按钮可见性也读它。
+/// 待预热目标（RemoteAvailable{cached:false} 或验证缓存命中但无离线缓存），
+/// 以报告携带的 `signature_cached` 存在性事实为准（算子层探针时判定，流程不落盘）。
+/// App 详情按钮可见性也读它。
 pub fn precache_targets(report: &OverallHealthReport) -> Vec<(ProbeTarget, String)> {
     probes(report)
         .iter()
         .filter_map(|r| match &r.status {
-        compat::ProbeStatus::RemoteAvailable { .. } if !r.cache_path.is_file() => {
+        compat::ProbeStatus::RemoteAvailable { .. } if !r.signature_cached => {
             r.sha256.clone().map(|sha| (r.target, sha))
         }
         _ => None,
@@ -342,9 +342,7 @@ fn should_auto_precache(report: &OverallHealthReport, precaching: bool) -> bool 
 mod tests {
     use super::*;
 
-    use std::path::PathBuf;
-
-    /// 构造探针报告样本（cache_path 占位，summary 判定不依赖它）。
+    /// 构造探针报告样本（signature_cached 占位，summary 判定不依赖它）。
     fn probe_report(
         target: ProbeTarget,
         status: compat::ProbeStatus,
@@ -354,7 +352,7 @@ mod tests {
             target,
             sha256: sha.map(String::from),
             status,
-            cache_path: PathBuf::from("F:/Steam/opensteamtool"),
+            signature_cached: false,
         }
     }
 
@@ -490,7 +488,7 @@ mod tests {
         assert_eq!(compat_summary(false, Some(&offline)), CompatSummary::Ready);
     }
 
-    /// 待预热目标：收集「已适配但签名缓存缺失」的项（以 cache_path 存在性为准）。
+    /// 待预热目标：收集「已适配但离线缓存缺失」的项（以 signature_cached 存在性为准）。
     #[test]
     fn precache_targets_picks_available_without_signature() {
         let r = report_with(
@@ -508,12 +506,9 @@ mod tests {
         assert!(ts.contains(&ProbeTarget::PatternSteamUi));
     }
 
-    /// 已存在签名缓存文件的项（cache_path.is_file()）不被收集。
+    /// 离线缓存已就绪的项（signature_cached=true）不被收集。
     #[test]
     fn precache_targets_excludes_existing_signature() {
-        let dir = std::env::temp_dir().join(format!("ost_flow_sig_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
         let mut r = report_with(
             [
                 S::RemoteAvailable { cached: true },
@@ -522,14 +517,11 @@ mod tests {
             ],
             true,
         );
-        let path = crate::compat::cache_path(&dir, ProbeTarget::PatternSteamClient, "abc");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, b"[x]").unwrap();
-        r.steamclient_pattern.cache_path = path;
+        // 第一项离线缓存已存在（算子层探针时判定的事实）→ 不收集。
+        r.steamclient_pattern.signature_cached = true;
         let targets = precache_targets(&r);
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].0, ProbeTarget::PatternSteamUi);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ==================== 状态机转移 ====================
@@ -719,7 +711,6 @@ mod tests {
                 epoch: e,
                 path,
                 targets,
-                mode: PrecacheMode::Auto,
             } => {
                 assert_eq!(*e, epoch);
                 assert_eq!(path, "A");
@@ -757,27 +748,23 @@ mod tests {
         let (_, effects) = flow.step(Event::PrecacheRequested);
         assert!(effects.is_empty());
 
-        // Online 态 → 手动预热（Manual 模式）。
+        // Online 态 → 自动预热启动；手动请求在途去重。
         let (_, effects) = flow.step(Event::ProbeDone {
             epoch,
             report: report_with(all(S::RemoteAvailable { cached: false }), true),
         });
-        assert!(find_precache(&effects).is_some()); // 自动预热
+        assert!(find_precache(&effects).is_some());
         let (_, effects) = flow.step(Event::PrecacheRequested);
         assert!(effects.is_empty()); // 已在途 → 去重
 
-        // 让在途预热完成（失败静默），再手动触发 → Manual 模式。
+        // 自动失败静默后手动重试 → 手动预热启动（手动/自动差异经失败路径断言）。
         let _ = flow.step(Event::PrecacheDone {
             epoch,
             result: Err(CompatError::Network("auto boom".into())),
         });
         let (d, effects) = flow.step(Event::PrecacheRequested);
-        assert!(d.precaching); // 手动预热已启动（模式经 Effect 断言）
-        let precache = find_precache(&effects).expect("manual precache effect");
-        match precache {
-            Effect::Precache { mode: PrecacheMode::Manual, .. } => {}
-            other => panic!("expected manual precache, got {other:?}"),
-        }
+        assert!(d.precaching);
+        assert!(find_precache(&effects).is_some(), "manual precache effect");
 
         // 手动失败 → 就地显示错误（CompatError 类型活到渲染，逐分支双语映射）。
         let (d, _) = flow.step(Event::PrecacheDone {

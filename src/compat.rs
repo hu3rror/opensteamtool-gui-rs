@@ -75,13 +75,13 @@ pub enum ProbeStatus {
 /// 单项目探针报告。
 ///
 /// 字段由 T5（UI 集成）读取（详情弹窗展示）。
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ProbeReport {
     pub target: ProbeTarget,
     pub sha256: Option<String>,
     pub status: ProbeStatus,
-    pub cache_path: PathBuf,
+    /// 离线缓存文件在探针时刻的存在性事实（算子层 `is_cached` 判定；编排层据此判定预热目标，不落盘检查）。
+    pub signature_cached: bool,
 }
 
 /// 三项探针的综合健康度报告。
@@ -221,7 +221,7 @@ fn probe_urls(head: impl Fn(&str) -> RemoteOutcome, urls: &[String]) -> RemoteOu
 
 /// 单项目探针：本地（哈希 → 缓存命中）→ 远程（镜像链 HEAD）→ 报告。
 /// `sha` 由调用方预计算（`probe_all_with` 对 steamclient64.dll 只算一次，Pattern/IPC 复用）。
-/// `network=false`（快速体检）时**完全零网络**，优先级：签名缓存命中 → `CompatibleOffline`
+/// `network=false`（快速体检）时**完全零网络**，优先级：离线缓存命中 → `CompatibleOffline`
 /// （绿，离线可用）；验证缓存命中 → `RemoteAvailable{cached:true}`（绿，上次已验证适配）；
 /// 均未命中 → 乐观 `RemoteAvailable{cached:false}`（琥珀可预热）。网络适配状态由
 /// `probe_all_refresh` 后台补齐并写入验证缓存（SPEC.md §7.5 增强）。
@@ -239,7 +239,7 @@ fn probe_one(
             target,
             sha256: None,
             status: ProbeStatus::FileNotFound,
-            cache_path: cache_dir(steam_dir, target),
+            signature_cached: false,
         };
     };
     let cached = is_cached(steam_dir, target, &sha);
@@ -247,7 +247,7 @@ fn probe_one(
     let status = if network {
         decide(cached, probe_urls(&head, &urls))
     } else if cached {
-        // 签名缓存命中：本地齐全，离线可用。
+        // 离线缓存命中：本地齐全，离线可用。
         ProbeStatus::CompatibleOffline
     } else if verified.get(&target).is_some_and(|v| v == &sha) {
         // 验证缓存命中：上次已确认上游适配（哈希未变，结论仍成立）。
@@ -260,7 +260,7 @@ fn probe_one(
         target,
         sha256: Some(sha.clone()),
         status,
-        cache_path: cache_path(steam_dir, target, &sha),
+        signature_cached: cached,
     }
 }
 
@@ -299,7 +299,7 @@ fn probe_all_with(
     }
 }
 
-/// 快速体检（启动/路径变更入口）：签名缓存/验证缓存命中项零网络，立即出绿；
+/// 快速体检（启动/路径变更入口）：离线缓存/验证缓存命中项零网络，立即出绿；
 /// 均未命中项乐观琥珀，后台刷新确认后写入验证缓存。
 pub fn probe_all(steam_dir: &Path) -> OverallHealthReport {
     let template = crate::config_editor::remote_url_template(steam_dir);
@@ -452,7 +452,7 @@ fn write_cache_file(
     Ok(())
 }
 
-/// 预热单个目标的签名缓存：下载 → 持久化。
+/// 预热单个目标的离线缓存：下载 → 持久化。
 ///
 /// T4 暴露给 T5（UI 集成）的入口，T5 接入前保持 allow。
 #[allow(dead_code)]
@@ -880,7 +880,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// 快速体检：验证缓存命中（无签名缓存）→ RemoteAvailable{cached:true}（绿），零网络。
+    /// 快速体检：验证缓存命中（无离线缓存）→ RemoteAvailable{cached:true}（绿），零网络。
     #[test]
     fn probe_verified_cache_hit_turns_green() {
         let (dir, sc_sha, _) = fake_steam_dir("verhit");
@@ -903,7 +903,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// 签名缓存优先于验证缓存（两者都有 → 离线可用 CompatibleOffline）。
+    /// 离线缓存优先于验证缓存（两者都有 → 离线可用 CompatibleOffline）。
     #[test]
     fn probe_signature_cache_beats_verified() {
         let (dir, sc_sha, _) = fake_steam_dir("sigbeats");

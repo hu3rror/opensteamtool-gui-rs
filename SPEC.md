@@ -238,7 +238,7 @@ URL 占位符统一为 `{channel}` / `{component}` / `{sha256}`，解析顺序�
 探针超时 4s/5s 收紧至 2.5s/2.5s，无网络时快速失败。
 
 **验证缓存（增强）**：后台刷新确认适配（Found）的项持久化到 `<exe>/cache/verified.toml`
-（`{target → sha256}` 映射，原子写）。下次快速体检：签名缓存命中 → `CompatibleOffline`（绿）；
+（`{target → sha256}` 映射，原子写）。下次快速体检：离线缓存命中 → `CompatibleOffline`（绿）；
 验证缓存命中 → `RemoteAvailable{cached:true}`（绿，零网络）；均未命中 → 乐观琥珀。
 缓存由 DLL 哈希自动失效：Steam 更新改哈希即重验，无时间有效期；只记 Found（404/错误不缓存，
 避免上游补发签名后本地仍失真）。
@@ -260,7 +260,7 @@ pub enum ProbeStatus {
     FileNotFound,
 }
 
-pub struct ProbeReport { pub target: ProbeTarget, pub sha256: Option<String>, pub status: ProbeStatus, pub cache_path: PathBuf }
+pub struct ProbeReport { pub target: ProbeTarget, pub sha256: Option<String>, pub status: ProbeStatus, pub signature_cached: bool }
 pub struct OverallHealthReport { pub steamclient_pattern: ProbeReport, pub steamui_pattern: ProbeReport, pub steamclient_ipc: ProbeReport, pub is_all_compatible: bool, pub has_missing_cache: bool }
 ```
 
@@ -278,10 +278,14 @@ pub struct OverallHealthReport { pub steamclient_pattern: ProbeReport, pub steam
 - 接口：`step(Event) -> (Display, Vec<Effect>)`；App 只喂事件、执行返回的效果（spawn）、渲染展示态。
 - **代数戳**：`Epoch(u64)` 单调递增；路径变更（含启动首次）推进代数，预热完成后的复检不推进（同一体检会话）；
   所有完成事件携带发起时代数，与当前代数不符 → 丢弃（陈旧防护，防跨路径覆盖）。
-- **每代数一次网络刷新**：代数内 `network_refreshed` 事实，产出刷新效果后置位；复检不再触发（见 §7.5）。
-- **刷新与预热并行、在途独立**：刷新在途不阻塞预热，`precaching`（含自动/手动模式）独立维护；
+- **每代数一次网络刷新**：刷新守卫 = 一次性预算位 `network_refreshed`（产出即置位、同代数永不复位，完成无解除动作；
+  每代数至多产出一次刷新效果，见 §7.5），不另设「刷新在途」事实——预算位已吞并其全部语义。
+- **刷新与预热并行、在途独立**：刷新不阻塞预热，`precaching`（含自动/手动模式）独立维护；
   刷新完成只合并报告，不触碰预热标志与提示。
-- **自动预热**：体检落定 Online 且无预热进行中 → 自动产出预热效果（Auto 模式）；失败静默、手动入口保留。
+- **自动预热**：体检落定 Online 且无预热进行中 → 自动产出预热效果；失败静默、手动入口保留。
+  预热模式（自动/手动）为流程内部状态（仅决定失败静默与否），展示态「预热中」为布尔、不暴露模式。
+- **预热目标判定**：以报告携带的 `signature_cached` 存在性事实为准（算子层探针时判定）；
+  编排层不落盘检查（纯状态机契约：无 IO）。
 - **提示生命周期**：「缓存已就绪」在复检/刷新合并后保留，新预热开始或路径变更清除。
 - **路径防抖**：路径事件在流程内去重（与上次路径相同 → 无动作），取代 App 侧路径比对。
 
@@ -309,7 +313,7 @@ pub struct OverallHealthReport { pub steamclient_pattern: ProbeReport, pub steam
 **详情与预热交互**：
 - 「详细信息」展开/弹窗展示 3 行明细：`steamclient64.dll`（Pattern）、`steamui.dll`（Pattern）、`steamclient64.dll`（IPC），每行 = SHA-256 前 12 位 + 状态徽标。
 - 有 `RemoteAvailable{cached:false}` 项时显示 `[ 一键缓存签名 ]`：后台线程 GET 下载 → 建 `<Steam>/opensteamtool/{channel}/{component}/` → 原子写入 `<sha256>.toml` → 重跑本地探针刷新状态。
-- **自动预热（增强）**：体检落定为 Online（上游已适配未缓存）且无预热进行中时，自动触发同一下载链路——Steam 更新后首次启动零点击补缓存；自动失败静默（不弹错误、徽章保持 Online、手动入口保留），成功复用「缓存已就绪」提示，无新增文案。预热目标以签名缓存文件实际存在性为准（含验证缓存命中但未下载的情形）。
+- **自动预热（增强）**：体检落定为 Online（上游已适配未缓存）且无预热进行中时，自动触发同一下载链路——Steam 更新后首次启动零点击补缓存；自动失败静默（不弹错误、徽章保持 Online、手动入口保留），成功复用「缓存已就绪」提示，无新增文案。预热目标以离线缓存文件实际存在性为准（含验证缓存命中但未下载的情形）；存在性由算子层在探针时判定并随报告携带（`signature_cached`），编排层不落盘检查。
 - **触发防抖**：Steam 路径输入逐字符 `resp.changed()` 触发——路径去重在体检流程内完成（`compat_flow` 比对上次路径，相同则无动作；不同则推进代数并产出快速体检效果）。
 
 ### 7.8 国际化词表（`src/i18n.rs`）

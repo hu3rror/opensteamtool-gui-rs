@@ -244,6 +244,11 @@ fn card_title(ui: &mut egui::Ui, text: &str) {
 fn status_line(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
     ui.label(egui::RichText::new(text).size(13.0).strong().color(color));
 }
+/// 防御分支日志（理论不可达路径，统一前缀便于过滤）。
+fn log_warn(msg: impl std::fmt::Display) {
+    eprintln!("[opensteamtool-manager] {msg}");
+}
+
 /// 渲染最近一次结果提示为当前语言文案。
 /// 纯函数（不依赖 App）：切换语言后无需重建 notice，重渲染即得新语言。
 /// 检查更新结果的分类来自「更新流程」派生（`notice_text` 的 UpdateChecked 分支），此处不处理。
@@ -255,7 +260,9 @@ fn render_notice(s: &Strings, notice: &Notice) -> (bool, String) {
         Notice::WorkflowDone(_, Err(e)) => (false, s.workflow_error_text(e)),
         Notice::Precheck(p) => (false, s.precheck_text(p)),
         Notice::UpdateChecked => {
-            unreachable!("检查更新通知经 notice_text 的 UpdateChecked 分支渲染")
+            // 防御分支：正常路径该变体经 notice_text 分流，不直达此处；直达则记日志并降级为中性空提示。
+            log_warn("render_notice 收到 Notice::UpdateChecked（应经 notice_text 分流）");
+            (true, String::new())
         }
     }
 }
@@ -342,6 +349,37 @@ enum SettingsTab {
     Config,
     /// OnlineFix 启动预设。
     OnlineFix,
+}
+
+/// 「Steam 核心兼容性」一帧的展示快照（`CompatFlow::display` 零拷贝借用，渲染期无流程借用）。
+struct CompatView {
+    summary: CompatSummary,
+    checking: bool,
+    precaching: bool,
+    precache_done: bool,
+    /// 预热失败文案（本地化快照；None = 无错误）。
+    precache_error: Option<String>,
+    /// 详情展开时按需克隆的报告（热路径为 None）。
+    detail_report: Option<compat::OverallHealthReport>,
+}
+
+impl CompatView {
+    /// 从流程状态一次性快照（借用收在本函数内，调用方随后可自由 &mut self）。
+    fn snapshot(app: &App) -> Self {
+        let d = app.flow.display();
+        Self {
+            summary: d.summary,
+            checking: d.checking,
+            precaching: d.precaching,
+            precache_done: d.precache_done,
+            precache_error: d.precache_error.map(|err| {
+                app.strings
+                    .compat_precache_failed
+                    .replace("{err}", &app.strings.compat_error_text(err))
+            }),
+            detail_report: app.compat_details_open.then(|| d.report.cloned()).flatten(),
+        }
+    }
 }
 
 pub struct App {
@@ -463,8 +501,6 @@ impl App {
         let steam_path = steam::detect_steam_path()
             .map(|p| p.display().to_string())
             .unwrap_or_default();
-        // 首次体检用的路径快照（Self 构造后闭包 move，避免与字段借用冲突）。
-        let probe_path = steam_path.clone();
         let steam_dir = Path::new(&steam_path);
         let status = dll::check_status(steam_dir);
         let local_version = dll::read_local_version(&dll::dll_dir());
@@ -480,9 +516,7 @@ impl App {
             strings.tray_restart,
         );
 
-        // 体检流程：启动即喂首次路径 → 产出首次快速体检效果（初始 checking 骨架态，零白屏）。
-        let mut flow = CompatFlow::new();
-        let (_, initial_effects) = flow.step(compat_flow::Event::PathChanged(probe_path.clone()));
+        let flow = CompatFlow::new();
 
         let mut app = Self {
             lang,
@@ -517,8 +551,11 @@ impl App {
         };
         // 初始同步托盘「重启 Steam」可用性（跟随初始 Steam 运行状态）。
         app.sync_tray_restart_enabled();
-        // 执行启动首次体检（初始 checking 骨架态，零白屏）。
-        app.exec_compat_effects(&cc.egui_ctx, initial_effects);
+        // 启动即喂首次路径：产出首次快速体检效果（初始 checking 骨架态，零白屏）。
+        app.on_compat_event(
+            &cc.egui_ctx,
+            compat_flow::Event::PathChanged(app.steam_path.clone()),
+        );
         app
     }
 
@@ -623,24 +660,15 @@ impl App {
                 }
                 Msg::Compat { epoch, report } => {
                     let ctx = self.ctx.clone();
-                    let (_, effects) = self
-                        .flow
-                        .step(compat_flow::Event::ProbeDone { epoch, report });
-                    self.exec_compat_effects(&ctx, effects);
+                    self.on_compat_event(&ctx, compat_flow::Event::ProbeDone { epoch, report });
                 }
                 Msg::CompatRefreshed { epoch, report } => {
                     let ctx = self.ctx.clone();
-                    let (_, effects) = self
-                        .flow
-                        .step(compat_flow::Event::RefreshDone { epoch, report });
-                    self.exec_compat_effects(&ctx, effects);
+                    self.on_compat_event(&ctx, compat_flow::Event::RefreshDone { epoch, report });
                 }
                 Msg::CompatPrecached { epoch, result } => {
                     let ctx = self.ctx.clone();
-                    let (_, effects) = self
-                        .flow
-                        .step(compat_flow::Event::PrecacheDone { epoch, result });
-                    self.exec_compat_effects(&ctx, effects);
+                    self.on_compat_event(&ctx, compat_flow::Event::PrecacheDone { epoch, result });
                 }
             }
         }
@@ -672,11 +700,15 @@ impl App {
             }
         };
 
-        // 门禁此刻必空闲（request_action 已查过、确认弹窗悬挂期 Modal 阻断交互）。
+        // 门禁此刻应空闲（request_action 已查过、确认弹窗悬挂期 Modal 阻断交互）；Release 下仍被占用则放弃并记日志。
         let first_phase = ops.first().expect("plan never returns empty").phase();
-        let started = self.gate.start(first_phase); // 同步首阶段，点击即见阶段文案
-        debug_assert!(started, "动作开始时门禁应空闲");
-        self.confirm = None;
+        self.confirm = None; // 无论门禁是否放行都收掉确认弹窗，避免悬挂。
+        if !self.gate.start(first_phase) {
+            log_warn(format!(
+                "start_action 被忙碌门禁拒绝（phase={first_phase:?}）"
+            ));
+            return;
+        }
 
         let ctx2 = ctx.clone();
         let tx = self.tx.clone();
@@ -1087,17 +1119,21 @@ impl App {
         ui.add_space(10.0);
     }
 
+    /// 喂事件给体检流程并执行其效果（消息臂 / 路径变更 / 手动预热共用）。
+    fn on_compat_event(&mut self, ctx: &egui::Context, event: compat_flow::Event) {
+        let (_, effects) = self.flow.step(event);
+        self.exec_compat_effects(ctx, effects);
+    }
+
     /// 路径输入变化时喂给体检流程（防抖与代数推进在流程模块内）。
     fn feed_path_changed(&mut self, ctx: &egui::Context) {
         let path = self.steam_path.trim().to_string();
-        let (_, effects) = self.flow.step(compat_flow::Event::PathChanged(path));
-        self.exec_compat_effects(ctx, effects);
+        self.on_compat_event(ctx, compat_flow::Event::PathChanged(path));
     }
 
     /// 手动「一键缓存签名」：喂给体检流程（目标选择与在途去重由流程负责）。
     fn request_precache(&mut self, ctx: &egui::Context) {
-        let (_, effects) = self.flow.step(compat_flow::Event::PrecacheRequested);
-        self.exec_compat_effects(ctx, effects);
+        self.on_compat_event(ctx, compat_flow::Event::PrecacheRequested);
     }
 
     /// 执行体检流程产出的效果：spawn 后台线程，完成消息携带发起时代数回传。
@@ -1122,7 +1158,6 @@ impl App {
                     epoch,
                     path,
                     targets,
-                    mode: _,
                 } => {
                     let ctx = ctx.clone();
                     self.spawn(&ctx, move || {
@@ -1141,9 +1176,7 @@ impl App {
         ui.add_space(10.0);
         // 无分隔线：竖条标题 + 徽章自成边界，直接衔接上方路径输入区。
 
-        let d = self.flow.display();
-        let summary = d.summary;
-        let checking = d.checking;
+        let v = CompatView::snapshot(self);
 
         // 第一行：左侧（竖条标题 + 状态徽章）| 右侧操作（预热 + 详细信息，贴右边缘）。
         ui.horizontal(|ui| {
@@ -1155,15 +1188,15 @@ impl App {
                 ui.label(egui::RichText::new(self.strings.compat_title).size(13.5).strong());
             });
             ui.add_space(8.0);
-            self.compat_badge(ui, summary);
+            self.compat_badge(ui, v.summary);
 
             // 右侧操作区：right_to_left 首项（详细信息）贴最右，预热按钮在其左侧。
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if !checking && ui.button(self.strings.compat_btn_details).clicked() {
+                if !v.checking && ui.button(self.strings.compat_btn_details).clicked() {
                     self.compat_details_open = !self.compat_details_open;
                 }
-                if summary == CompatSummary::Online && !checking {
-                    let label = if d.precaching {
+                if v.summary == CompatSummary::Online && !v.checking {
+                    let label = if v.precaching {
                         self.strings.compat_precaching
                     } else {
                         self.strings.compat_btn_precache
@@ -1173,7 +1206,7 @@ impl App {
                         label,
                         ButtonStyle::Secondary,
                         egui::vec2(132.0, 26.0),
-                        !d.precaching,
+                        !v.precaching,
                     )
                     .clicked()
                     {
@@ -1185,8 +1218,8 @@ impl App {
         });
 
         // 辅助说明：五态一句话（Checking 为瞬时态不显示），小字号弱灰 + 缩进对齐标题竖条。
-        if summary != CompatSummary::Checking {
-            let tip = match summary {
+        if v.summary != CompatSummary::Checking {
+            let tip = match v.summary {
                 CompatSummary::Ready => self.strings.compat_tip_ready,
                 CompatSummary::Online => self.strings.compat_tip_online,
                 CompatSummary::Pending => self.strings.compat_tip_pending,
@@ -1200,14 +1233,10 @@ impl App {
                 ui.label(egui::RichText::new(tip).size(11.5).color(TEXT_WEAK));
             });
         }
-        if let Some(err) = &d.precache_error {
-            let text = self
-                .strings
-                .compat_precache_failed
-                .replace("{err}", &self.strings.compat_error_text(err));
+        if let Some(text) = &v.precache_error {
             ui.label(egui::RichText::new(text).size(12.0).color(ERR_RED));
         }
-        if d.precache_done {
+        if v.precache_done {
             ui.label(
                 egui::RichText::new(self.strings.compat_precache_done)
                     .size(12.0)
@@ -1215,9 +1244,9 @@ impl App {
             );
         }
 
-        // 详情明细（展开时）。
-        if self.compat_details_open && let Some(report) = d.report.clone() {
-            self.compat_details(ui, &report);
+        // 详情明细（展开时）：快照阶段按需克隆的报告，展开期间每帧一次，热路径零拷贝。
+        if let Some(report) = &v.detail_report {
+            self.compat_details(ui, report);
         }
     }
 
@@ -1280,7 +1309,8 @@ impl App {
             });
         }
         // 详情内「一键缓存签名」：有未缓存项时提供（SPEC.md §7.7）。
-        if !compat_flow::precache_targets(report).is_empty() && !self.flow.display().precaching {
+        let precaching = self.flow.display().precaching;
+        if !compat_flow::precache_targets(report).is_empty() && !precaching {
             let ctx = self.ctx.clone();
             if styled_button(
                 ui,
@@ -1792,6 +1822,17 @@ mod tests {
         assert_eq!(en, (true, "v1.4.8 (Up to date)".to_string()));
         // 英文界面不应出现中文。
         assert!(!en.1.contains('本'), "en notice 不应含中文: {}", en.1);
+    }
+
+    /// 防御分支：Notice::UpdateChecked 正常经 notice_text 分流，不直达 render_notice；
+    /// 若直达，降级为中性空提示而非 panic（不中断渲染）。
+    #[test]
+    fn render_notice_update_checked_is_defensive() {
+        let s = Strings::new(Lang::Zh);
+        assert_eq!(
+            render_notice(&s, &Notice::UpdateChecked),
+            (true, String::new())
+        );
     }
 
     /// 其余 notice 分支（下载/工作流/precheck）跨语言映射一致。
