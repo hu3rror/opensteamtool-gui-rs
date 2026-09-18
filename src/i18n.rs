@@ -144,7 +144,7 @@ pub struct Strings {
     pub of_err_root_chain: &'static str,
     /// 上游限制提示：同一时间仅一个 onlinefix 游戏可运行。
     pub of_single_limit: &'static str,
-    /// Steam 核心兼容性（SPEC.md §7.8）。
+    /// Steam 核心兼容性（issue #23 §7.8）。
     pub compat_title: &'static str,
     pub compat_checking: &'static str,
     pub compat_status_ready: &'static str,

@@ -84,4 +84,4 @@ src/
 └── ui.rs         # egui UI (3 cards + tray + auto-tray wiring)
 ```
 
-Spec: [SPEC.md](SPEC.md).
+Spec: archived as GitHub issues [#18](https://github.com/hu3rror/opensteamtool-gui-rs/issues/18)–[#23](https://github.com/hu3rror/opensteamtool-gui-rs/issues/23) (SPEC.md removed from repo).

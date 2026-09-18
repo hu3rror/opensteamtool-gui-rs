@@ -58,7 +58,7 @@ pub enum Effect {
     },
 }
 
-/// 汇总徽标分类（SPEC.md §7.7 状态视觉）。
+/// 汇总徽标分类（issue #23 §7.7 状态视觉）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CompatSummary {
     Checking,

@@ -1308,7 +1308,7 @@ impl App {
                 status_line(ui, stext, scolor);
             });
         }
-        // 详情内「一键缓存签名」：有未缓存项时提供（SPEC.md §7.7）。
+        // 详情内「一键缓存签名」：有未缓存项时提供（issue #23 §7.7）。
         let precaching = self.flow.display().precaching;
         if !compat_flow::precache_targets(report).is_empty() && !precaching {
             let ctx = self.ctx.clone();

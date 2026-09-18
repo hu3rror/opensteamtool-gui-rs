@@ -84,4 +84,4 @@ src/
 └── ui.rs         # egui 界面（3 卡片 + 托盘 + 自动隐身接线）
 ```
 
-规格说明见 [SPEC.md](SPEC.md)。
+规格说明：已归档为 GitHub issues [#18](https://github.com/hu3rror/opensteamtool-gui-rs/issues/18)–[#23](https://github.com/hu3rror/opensteamtool-gui-rs/issues/23)（SPEC.md 已从仓库移除）。

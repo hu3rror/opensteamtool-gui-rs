@@ -132,7 +132,7 @@ pub fn target_path(steam_dir: &Path) -> PathBuf {
 
 /// 读取 `<Steam>/opensteamtool.toml` 中 `[remote].url_template`。
 ///
-/// 语义（SPEC.md §7.4 第 1 优先级）：自定义镜像**替代**内置 GitHub/jsDelivr 源，
+/// 语义（issue #23 §7.4 第 1 优先级）：自定义镜像**替代**内置 GitHub/jsDelivr 源，
 /// 本函数只负责读值；镜像链决策由 compat 探测链路执行。
 /// 文件缺失 / 解析失败 / 键缺失 / 值为空白字符串 → `None`（走官方默认链路）。
 pub fn remote_url_template(steam_dir: &Path) -> Option<String> {

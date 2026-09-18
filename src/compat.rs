@@ -142,7 +142,7 @@ enum RemoteOutcome {
 }
 
 /// 构造探测 URL 链：自定义模板存在时**替代**内置源（仅返回自定义 URL）；
-/// 否则 GitHub Raw → jsDelivr 两链（SPEC.md §7.4）。
+/// 否则 GitHub Raw → jsDelivr 两链（issue #23 §7.4）。
 ///
 /// 占位符替换：`{channel}` / `{component}` / `{sha256}`。
 fn build_urls(template: Option<&str>, target: ProbeTarget, sha256: &str) -> Vec<String> {
@@ -161,7 +161,7 @@ fn build_urls(template: Option<&str>, target: ProbeTarget, sha256: &str) -> Vec<
     }
 }
 
-/// 决策矩阵（SPEC.md §7.5）：本地缓存状态 × 远程结果 → 探针状态。
+/// 决策矩阵（issue #23 §7.5）：本地缓存状态 × 远程结果 → 探针状态。
 ///
 /// | 远程 \ 本地 | cached | 无缓存 |
 /// |---|---|---|
@@ -224,7 +224,7 @@ fn probe_urls(head: impl Fn(&str) -> RemoteOutcome, urls: &[String]) -> RemoteOu
 /// `network=false`（快速体检）时**完全零网络**，优先级：离线缓存命中 → `CompatibleOffline`
 /// （绿，离线可用）；验证缓存命中 → `RemoteAvailable{cached:true}`（绿，上次已验证适配）；
 /// 均未命中 → 乐观 `RemoteAvailable{cached:false}`（琥珀可预热）。网络适配状态由
-/// `probe_all_refresh` 后台补齐并写入验证缓存（SPEC.md §7.5 增强）。
+/// `probe_all_refresh` 后台补齐并写入验证缓存（issue #23 §7.5 增强）。
 fn probe_one(
     steam_dir: &Path,
     target: ProbeTarget,
@@ -279,7 +279,7 @@ fn probe_all_with(
     let steamui_pattern = probe_one(steam_dir, ProbeTarget::PatternSteamUi, template, &head, network, ui_sha.clone(), verified);
     let steamclient_ipc = probe_one(steam_dir, ProbeTarget::IpcSteamClient, template, &head, network, sc_sha.clone(), verified);
     let reports = [&steamclient_pattern, &steamui_pattern, &steamclient_ipc];
-    // Fully Compatible：每项均已适配且本地缓存齐全（SPEC.md §7.5）。
+    // Fully Compatible：每项均已适配且本地缓存齐全（issue #23 §7.5）。
     let is_all_compatible = reports.iter().all(|r| {
         matches!(
             r.status,
@@ -387,7 +387,7 @@ fn write_verified(tool_dir: &Path, entries: &[(ProbeTarget, String)]) -> Result<
     Ok(())
 }
 
-/// TOML 键名（= target 枚举名的小写蛇形，SPEC §7.3 通道映射）。
+/// TOML 键名（= target 枚举名的小写蛇形，issue #23 §7.3 通道映射）。
 fn target_key(target: ProbeTarget) -> &'static str {
     match target {
         ProbeTarget::PatternSteamClient => "steamclient_pattern",
@@ -469,7 +469,7 @@ mod tests {
 
     use super::*;
 
-    /// 探测目标三方法映射（对齐 SPEC.md §7.3 通道映射表）。
+    /// 探测目标三方法映射（对齐 issue #23 §7.3 通道映射表）。
     #[test]
     fn probe_target_maps_channel_component_dll() {
         assert_eq!(ProbeTarget::PatternSteamClient.channel(), "pattern");
@@ -519,7 +519,7 @@ mod tests {
         assert!(sha256_of_file(Path::new("Z:/no/such/file_12345.bin")).is_err());
     }
 
-    /// 缓存路径布局（对齐 SPEC.md §7.3 本地缓存持久化路径）。
+    /// 缓存路径布局（对齐 issue #23 §7.3 本地缓存持久化路径）。
     #[test]
     fn cache_path_layout_matches_spec() {
         let steam = Path::new("F:/Steam");
@@ -603,7 +603,7 @@ mod tests {
         fs::write(&path, b"[x]").unwrap();
     }
 
-    /// 无模板：GitHub Raw → jsDelivr 两链（SPEC.md §7.4 官方默认链路）。
+    /// 无模板：GitHub Raw → jsDelivr 两链（issue #23 §7.4 官方默认链路）。
     #[test]
     fn build_urls_default_chain() {
         let urls = build_urls(None, ProbeTarget::PatternSteamClient, "abc123");
@@ -632,7 +632,7 @@ mod tests {
         );
     }
 
-    /// 决策矩阵全分支（SPEC.md §7.5）。
+    /// 决策矩阵全分支（issue #23 §7.5）。
     #[test]
     fn decide_matrix_covers_all_branches() {
         // Found → RemoteAvailable（cached 透传）。
