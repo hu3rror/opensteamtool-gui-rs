@@ -1,32 +1,15 @@
-# OpenSteamTool Manager — Rust 重写规格书（SPEC）
+# OpenSteamTool Manager — 需求规格书（SPEC）
 
-> 本文档是 `opensteamtool-gui-rs`（原 `opensteamtool-gui-py`）Rust 重写的**唯一权威需求来源**。
-> 开发前必读；功能以本文档为准，与旧 Python 仓库的差异以本文档为准。
+> 本文档是 `opensteamtool-gui-rs` 的**唯一权威需求来源**。开发前必读；功能以本文档为准。
+> 架构决策与取舍见 `docs/adr/`（ADR-0005 起；本文档不重复决策动机，只留需求与实现规格）。
 
-## 0. 项目背景
+## 1. 技术栈
 
-原项目 `opensteamtool-gui-py` 是 Windows 下的 Steam 补丁管理工具（Python + tkinter，单文件 795 行，PyInstaller `--onefile` 打包）。用于部署/卸载 OpenSteamTool 的 DLL 到 Steam 目录，并支持在线检查更新。
+egui/eframe（`glow` 渲染后端）纯 Rust 原生 GUI，单二进制，无 Node、无 WebView2、无 Python sidecar。
+目标：启动 < 1s 无加载感、单 exe 1-3MB（release 实测约 6.7MB）、内存 ~50-90MB。
+选型与否决理由见 ADR-0005。
 
-**重写动机（用户原话）**：
-- 启动时整个画面有「加载感」，启动太慢，希望越快越好、无加载感。
-- 用户质疑 Tauri 太重（WebView2 内存 100-250MB）。
-- 期望现代方式实现，更快启动与运行。
-
-**最终技术选型（已确认）**：egui/eframe（纯 Rust 原生 GUI），`glow` 渲染后端。无 Node、无 WebView2、无 Python。
-
-## 1. 技术栈决策
-
-| 项 | 决策 | 理由 |
-|---|---|---|
-| GUI 框架 | egui / eframe | 即时模式，原生窗口，启动毫秒级首帧；适合本工具（3 卡片 UI）的轻量规模 |
-| 渲染后端 | `glow`（OpenGL） | 比 wgpu 更小更轻，无需高性能渲染；无 GPU 时软件渲染兜底 |
-| 语言 | Rust（工具链已验证：rustc/cargo 1.98 就绪） | 单二进制，无运行时依赖 |
-| 后端逻辑 | 全部 Rust 重写（无 Python sidecar） | 避免 sidecar 启动开销，重燃加载感 |
-| 二进制体积 | 目标 1-3MB 单 exe | 远小于 PyInstaller ~15MB |
-| 内存占用 | 目标 ~50-90MB | 远小于 Tauri/WebView2 |
-| 启动目标 | < 1s，无解压、无白屏、无加载感 | 核心诉求 |
-
-## 2. 功能需求（1:1 保留现有功能 + 修复痛点）
+## 2. 功能需求
 
 ### 2.1 核心配置
 
@@ -37,13 +20,13 @@
 
 ### 2.2 Steam 安装路径检测
 
-按顺序尝试注册表，返回第一个有效且 `os.path.exists` 的路径：
+按顺序尝试注册表，返回第一个有效且路径存在的值：
 
 1. `HKEY_CURRENT_USER\Software\Valve\Steam` → `SteamPath`
 2. `HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Valve\Steam` → `SteamPath`
 3. `HKEY_LOCAL_MACHINE\SOFTWARE\Valve\Steam` → `SteamPath`
 
-Rust 侧用 `winreg` crate 等价实现。
+Rust 侧用 `winreg` crate 实现。
 
 ### 2.3 本地部署状态检测
 
@@ -57,24 +40,16 @@ Rust 侧用 `winreg` crate 等价实现。
 - **卸载**：删除 Steam 目录下的三个目标 DLL；权限不足报错。
 - 两操作都需先处理「Steam 正在运行」的情况（见 2.5）。
 
-### 2.5 Steam 进程管理（修复重点）
+### 2.5 Steam 进程管理
 
-原实现痛点：
-- `_is_steam_running()` 每次 spawn `tasklist` 子进程 → 阻塞 UI 数百 ms，且多按钮重复调用。
-- `_kill_steam()` 用 `taskkill /F /IM steam.exe` + 最多轮询 10×0.5s = 5s 等待。
-
-Rust 修复方案：
-- 用 `sysinfo` crate 枚举进程检测 `steam.exe`（无子进程开销），单次结果缓存/事件驱动。
-- kill 用 `sysinfo::kill` 终止整个 Steam 进程组（exe 路径位于 Steam 目录下、排除 `steamservice.exe`），轮询等整组从进程表消失（预算 5s、间隔 100ms，见 ADR-0004）。
-- 检测结果供多个操作复用，避免重复扫描。
-
-流程（与旧版一致）：
-- 操作前若 Steam 在运行 → 弹窗询问「是否自动关闭 Steam 并继续」→ 拒绝则取消；同意则关闭，关闭失败报错。
+- `steam.exe` 运行检测用 `sysinfo` 枚举进程（无子进程开销），单次结果缓存/事件驱动复用；2s 定时刷新（事件驱动增量，非全量重建）。
+- 关闭 Steam 终止整个「Steam 进程组」（exe 路径位于 Steam 目录下、排除 `steamservice.exe`），轮询等整组从进程表消失（预算 5s、间隔 100ms）；语义见 ADR-0004。
+- 流程：操作前若 Steam 在运行 → 弹窗询问「是否自动关闭 Steam 并继续」→ 拒绝则取消；同意则关闭，关闭失败报错。
 
 ### 2.6 Steam 启动
 
 - 校验 `Steam 目录\steam.exe` 存在，以 Steam 目录为 cwd 启动；不存在报错。
-- spawn 成功不算成功：等待 2s 确认 `steam.exe` 存活，失败重试 1 次后报错（见 ADR-0004）。
+- spawn 成功不算成功：等待 2s 确认 `steam.exe` 存活，失败重试 1 次后报错（语义见 ADR-0004）。
 
 ### 2.7 在线检查更新
 
@@ -86,7 +61,7 @@ Rust 修复方案：
 ### 2.8 下载并解压新版本
 
 - 下载 zip 到内存，仅提取文件名属于目标 DLL 集合的成员写入 `dlls/`；成功则写 `version.txt`。
-- 下载超时 30s、请求超时 10s 可保留或略调。
+- 下载超时 30s、请求超时 10s。
 - 后台执行，进度/完成回传 UI。
 
 ### 2.9 双语切换
@@ -96,10 +71,10 @@ Rust 修复方案：
 
 ### 2.10 UI 布局（3 卡片）
 
-外观对齐 Python 版（配色/卡片 accent bar/独立操作区，见 ADR-0003）；窗口可缩放并设最小尺寸，首帧按内容自适应高度（不再固定 560×470）：
+外观（配色 / 卡片 accent bar / 独立操作区 / 纯文字状态）见 ADR-0003；窗口可缩放并设最小尺寸，首帧按内容自适应高度。
 
 1. **卡片 1 — STEAM 安装路径**：输入框（可编辑，变更即刷新状态）+ 「浏览...」按钮（目录选择器）。
-2. **卡片 2 — 本地应用状态**：状态纯文本（【已应用】/【未应用】/路径无效，效仿 Python 版）。
+2. **卡片 2 — 本地应用状态**：状态纯文本（【已应用】/【未应用】/路径无效）。
 3. **独立操作区**（卡片 2 与卡片 3 之间，等宽主按钮，随状态切换）：
    - 未部署：「▶ 应用补丁并启动 Steam」（绿）/「▶ 正常启动 Steam」（白）
    - 已部署 + Steam 运行中：三枚——「◀ 退出 Steam 并卸载补丁」（浅蓝描边）/「↻ 重启 Steam」（白，纯 Steam 操作无补丁）/「◀ 卸载补丁并重启 Steam」（蓝）
@@ -110,37 +85,38 @@ Rust 修复方案：
 
 托盘菜单含「重启 Steam」入口（顺序：显示 / 最小化勾选 / 重启 Steam / 退出）；按 2s 缓存的 Steam 运行态置灰，缓存窗口内 Steam 已退出时点击退化为「启动」（关闭步骤幂等成功，随后正常启动）。
 
-### 2.11 已确认的修复清单（对比旧版）
-
-- [x] 消除 onefile 解压（换技术栈后天然解决）
-- [x] 进程检测改用 sysinfo（`src/process.rs`），无 tasklist 子进程开销，结果 2s 缓存 + 事件驱动复用
-- [x] kill 整个 Steam 进程组（路径过滤、排除 `steamservice.exe`）后轮询等整组消失（预算 5s、间隔 100ms，原仅 steam.exe + 1s），未退出时明确报错
-- [x] 输入框变更即时刷新状态；Steam 进程状态 2s 定时刷新（事件驱动增量，非全量重建）
-- [x] UI 无加载感、毫秒级首帧（egui 原生窗口，无预热/白屏）
-
 ## 3. 发布形态
 
 - **便携版**：`cargo build --release` 单 exe + 同目录 `dlls/`，ZIP 分发，解压即用。
 - exe 与 `dlls/` 的相对位置即运行时 DLL 源目录。
 - 图标 `app.ico` 嵌入窗口与任务栏。
 
-## 4. 模块划分建议
+## 4. 模块划分
 
 ```
 src/
 ├── main.rs          # eframe 入口，App 装配
 ├── steam.rs         # 注册表路径检测、steam.exe 启动
-├── process.rs       # 进程检测/监视/关闭（sysinfo）
+├── steam_state.rs   # Steam 运行状态：共享进程表（alive / group_running / kill 三口径）
+├── process.rs       # Steam 进程监视器（2s 轮询缓存与边沿事件）
 ├── dll.rs           # 部署/卸载、本地状态检测
-├── compat.rs        # Steam 核心版本健康度体检（哈希/远程探针/缓存，见 §7）
 ├── workflow.rs      # 操作判定表与执行（plan/execute）
-├── tray.rs          # 系统托盘（左键显隐切换、菜单：显示/最小化勾选/重启 Steam/退出）
-├── i18n.rs          # 双语文案、系统语言检测
-└── ui.rs            # egui 界面（3 卡片 + 顶栏）
+├── busy.rs          # 忙碌门禁（交互类后台操作互斥，见 ADR-0007）
+├── updater.rs       # 在线检查更新、下载解压
+├── update_flow.rs   # 更新检查结果唯一事实源与派生（见 ADR-0008）
+├── compat.rs        # 兼容性体检算子（哈希/探针/缓存/预热下载）
+├── compat_flow.rs   # 体检流程编排状态机（见 ADR-0006）
+├── config_editor.rs # opensteamtool.toml 读取/校验/原子写入（含 remote_url_template）
+├── onlinefix.rs     # localconfig.vdf 启动选项（OnlineFix 预设：VDF 解析/备份）
+├── settings.rs      # 设置对话框状态（配置编辑器 + OnlineFix 预设两状态机）
+├── fsutil.rs        # 原子写入共享小工具
+├── tray.rs          # 系统托盘
+├── i18n.rs          # 双语文案、错误→文案映射（见 ADR-0009）
+└── ui.rs            # egui 界面（3 卡片 + 顶栏 + 设置对话框渲染）
 ```
 
-依赖候选：`eframe/egui`、`winreg`、`sysinfo`、`ureq`（轻量 HTTP）或 `reqwest`、`zip`、`image`（图标转 rgba）。
-已定依赖（`Cargo.toml`）：`eframe`（glow）、`winreg`、`sysinfo`、`ureq`（json+rustls）、`zip`、`windows-sys`、`serde_json`、`rfd`（目录选择器）、`image`（ico→rgba，仅 `ico` feature）；§7 新增 `sha2`（0.10）。release 用 `opt-level="z"` + fat LTO + `panic="abort"`，`--release` 体积约 6.7MB。
+依赖（Cargo.toml）：`eframe`（glow）、`winreg`、`sysinfo`、`ureq`（json+rustls）、`zip`、`windows-sys`、`serde_json`、`rfd`、`image`（ico）、`tray-icon`、`toml_edit`、`sha2`。
+release：`opt-level="z"` + fat LTO + `panic="abort"`，体积约 6.7MB。
 
 ## 5. 验证标准
 
@@ -152,13 +128,10 @@ src/
 
 ## 6. 备注
 
-- Git 历史：新仓库 `git init` 全新开始（用户已确认不保留旧仓库历史）。
-- 旧仓库 `opensteamtool-gui-py` 冻结，不再改动。
 - 本 spec 若与实际开发冲突，以开发中最新决策为准并回更本文档。
 
 ## 7. Steam 核心版本健康度体检与 Pattern/IPC 缓存管理
 
-> 本节为新增功能规格（2026-09-05 确立，经代码/上游仓库双向核对修正）。
 > 上游事实基准：`OpenSteam001/steam-monitor` 三分支 `pattern` / `ipc` / `protobuf`（默认），
 > `{channel}` 即**分支名**；`pattern` 分支含 `steamclient/*.toml`（特征码）与 `steamui/*.toml`，
 > `ipc` 分支仅含 `steamclient/*.toml`（IPC 规约）。
@@ -167,17 +140,17 @@ src/
 
 OpenSteamTool（上游）自重构后不再将硬编码特征码打包进 DLL，而是在每次由注入器随 Steam 启动时，计算本地核心 DLL 的 SHA-256 哈希，并按通道从 `OpenSteam001/steam-monitor` 拉取匹配的 TOML 签名文件与 IPC 规约。
 
-本项目需在 **Card 1（Steam 安装路径卡片）底部**新增版本健康度诊断指示器：在用户指定或自动识别 Steam 路径后，后台异步计算核心文件哈希并探查远程/本地缓存适配情况，在不阻塞 UI 的前提下提供兼容性状态指示及一键离线缓存预热。
+本项目在 **Card 1（Steam 安装路径卡片）底部**提供版本健康度诊断指示器：在用户指定或自动识别 Steam 路径后，后台异步计算核心文件哈希并探查远程/本地缓存适配情况，在不阻塞 UI 的前提下提供兼容性状态指示及一键离线缓存预热。
 
-### 7.2 架构对齐（AGENTS.md 约束落地）
+### 7.2 架构约束
 
-1. **UI 零阻塞**：禁止在 `eframe::App::update` 内做 DLL 读取、SHA-256 计算与网络请求；复用现有 `ui.rs` 的 `spawn()`（`std::thread::spawn` + mpsc）+ `handle_messages()`（`rx.try_recv` 轮询）机制回传状态（`Msg` 枚举新增变体）。
+1. **UI 零阻塞**：禁止在 `eframe::App::update` 内做 DLL 读取、SHA-256 计算与网络请求；复用现有 `ui.rs` 的 `spawn()`（`std::thread::spawn` + mpsc）+ `handle_messages()`（`rx.try_recv` 轮询）机制回传状态（`Msg` 枚举承载结果变体）。
 2. **零白屏 / 零等待**：启动立即渲染，体检初始为 `Checking` 骨架态，完成后就地刷新徽标。
 3. **单一二进制与依赖控制**：
-   - 哈希：`sha2 = "0.10"`（**需新增**，Cargo.toml 现无此依赖），缓冲区分块流式读取，避免大文件爆内存。
-   - HTTP：**复用项目现有 `ureq 3.4`**（同步、rustls；spec 原拟 reqwest 已否决，不引入新依赖）。
+   - 哈希：`sha2 = "0.10"`，缓冲区分块流式读取，避免大文件爆内存。
+   - HTTP：复用项目现有 `ureq 3.4`（同步、rustls），不引入新依赖。
      ureq 语义注意：`agent.head(url).call()` 对 2xx 返回 `Ok(Response)`；**4xx 返回 `Err(ureq::Error::StatusCode(u16))`**（非响应对象），404 判定为 `matches!(err, Error::StatusCode(404))`。
-4. **严格双语**：所有新增状态文本、Tooltip、弹窗词条在 `src/i18n.rs` 登记 `en` 与 `zh-CN`（`Strings` struct 加字段 + `zh()`/`en()` 各赋值一行）。
+4. **严格双语**：本节全部状态文本、Tooltip、弹窗词条在 `src/i18n.rs` 登记 `en` 与 `zh-CN`（`Strings` struct 加字段 + `zh()`/`en()` 各赋值一行）。
 5. **用户意愿优先**：优先解析 `<Steam>/opensteamtool.toml` 的 `[remote].url_template`；注意模板语义为**替代**（custom mirror replaces built-in sources），即自定义模板存在时不再回退 GitHub/jsDelivr。
 
 ### 7.3 核心文件与通道映射
@@ -242,6 +215,7 @@ URL 占位符统一为 `{channel}` / `{component}` / `{sha256}`，解析顺序�
 验证缓存命中 → `RemoteAvailable{cached:true}`（绿，零网络）；均未命中 → 乐观琥珀。
 缓存由 DLL 哈希自动失效：Steam 更新改哈希即重验，无时间有效期；只记 Found（404/错误不缓存，
 避免上游补发签名后本地仍失真）。
+
 ### 7.6 模块设计（`src/compat.rs`）
 
 `main.rs` 注册 `mod compat;`。核心数据结构（与既有 `UpdateError::Network` 风格一致）：
@@ -264,7 +238,9 @@ pub struct ProbeReport { pub target: ProbeTarget, pub sha256: Option<String>, pu
 pub struct OverallHealthReport { pub steamclient_pattern: ProbeReport, pub steamui_pattern: ProbeReport, pub steamclient_ipc: ProbeReport, pub is_all_compatible: bool, pub has_missing_cache: bool }
 ```
 
-**配置读取**：`config_editor.rs` 现无读取函数（仅 `validate()`/`write_atomic()`），需**新增** `pub fn remote_url_template(steam_dir: &Path) -> Option<String>`：`toml_edit` 解析 `<Steam>/opensteamtool.toml`，取 `[remote].url_template` 非空字符串；文件缺失/解析失败/键空 → `None`。
+**配置读取**：`config_editor.rs` 提供 `pub fn remote_url_template(steam_dir: &Path) -> Option<String>`：
+`toml_edit` 解析 `<Steam>/opensteamtool.toml`，取 `[remote].url_template` 非空字符串；
+文件缺失/解析失败/键空 → `None`。
 
 **功能清单**：
 - `sha256_of_file(path) -> io::Result<String>`：`std::fs::File` + 64KB 缓冲分块流式 `Sha256`。
@@ -273,7 +249,7 @@ pub struct OverallHealthReport { pub steamclient_pattern: ProbeReport, pub steam
 - `precache(steam_dir, target, report) -> Result<(), CompatError>`：GET 拉取 TOML（复用 `download_agent` 超时模式），`fsutil::write_atomic` 原子写入缓存路径（先建目录）。
 
 **编排层（`compat_flow.rs`，体检流程状态机）**：体检生命周期（快速体检 → 网络刷新 → 预热 → 复检）收敛为
-纯状态机模块，与算子层（`compat.rs` 无状态探测算子）和渲染层（`ui.rs`）三权分立：
+纯状态机模块，与算子层（`compat.rs` 无状态探测算子）和渲染层（`ui.rs`）三权分立，决策见 ADR-0006：
 
 - 接口：`step(Event) -> (Display, Vec<Effect>)`；App 只喂事件、执行返回的效果（spawn）、渲染展示态。
 - **代数戳**：`Epoch(u64)` 单调递增；路径变更（含启动首次）推进代数，预热完成后的复检不推进（同一体检会话）；
@@ -291,7 +267,7 @@ pub struct OverallHealthReport { pub steamclient_pattern: ProbeReport, pub steam
 
 ### 7.7 UI 布局与交互（`src/ui.rs`）
 
-**落位**：`card1()`（路径输入 + 浏览按钮下方）新增「Steam 核心兼容性」小节。注意：DLL 部署状态在 Card 2，Card 1 内无既有状态列表。
+**落位**：`card1()`（路径输入 + 浏览按钮下方）提供「Steam 核心兼容性」小节。注意：DLL 部署状态在 Card 2，Card 1 内无既有状态列表。
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
@@ -341,54 +317,22 @@ pub struct OverallHealthReport { pub steamclient_pattern: ProbeReport, pub steam
 | `compat_tip_network` | Network unavailable — results unknown; cached items remain usable offline. | 网络不可用，体检结果未知；已缓存项仍可离线使用。 |
 | `compat_row_dll` | {dll} ({kind}) | {dll}（{kind}） |
 
-### 7.9 实现清单与验收
+### 7.9 验收
 
-1. **依赖**：`Cargo.toml` 增 `sha2 = "0.10"`（ureq 已存在，复用）。
-2. **`src/compat.rs`**：哈希（流式）→ 配置读取（`config_editor::remote_url_template`）→ 单次探测（本地缓存 + HEAD 镜像链）→ `OverallHealthReport` → 预热下载持久化。
-3. **集成**：`Msg` 增 `Compat(Result<OverallHealthReport, ...>)` / `CompatPrecached(...)`；`App` 持有 `compat_report` 与触发状态；`card1()` 底部渲染；路径变更防抖触发；预热按钮异步调用。
-4. **i18n**：§7.8 词表完整登记 `en`/`zh-CN`。
-5. **测试**：
-   - `compat.rs`：临时目录伪造 DLL（写入已知字节）+ 伪造缓存目录，验证哈希、缓存命中、`FileNotFound` 判定、URL 构造（三占位符替换、自定义模板替代语义）。
-   - 网络探针不依赖真实网络：HEAD 判定逻辑拆为纯函数（输入镜像链结果枚举 → 输出 `ProbeStatus`）单测覆盖决策矩阵全分支。
-   - `config_editor`：`remote_url_template()` 覆盖文件缺失/无键/空值/有效值/自定义模板。
-6. **构建验收**：`cargo check` / `cargo test` 无错误（既有 `cargo fmt --check` 噪音与 1 条 clippy warning 与本功能无关，勿动）。
+- **构建验收**：`cargo check` / `cargo test` 无错误（既有 `cargo fmt --check` 噪音与 1 条 clippy warning 与本功能无关，勿动）。
+- **compat.rs 测试**：临时目录伪造 DLL（写入已知字节）+ 伪造缓存目录，验证哈希、缓存命中、`FileNotFound` 判定、URL 构造（三占位符替换、自定义模板替代语义）。
+- **网络探针不依赖真实网络**：HEAD 判定逻辑拆为纯函数（输入镜像链结果枚举 → 输出 `ProbeStatus`）单测覆盖决策矩阵全分支。
+- **config_editor 测试**：`remote_url_template()` 覆盖文件缺失/无键/空值/有效值/自定义模板。
+- **i18n**：§7.8 词表完整登记 `en`/`zh-CN`。
 
-### 7.10 忙碌门禁（交互类后台操作互斥）
+### 7.10 忙碌门禁
 
-**范围**：忙碌互斥只覆盖交互类后台操作——「动作」（`Action` 组合）与「更新动作」（检查更新 / 下载并解压）。compat 探针/刷新/预热是只读后台操作，**不进忙碌门禁**（候选 1 Q5 既定：零点击后台、不冻结 UI）；其互斥由 `compat_flow` 自有的在途去重承担。
+交互类后台操作互斥收敛为单一门禁（`busy.rs` `BusyGate`）：范围、接口、契约与验收见 ADR-0007；词条见 CONTEXT.md「忙碌门禁」。
 
-**形态**（`src/busy.rs`）：`BusyGate` 纯模块，无 IO/线程/egui/i18n 依赖；持有唯一 `Option<BusyKind>`（类型即不变量，不存在「忙碌但无种类」失效态）。`BusyKind` 枚举（Deploying/Uninstalling/Launching/Checking/Downloading/ClosingSteam）从 `workflow` 迁入本模块，`workflow::Op::phase()` 改引用。接口：`start(kind) -> bool`（空闲放行并置位 / 忙碌拒绝返回 false，静默）、`replace(kind)`（阶段更新，仅忙碌时合法，debug_assert 兜底）、`clear()`（归位）、`current() -> Option<BusyKind>`、`is_busy()`。
+### 7.11 在线更新单一事实源
 
-**契约**：
-- 被拒静默（忙碌时按钮本就禁用，`start` 返回 false 的路径理论不可达，不弹提示）。
-- 「关闭 Steam 确认弹窗」悬挂期不算忙碌：`request_action` 先查门禁（忙碌连确认框都不弹），真正 `start` 在确认后 `start_action` 才发生；悬挂期 Modal 自行阻断其余交互。
-- 三个完成消息臂（检查更新完成 / 下载完成 / 组合操作完成）统一 `clear()`；阶段消息 `Msg::Phase` 统一 `replace(kind)`。
-
-**渲染收敛**：动作区与更新按钮禁用源统一 `!gate.is_busy()`；底部忙碌文案取 `gate.current()`。语言/设置/路径输入/浏览按钮不禁用（现状保持）；compat 类按钮（预热/详情）继续由 `compat_flow` 在途标志禁用（不进忙碌门禁）。
-
-**验收**：`busy.rs` 门禁单测覆盖 start 防重入、clear 归位/幂等、replace 阶段更新/空闲断言、全变体完整性；`cargo test` 全绿，无新增 clippy/fmt 噪音。
-
-### 7.11 在线更新单一事实源（更新流程）
-
-**问题收敛**：同一检查结果不再双存——`update_flow` 模块持有唯一检查结果状态（Idle / Checking / Checked(Result)），`Notice::UpdateChecked` 降级为无 payload 标记（「显示检查结果」），渲染时从派生取分类映射文案。「本地版本 == 线上版本」比较只活在一处派生函数；行文案、通知文案、下载按钮可用性三处消费全部从同一派生产出。
-
-**形态**（`src/update_flow.rs`）：`UpdateFlow` 纯模块，无 IO/线程/egui/i18n 依赖。接口：`check_started()`（门禁放行后调用，→ Checking）、`check_done(result)`（→ Checked，结果只存这一份）、`derived(local_version) -> UpdateDerived`。`UpdateDerived { line, notice, download }`：`line` 行文案分类、`notice` 通知分类（Option，None=无检查结果）、`download: Option<&OnlineInfo>`（可下载时携带数据，NewVersion 且线上版本非空）。分类枚举：Unknown / Checking / UpToDate{version} / NewVersion{version} / CheckFailed(&UpdateError)。文案映射仍在 i18n/ui（`render_update_notice`），不越界到错误映射收拢（候选 4）。
-
-**语义**：
-- 下载成功后 flow 保持 Checked（记录「最后一次检查时的线上版本」）；本地版本更新后 `derived` 自然落 UpToDate、下载按钮消失——机制 = 本地版本与记录版本相等，非「下载过就隐藏」。行为与旧实现逐帧一致。
-- 重检覆盖：再点「检查更新」→ `check_started` 回 Checking → 新 `check_done` 覆盖旧结论。
-- 与忙碌门禁衔接：检查/下载仍经 `gate.start` 放行（交互类）；flow 的 Checking 是「结论未定」持久状态，gate 的 Checking 是瞬态互斥种类，二者语义不同不冲突。
-
-**验收**：`update_flow` 单测覆盖转移与 derived 全分支（同/异/本地缺失/空线上版本/Err/Idle/Checking/下载重派生/重检覆盖）；`cargo test` 全绿，无新增 clippy/fmt 噪音。
+「检查更新」结果收敛为单一事实源（`update_flow` 模块）：状态、派生与重派生机制、验收见 ADR-0008；词条见 CONTEXT.md「更新流程」。
 
 ### 7.12 错误→文案映射统一收拢
 
-**问题收敛**：8 个错误枚举的文案映射不再分居三处——全部收进 `Strings` 单一入口（每个错误枚举一个映射方法，签名同构）：新增 `config_edit_error_text(lang, e)` / `of_error_text(e)` / `compat_error_text(e)`，既有 5 方法（update_error / workflow_error_text / precheck_text / config_error_text / onlinefix_error）不动。ui.rs 不再持有文案知识（自由函数删除，`of_status_line` 只留颜色映射）。
-
-**签名同构**：lang 仅 ConfigError 家族多收——`config_error_text` 与 `config_edit_error_text`（行列定位措辞因语言而异，Validation 分支穿透 lang）；其余统一 `(&self, e)`。
-
-**CompatError 类型化**：不再经 Display 旁路——`Msg::CompatPrecached { result: Result<(), CompatError> }` 类型活到渲染，`compat_flow` 的 `precache_error` 字段为 `Option<CompatError>`，渲染处 `compat_error_text(err)` 逐分支双语映射（Network 复用 err_network、Io 用 err_compat_io）。Display 保留只给日志。
-
-**VdfStructureError 类型化**：`VdfError::Structure(&'static str)` → `Structure(VdfStructureError)`，`VdfStructureError { MissingRootChain }`——i18n 映射穷尽 match（MissingRootChain → of_err_root_chain），杜绝 magic string 手抄；Display 输出 `structure: missing_root_chain` 不变。
-
-**验收**：i18n.rs 新方法单测（compat_error_text / of_error_text / config_edit_error_text 双语 × 变体）；compat.rs `compat_error_display` 保留；compat_flow `precache_error` 断言改分支匹配；`cargo test` 全绿，无新增 clippy/fmt 噪音。
+8 个错误枚举的文案映射统一收进 `Strings` 单一入口：三新方法、类型化、验收见 ADR-0009。

@@ -65,16 +65,23 @@ git push origin v1.0.0
 ```text
 src/
 ├── main.rs       # eframe 入口
-├── config_editor.rs # opensteamtool.toml 读取/校验/原子写入（设置对话框）
-├── onlinefix.rs # localconfig.vdf 启动选项读写（OnlineFix 预设：VDF 解析/备份）
-├── ui.rs         # egui 界面（3 卡片 + 托盘 + 自动隐身接线）
-├── workflow.rs   # 「操作」判定表与顺序执行（plan/execute）
-├── dll.rs        # 目标 DLL 部署/卸载、本地状态检测
 ├── steam.rs      # 注册表路径检测、steam.exe 启动
-├── process.rs    # Steam 进程监视/关闭（sysinfo）
+├── steam_state.rs # Steam 运行状态：共享进程表（alive / group_running / kill）
+├── process.rs    # Steam 进程监视器（2s 轮询缓存与边沿事件）
+├── dll.rs        # 目标 DLL 部署/卸载、本地状态检测
+├── workflow.rs   # 「操作」判定表与顺序执行（plan/execute）
+├── busy.rs       # 忙碌门禁：交互类后台操作互斥（ADR-0007）
 ├── updater.rs    # GitHub 检查更新、下载解压
+├── update_flow.rs # 更新检查结果唯一事实源（ADR-0008）
+├── compat.rs     # 兼容性体检算子（哈希/探针/预热下载）
+├── compat_flow.rs # 体检流程编排状态机（ADR-0006）
+├── config_editor.rs # opensteamtool.toml 读取/校验/原子写入（设置对话框）
+├── onlinefix.rs  # localconfig.vdf 启动选项读写（OnlineFix 预设：VDF 解析/备份）
+├── settings.rs   # 设置对话框状态（配置编辑器 + OnlineFix 预设）
+├── fsutil.rs     # 原子写入共享小工具
 ├── tray.rs       # 系统托盘
-└── i18n.rs       # 双语文案与文案映射
+├── i18n.rs       # 双语文案与错误→文案映射（ADR-0009）
+└── ui.rs         # egui 界面（3 卡片 + 托盘 + 自动隐身接线）
 ```
 
 规格说明见 [SPEC.md](SPEC.md)。

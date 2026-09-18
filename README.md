@@ -65,16 +65,23 @@ Deploy, Uninstall, Local Version, Online Version, Action, Auto-tray, Minimize-to
 ```text
 src/
 ├── main.rs       # eframe entry point
-├── config_editor.rs # opensteamtool.toml read/validate/atomic-write (settings dialog)
-├── onlinefix.rs # localconfig.vdf LaunchOptions edits (OnlineFix preset: VDF parser + backup)
-├── ui.rs         # egui UI (3 cards + tray + auto-tray wiring)
-├── workflow.rs   # action planning and step execution (plan/execute)
-├── dll.rs        # target DLL deploy/uninstall, local status
 ├── steam.rs      # registry path detection, steam.exe launch
-├── process.rs    # Steam process monitor/termination (sysinfo)
+├── steam_state.rs # shared Steam process table (alive / group_running / kill)
+├── process.rs    # Steam process monitor (2s polling cache, edge events)
+├── dll.rs        # target DLL deploy/uninstall, local status
+├── workflow.rs   # action planning and step execution (plan/execute)
+├── busy.rs       # busy gate: exclusive interactive background ops (ADR-0007)
 ├── updater.rs    # GitHub update check, download & extract
+├── update_flow.rs # single source of truth for update-check results (ADR-0008)
+├── compat.rs     # compatibility probe: hashing / mirror chain / precache
+├── compat_flow.rs # compatibility probe orchestration state machine (ADR-0006)
+├── config_editor.rs # opensteamtool.toml read/validate/atomic-write (settings dialog)
+├── onlinefix.rs  # localconfig.vdf LaunchOptions edits (OnlineFix preset: VDF parser + backup)
+├── settings.rs   # settings dialog state (config editor + OnlineFix preset)
+├── fsutil.rs     # shared atomic file write
 ├── tray.rs       # system tray
-└── i18n.rs       # bilingual strings and copy mapping
+├── i18n.rs       # bilingual strings and error→copy mapping (ADR-0009)
+└── ui.rs         # egui UI (3 cards + tray + auto-tray wiring)
 ```
 
 Spec: [SPEC.md](SPEC.md).
