@@ -14,6 +14,7 @@ mod process;
 mod settings;
 mod steam;
 mod steam_state;
+mod theme;
 mod tray;
 mod ui;
 mod update_flow;

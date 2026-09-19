@@ -2,6 +2,8 @@
 
 原 Python 版（`opensteamtool-gui-py`）是最终用户的既有视觉基准，本次 Rust 版外观全面对齐其设计语言，替换 ADR-0002 中 Apple-inspired 的配色与组件形态。
 
+> 配色部分已被 ADR-0010 取代「统一语义色板」：逐按钮色值清单不再维护，具体色值以 0010 槽表为准；本 ADR 保留的决策是组件形态（accent bar、独立按钮区、纯文字状态、kill-ai-slop 红线）。
+
 ## 决策
 
 - **配色**：直接采用 Python 版 `THEME` 色板——面板 `#f8f9fa`、卡片白底 + `#e2e8f0` hairline 边框、accent 蓝 `#0f6cbd`、次按钮 `#f8fafc`、绿色主按钮 `#16a34a`（应用补丁并启动）、浅蓝描边 `#f0f9ff`/`#0284c7`/`#7dd3fc`（退出并卸载）、蓝实心 `#0284c7`（卸载并重启）。
