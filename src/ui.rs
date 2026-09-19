@@ -522,7 +522,9 @@ impl App {
                 TrayAction::ToggleVisible => self.set_window_visible(!self.window_visible),
                 TrayAction::Show => self.set_window_visible(true),
                 TrayAction::Quit => {
-                    self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    // eframe's 100ms invisible-window repaint throttle delays ViewportCommand::Close by a second frame (~220ms); drop the tray and exit directly instead.
+                    self.tray = None;
+                    std::process::exit(0);
                 }
                 TrayAction::ToggleMinimizeToTray => self.minimize_to_tray = minimize_checked,
                 TrayAction::RestartSteam => self.request_action(&ctx, Action::Restart),
