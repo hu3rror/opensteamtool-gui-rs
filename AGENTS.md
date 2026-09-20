@@ -19,3 +19,12 @@ Repo PowerShell scripts and commands target PowerShell 7+ (`pwsh`; CI already us
 ### Release
 
 Push a `v*` tag to trigger `release.yml` (tag name is the version; main push only triggers cache-warm). Always create the tag with `git tag -a vX.Y.Z -m "..."` — this repo sets `tag.gpgSign=true`, so a bare `git tag vX.Y.Z` opens an editor and hangs in non-interactive shells. Local packaging: `pwsh -File tools/build-release.ps1 -Version <v>`.
+
+## Commands
+
+- Test: `cargo test --workspace`
+- Type check: `cargo check --workspace --all-targets`
+- Lint: `cargo clippy --workspace --all-targets`
+- Format check: `cargo fmt --all --check`
+- Use `-p <crate>` instead of `--workspace` ONLY IF all changed files are in one crate and `cargo tree -i <crate>` shows no dependent workspace members.
+- Take feature flags from CI configuration. Do not add `--all-features` unless CI does.
