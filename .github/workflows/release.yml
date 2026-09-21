@@ -60,3 +60,36 @@ jobs:
           tag_name: ${{ steps.ver.outputs.version }}
           files: opensteamtool-manager-${{ steps.ver.outputs.version }}.zip
           generate_release_notes: true
+
+      # Sync the scoop manifest in the user-maintained muggle bucket
+      # (hu3rror/scoop-muggle) so scoop picks up the new release. Requires a
+      # classic/fine-grained PAT with repo scope on that bucket, stored as the
+      # MUGGLE_BUCKET_TOKEN secret; skipped until it is configured.
+      - name: Update scoop manifest (muggle bucket)
+        if: ${{ secrets.MUGGLE_BUCKET_TOKEN != '' }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.MUGGLE_BUCKET_TOKEN }}
+          RELEASE_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          # gh is preinstalled; GH_TOKEN above authenticates both gh and (via
+          # setup-git) the git clone/push against the bucket repo.
+          gh auth setup-git
+          gh repo clone hu3rror/scoop-muggle muggle-bucket
+          # Hash the zip built in this job - the same artifact the release uploaded.
+          & ./tools/update-scoop-manifest.ps1 `
+            -Version $env:RELEASE_VERSION `
+            -ManifestPath "muggle-bucket/bucket/opensteamtool-gui-rs.json" `
+            -ZipPath "opensteamtool-manager-$env:RELEASE_VERSION.zip"
+          Push-Location muggle-bucket
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bucket/opensteamtool-gui-rs.json
+          if (git diff --cached --quiet) {
+            Write-Host "manifest unchanged, skip push"
+          } else {
+            git commit -m "chore: bump opensteamtool-gui-rs to v$env:RELEASE_VERSION"
+            git push origin master
+          }
+          Pop-Location
