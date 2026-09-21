@@ -147,7 +147,7 @@ where
     for &op in ops {
         on_phase(op.phase());
         let res = match op {
-            Op::CloseSteam => ctx.steam.kill(&ctx.steam_dir),
+            Op::CloseSteam => steam::close_steam(&ctx.steam, &ctx.steam_dir),
             Op::Deploy => dll::deploy(&ctx.dll_dir, &ctx.steam_dir),
             Op::Uninstall => dll::uninstall(&ctx.steam_dir),
             Op::Launch => steam::launch_steam(&ctx.steam, &ctx.steam_dir),
