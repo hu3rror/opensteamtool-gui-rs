@@ -81,7 +81,7 @@ fn text_width(ui: &egui::Ui, text: &str, font: &egui::FontId, color: egui::Color
         .x
 }
 
-/// Python 风格按钮：手动绘制底/描边/文字，hover 换色（效仿 tkinter <Enter>/<Leave>）。
+/// 语义色板按钮：手动绘制底/描边/文字，hover 换色（底色由 palette 派生）。
 /// `enabled=false` 时文字弱化为 muted 且不响应点击。
 fn styled_button(
     ui: &mut egui::Ui,
@@ -130,7 +130,7 @@ fn styled_button(
     response
 }
 
-/// 卡片标题：3px 蓝色 accent bar + 标题（Python 版样式）。
+/// 卡片标题：3px accent 色 bar + 标题。
 fn card_title(ui: &mut egui::Ui, text: &str) {
     ui.horizontal(|ui| {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(3.0, 13.0), egui::Sense::hover());
@@ -145,7 +145,7 @@ fn card_title(ui: &mut egui::Ui, text: &str) {
     });
 }
 
-/// 状态行：纯文字 + 颜色（效仿 Python，无圆点徽章）。
+/// 状态行：纯文字 + 颜色（无圆点徽章）。
 fn status_line(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
     ui.label(egui::RichText::new(text).size(13.0).strong().color(color));
 }
@@ -201,7 +201,7 @@ fn row_button_width(available: f32, gap: f32, item_spacing: f32, count: u32) -> 
     let n = count.max(1) as f32;
     ((available - (n - 1.0) * (gap + item_spacing)) / n).max(150.0)
 }
-/// 版本信息行：整行单 label（效仿 Python 纯文本，非胶囊标签）。
+/// 版本信息行：整行单 label（纯文本，非胶囊标签）。
 fn version_line(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
     ui.label(egui::RichText::new(text).size(12.5).color(color));
 }
@@ -1245,7 +1245,7 @@ impl App {
             card_title(ui, self.strings.card2_title);
             ui.add_space(10.0);
 
-            // 部署状态：纯文字 + 颜色（效仿 Python，无圆点徽章）。
+            // 部署状态：纯文字 + 颜色（无圆点徽章）。
             let (text, color) = match self.status {
                 DeployStatus::InvalidPath => (self.strings.status_invalid, theme::WEAK),
                 DeployStatus::Deployed => (self.strings.status_deployed, theme::SUCCESS),
@@ -1256,7 +1256,7 @@ impl App {
         ui.add_space(10.0);
     }
 
-    /// 独立操作区：等宽按钮并排（效仿 Python action_frame，位于卡片 2 与卡片 3 之间）。
+    /// 独立操作区：等宽按钮并排（位于卡片 2 与卡片 3 之间）。
     /// 已应用且 Steam 运行中时为三枚（退出并卸载 / 重启 Steam / 卸载并重启），其余两枚。
     fn action_area(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();

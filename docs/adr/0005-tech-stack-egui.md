@@ -1,6 +1,6 @@
 # 技术栈：egui/eframe（glow），Rust 单二进制
 
-原实现是 Python + tkinter 单文件（PyInstaller 打包 ~15MB），启动有「加载感」；Tauri/WebView2 路线被认为过重（WebView2 内存 100-250MB）。决定：纯 Rust 原生 GUI——egui/eframe + glow 渲染后端，无 Node、无 WebView2、无 Python sidecar。
+旧版 GUI 是单文件脚本程序（打包 ~15MB），启动有「加载感」；Tauri/WebView2 路线被认为过重（WebView2 内存 100-250MB）。决定：纯 Rust 原生 GUI——egui/eframe + glow 渲染后端，无 Node、无 WebView2、无 sidecar 子进程。
 
 - **egui/eframe（即时模式）**：原生窗口、毫秒级首帧，适合本工具 3 卡片轻量 UI；glow 后端比 wgpu 更小更轻，无 GPU 时软件渲染兜底。
 - **后端逻辑全部 Rust 内联**（无 sidecar）：避免子进程启动开销，重燃加载感。
