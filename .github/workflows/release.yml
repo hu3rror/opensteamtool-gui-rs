@@ -66,13 +66,19 @@ jobs:
       # classic/fine-grained PAT with repo scope on that bucket, stored as the
       # MUGGLE_BUCKET_TOKEN secret; skipped until it is configured.
       - name: Update scoop manifest (muggle bucket)
-        if: ${{ secrets.MUGGLE_BUCKET_TOKEN != '' }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.MUGGLE_BUCKET_TOKEN }}
           RELEASE_VERSION: ${{ steps.ver.outputs.version }}
         run: |
           $ErrorActionPreference = "Stop"
+          # Secrets cannot be referenced in `if` conditions (workflow parser
+          # rejects them), so the configured check happens here: an unset
+          # secret makes GH_TOKEN empty, and the step exits early.
+          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+            Write-Host "MUGGLE_BUCKET_TOKEN not configured; skipping scoop manifest sync"
+            exit 0
+          }
           # gh is preinstalled; GH_TOKEN above authenticates both gh and (via
           # setup-git) the git clone/push against the bucket repo.
           gh auth setup-git
