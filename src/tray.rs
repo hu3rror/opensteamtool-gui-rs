@@ -12,7 +12,7 @@ pub enum TrayAction {
     Quit,
     /// 勾选/取消「最小化时自动隐藏到托盘」。
     ToggleMinimizeToTray,
-    /// 菜单「重启 Steam」（仅 Steam 运行中可用）。
+    /// 菜单「重启 Steam」（Steam 未运行时也可点击：等价「正常启动」，见 `set_restart_enabled`）。
     RestartSteam,
 }
 
@@ -23,7 +23,7 @@ pub struct Tray {
     quit_item: MenuItem,
     /// 「最小化时自动隐藏到托盘」勾选项。
     minimize_item: CheckMenuItem,
-    /// 菜单「重启 Steam」（Steam 未运行时置灰，见 `set_restart_enabled`）。
+    /// 菜单「重启 Steam」（Steam 路径无效时置灰，见 `set_restart_enabled`）。
     restart_item: MenuItem,
 }
 
@@ -65,7 +65,8 @@ impl Tray {
         })
     }
 
-    /// 按 Steam 运行状态置灰/启用「重启 Steam」菜单项（未运行置灰）。
+    /// 按 Steam 路径有效性置灰/启用「重启 Steam」菜单项（路径无效置灰）。
+    /// Steam 未运行时点击无影响于重启语义——关闭步骤对未运行组是 no-op，等价「正常启动」。
     pub fn set_restart_enabled(&self, enabled: bool) {
         self.restart_item.set_enabled(enabled);
     }

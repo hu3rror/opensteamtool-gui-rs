@@ -454,7 +454,7 @@ impl App {
             flow,
             compat_details_open: false,
         };
-        // 初始同步托盘「重启 Steam」可用性（跟随初始 Steam 运行状态）。
+        // 初始同步托盘「重启 Steam」可用性（跟随初始 Steam 路径有效性）。
         app.sync_tray_restart_enabled();
         // 启动即喂首次路径：产出首次快速体检效果（初始 checking 骨架态，零白屏）。
         app.on_compat_event(
@@ -499,11 +499,13 @@ impl App {
         }
     }
 
-    /// 按当前 Steam 运行状态同步托盘「重启 Steam」项可用性（未运行置灰）。
-    /// 在 `steam_running` 每次变化处调用（初始 / 后台操作完成重扫 / 边沿事件）。
+    /// 按当前 Steam 路径有效性同步托盘「重启 Steam」项可用性（路径无效置灰）。
+    /// 语义：Steam 运行中点击为「重启」；未运行时点击等价「正常启动」
+    /// （Restart 的关闭步骤对未运行进程组是 no-op，见 workflow::plan）。
+    /// 在 `status` 每次变化处调用（收敛进 `refresh_status`）。
     fn sync_tray_restart_enabled(&mut self) {
         if let Some(tray) = &self.tray {
-            tray.set_restart_enabled(self.steam_running);
+            tray.set_restart_enabled(self.status != DeployStatus::InvalidPath);
         }
     }
     /// 处理托盘事件：切换显隐 / 显示 / 退出。
@@ -534,6 +536,7 @@ impl App {
 
     fn refresh_status(&mut self) {
         self.status = dll::check_status(Path::new(self.steam_path.trim()));
+        self.sync_tray_restart_enabled();
     }
 
     /// 处理后台消息：更新状态与提示。
@@ -560,7 +563,6 @@ impl App {
                         self.refresh_status();
                     }
                     self.steam_running = self.steam_monitor.rescan();
-                    self.sync_tray_restart_enabled();
                     // 启动/重启类成功后 Steam 已运行 → 直接隐藏到托盘（不依赖边沿检测）；
                     // 仅退出并卸载（ExitAndUninstall）Steam 未运行 → 保持显示。
                     self.hide_if_steam_running();
@@ -1257,7 +1259,8 @@ impl App {
     }
 
     /// 独立操作区：等宽按钮并排（位于卡片 2 与卡片 3 之间）。
-    /// 已应用且 Steam 运行中时为三枚（退出并卸载 / 重启 Steam / 卸载并重启），其余两枚。
+    /// 已应用时三枚：运行中为（退出并卸载 / 重启 Steam / 卸载并重启），
+    /// 未运行为（正常启动 Steam / 卸载补丁 / 卸载补丁并重启 Steam）；其余两枚。
     fn action_area(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         ui.horizontal(|ui| {
@@ -1309,11 +1312,23 @@ impl App {
                     }
                 }
                 DeployStatus::Deployed => {
-                    // Steam 已退出 → 直接「卸载补丁」/「卸载补丁并重启 Steam」。
+                    // Steam 已退出 → 「正常启动 Steam」/「卸载补丁」/「卸载补丁并重启 Steam」。
                     let size = egui::vec2(
-                        row_button_width(ui.available_width(), gap, spacing, 2),
+                        row_button_width(ui.available_width(), gap, spacing, 3),
                         36.0,
                     );
+                    if styled_button(
+                        ui,
+                        self.strings.btn_launch_normal,
+                        ButtonStyle::Neutral,
+                        size,
+                        !self.gate.is_busy(),
+                    )
+                    .clicked()
+                    {
+                        self.request_action(&ctx, Action::Launch);
+                    }
+                    ui.add_space(gap);
                     if styled_button(
                         ui,
                         self.strings.btn_uninstall,
@@ -1563,7 +1578,6 @@ impl eframe::App for App {
         // 定时监视 Steam 运行状态（边沿事件 → 自动隐身策略）。
         if let Some(event) = self.steam_monitor.tick() {
             self.steam_running = event == SteamEvent::Started;
-            self.sync_tray_restart_enabled();
             if let Some(visible) = auto_tray_policy(event, self.window_visible) {
                 self.set_window_visible(visible);
             }
