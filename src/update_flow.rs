@@ -67,15 +67,21 @@ impl UpdateFlow {
             },
             FlowState::Checked(Ok(info)) => {
                 let version = info.version.as_str();
-                let up_to_date = local == version;
+                // 文件本位（ADR-0011）：`local_version` 为 None ⇔ `dlls/` 目标 DLL 缺失。
+                // 「已是最新」只属于文件齐全且版本一致的情形；文件缺失时无论线上版本
+                // 是否为空都不能落「已是最新」（误导，见 #26 US 20），下载按钮也须出现
+                // ——下载是修复动作，用 `zip_url` 不依赖 version。
+                let files_missing = local_version.is_none();
+                let up_to_date = local == version && !files_missing;
                 UpdateDerived {
                     notice: Some(if up_to_date {
                         UpdateNotice::UpToDate
                     } else {
                         UpdateNotice::NewVersion
                     }),
-                    // 下载按钮：仅「发现可更新版本」且线上版本非空时可用（对齐现状守卫）。
-                    download: if up_to_date || version.is_empty() {
+                    // 下载按钮：新版本可用（本地 ≠ 线上）或文件缺失时出现；
+                    // 文件齐全但线上版本为空串时隐藏（现状守卫：空 tag 无法判定「更新」）。
+                    download: if up_to_date || (!files_missing && version.is_empty()) {
                         None
                     } else {
                         Some(info)
@@ -150,6 +156,24 @@ mod tests {
         let d = flow.derived(None);
         assert!(matches!(d.notice, Some(UpdateNotice::NewVersion)));
         assert!(d.download.is_some());
+    }
+
+    /// 文件缺失 + 空线上版本（异常上游 tag + 本地文件未下载）：仍是修复场景——
+    /// 下载按钮必须出现（下载用 `zip_url` 不依赖 version；#26 US 20「本地补丁文件缺失
+    /// 即可下载」的边界：空 tag 不得吞掉修复入口，也不得落「已是最新」误导）。
+    #[test]
+    fn derived_files_missing_with_empty_online_version_still_downloadable() {
+        let mut flow = UpdateFlow::new();
+        flow.check_done(Ok(online("")));
+        let d = flow.derived(None);
+        assert!(
+            !matches!(d.notice, Some(UpdateNotice::UpToDate)),
+            "文件缺失时不得显示「已是最新」"
+        );
+        assert!(
+            d.download.is_some(),
+            "文件缺失时应可下载（修复动作不依赖空 tag）"
+        );
     }
 
     /// 线上版本为空串（异常上游）：通知按「发现可更新版本」但下载按钮不出现（现状守卫保留）。
