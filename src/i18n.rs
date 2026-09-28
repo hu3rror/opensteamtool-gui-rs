@@ -126,6 +126,32 @@ pub struct Strings {
     pub compat_tip_missing: &'static str,
     pub compat_tip_network: &'static str,
     pub compat_row_dll: &'static str,
+    /// 设置对话框页签（#30 落地 General；#31 追加 Steam）。
+    pub settings_tab_general: &'static str,
+    /// Settings — General 语言小节标题。
+    pub settings_language_title: &'static str,
+    /// Settings — General 关于小节标题。
+    pub settings_about_title: &'static str,
+    /// 关于区软件版本行前缀（实际版本号由 crate 版本拼接）。
+    pub settings_version_label: &'static str,
+    pub settings_btn_app_update_check: &'static str,
+    pub settings_app_update_checking: &'static str,
+    /// App 更新检查「已是最新」。
+    pub settings_app_update_up_to_date: &'static str,
+    /// App 更新检查「发现新版本」前缀（后接版本号，如 v0.6.3）。
+    pub settings_app_update_new_version: &'static str,
+    pub settings_btn_open_download_page: &'static str,
+    /// Settings — General 补丁更新小节标题。
+    pub settings_patch_title: &'static str,
+    pub settings_btn_patch_update_check: &'static str,
+    /// 补丁检查结果文案（永不出现补丁版本号，见 #30）。
+    pub settings_patch_up_to_date: &'static str,
+    pub settings_patch_new_version: &'static str,
+    /// Settings — General 重新运行向导小节标题。
+    pub settings_wizard_title: &'static str,
+    pub settings_btn_rerun_wizard: &'static str,
+    /// 重新运行向导提示（以当前配置为初值）。
+    pub settings_rerun_wizard_hint: &'static str,
     /// 首次运行向导（wizard 模块渲染）。
     pub wizard_title: &'static str,
     /// 步骤指示（`{n}` 由 UI 替换为 1/2/3）。
@@ -278,6 +304,22 @@ impl Strings {
             btn_settings: "设置",
             settings_title: "设置",
             btn_close: "关闭",
+            settings_tab_general: "通用",
+            settings_language_title: "语言",
+            settings_about_title: "关于",
+            settings_version_label: "软件版本",
+            settings_btn_app_update_check: "检查应用更新",
+            settings_app_update_checking: "正在检查应用更新...",
+            settings_app_update_up_to_date: "已是最新版本",
+            settings_app_update_new_version: "发现新版本 ",
+            settings_btn_open_download_page: "打开下载页",
+            settings_patch_title: "补丁更新",
+            settings_btn_patch_update_check: "检查补丁更新",
+            settings_patch_up_to_date: "补丁已是最新",
+            settings_patch_new_version: "发现新补丁",
+            settings_wizard_title: "设置向导",
+            settings_btn_rerun_wizard: "重新运行向导",
+            settings_rerun_wizard_hint: "以当前语言与 Steam 路径为初值重新运行设置向导。",
             compat_title: "Steam 核心兼容性",
             compat_checking: "正在检查兼容性...",
             compat_status_ready: "完美兼容 (已缓存)",
@@ -380,6 +422,22 @@ impl Strings {
             btn_settings: "Settings",
             settings_title: "Settings",
             btn_close: "Close",
+            settings_tab_general: "General",
+            settings_language_title: "Language",
+            settings_about_title: "About",
+            settings_version_label: "Version",
+            settings_btn_app_update_check: "Check App Update",
+            settings_app_update_checking: "Checking for app update...",
+            settings_app_update_up_to_date: "Up to date",
+            settings_app_update_new_version: "New version available: ",
+            settings_btn_open_download_page: "Open Download Page",
+            settings_patch_title: "Patch Update",
+            settings_btn_patch_update_check: "Check Patch Update",
+            settings_patch_up_to_date: "Patch up to date",
+            settings_patch_new_version: "New patch available",
+            settings_wizard_title: "Setup Wizard",
+            settings_btn_rerun_wizard: "Re-run Wizard",
+            settings_rerun_wizard_hint: "Re-runs setup with your current language and Steam path as starting values.",
             compat_title: "Steam Core Compatibility",
             compat_checking: "Checking compatibility...",
             compat_status_ready: "Fully Compatible",

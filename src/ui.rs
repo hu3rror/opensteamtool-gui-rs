@@ -28,8 +28,6 @@ use crate::workflow::{self, Action};
 /// 向导卡片内容宽度：窄于主界面卡片并整体水平居中，视觉更聚焦、更均衡。
 const WIZARD_CARD_WIDTH: f32 = 430.0;
 
-/// 设置对话框非滚动行的固定高度占用（标题+页签行+顶部固定行+底部固定行+页脚+窗口边距）。
-/// 数值保守偏大：低估会让页脚越界（Modal 是 Area 不约束屏幕），过估只浪费一点滚动区。
 fn install_theme(ctx: &egui::Context) {
     let mut visuals = egui::Visuals::light();
     visuals.panel_fill = theme::PANEL;
@@ -180,6 +178,17 @@ fn render_update_notice(s: &Strings, n: &UpdateNotice) -> (bool, String) {
     }
 }
 
+/// 设置对话框「补丁更新检查」结果 → 当前语言文案（分类来自「更新流程」派生）。
+/// 与 `render_update_notice` 的关键差异：**永不渲染补丁版本号**（#30 验收）——
+/// 版本比较只在流程内部完成，「已是最新 / 发现新补丁 / 检查失败」三种结果均无版本数字。
+fn render_patch_notice(s: &Strings, n: &UpdateNotice) -> (bool, String) {
+    match n {
+        UpdateNotice::UpToDate { .. } => (true, s.settings_patch_up_to_date.to_string()),
+        UpdateNotice::NewVersion { .. } => (true, s.settings_patch_new_version.to_string()),
+        UpdateNotice::CheckFailed(e) => (false, s.update_error(e)),
+    }
+}
+
 /// n 枚等宽按钮并排时的单按钮宽度：`available` 减去 (n-1) 个手动 gap 与
 /// (n-1) 个 egui 自动插入的 item_spacing 后再均分（egui 在每个 widget 后
 /// 都追加 item_spacing，见 `Layout::advance_after_rects`）。公式漏掉任一项
@@ -219,6 +228,8 @@ enum Msg {
     },
     /// 首次运行向导的「检查更新 → 下载并解压」完成。
     WizardDownload(Result<(), UpdateError>),
+    /// 应用更新检查完成（Settings — General About 区；只读查询，不进忙碌门禁）。
+    AppUpdateChecked(Result<updater::AppUpdateCheckResult, UpdateError>),
 }
 
 /// 最近一次结果提示的结构化数据。
@@ -232,6 +243,12 @@ enum Notice {
     WorkflowDone(Action, Result<(), workflow::WorkflowError>),
     /// 前置校验失败（类型化错误 → 本地化文案）。
     Precheck(workflow::Precheck),
+}
+
+/// 设置对话框页签（#30 落地 General；#31 在此追加 Steam）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SettingsTab {
+    General,
 }
 
 /// 「Steam 核心兼容性」一帧的展示快照（`CompatFlow::display` 零拷贝借用，渲染期无流程借用）。
@@ -306,8 +323,15 @@ pub struct App {
     /// 上一帧是否处于最小化（检测最小化按钮被点击）。
     was_minimized: bool,
 
-    /// 设置对话框是否打开（重建落地前为空壳：仅标题 + 关闭）。
+    /// 设置对话框是否打开。
     settings_open: bool,
+    /// 设置对话框当前页签（#30 仅 General；#31 追加 Steam）。
+    settings_tab: SettingsTab,
+    /// 应用更新检查结果（Settings — General About 区；None = 尚未检查）。
+    /// 检查中由 `app_update_checking` 表达（发起时覆盖旧结果）。
+    app_update: Option<Result<updater::AppUpdateCheckResult, UpdateError>>,
+    /// 应用更新检查是否在途（自管忙碌：只读查询不进 Busy Gate，按钮在途自禁用）。
+    app_update_checking: bool,
     /// 首次运行向导（`Some` = 向导激活并替代主界面；完成/跳过/关窗后置 `None`）。
     wizard: Option<wizard::Wizard>,
     /// 体检流程状态机（编排见 compat_flow）。
@@ -658,6 +682,9 @@ impl App {
             minimize_to_tray: true,
             was_minimized: false,
             settings_open: false,
+            settings_tab: SettingsTab::General,
+            app_update: None,
+            app_update_checking: false,
             wizard,
             flow,
             compat_details_open: false,
@@ -798,6 +825,10 @@ impl App {
                         self.refresh_status();
                     }
                 }
+                Msg::AppUpdateChecked(res) => {
+                    self.app_update_checking = false;
+                    self.app_update = Some(res);
+                }
             }
         }
     }
@@ -913,6 +944,18 @@ impl App {
         });
     }
 
+    /// 应用更新检查：查询本仓库最新发布并与当前程序版本比较。只读查询，不进忙碌门禁
+    /// （不互斥补丁/操作类后台任务）；检查中按钮自禁用防重复发起，结果仅呈现在
+    /// Settings — General 的 About 区。不下载、不自替换（明确非目标）。
+    fn check_app_update(&mut self, ctx: &egui::Context) {
+        if self.app_update_checking {
+            return;
+        }
+        self.app_update_checking = true;
+        self.app_update = None; // 覆盖旧结果，回到「检查中」。
+        self.spawn(ctx, || Msg::AppUpdateChecked(updater::check_app_update()));
+    }
+
     // ---------- 首次运行向导（替代主界面，同一窗口） ----------
 
     /// 向导一帧：渲染当前步骤、收集用户意图、推进状态机并执行效果。
@@ -965,23 +1008,56 @@ impl App {
         }
     }
 
-    // ---------- 设置对话框（重建前占位：空壳，仅标题 + 关闭） ----------
+    // ---------- 设置对话框（General 页签；Steam 页签见 #31） ----------
 
-    /// 打开设置：置位。对话框本体见 `settings_dialog`（Config Editor / OnlineFix 已随 #27 移除）。
+    /// 打开设置：置位。
     fn open_settings(&mut self) {
         self.settings_open = true;
     }
 
-    /// 设置对话框（模态空壳）：重建落地前仅标题 + 关闭按钮，无任何页签。
+    /// 设置对话框：页签骨架 + General 页签（#30）。全部控件即改即生效并持久化
+    /// （无 OK/Cancel）；补丁更新检查 / 下载并解压仍走忙碌门禁互斥。
+    /// 布局：标题 + 页签行固定，中间内容区滚动（窗口高度有限，Modal 是 Area 不约束屏幕）。
     fn settings_dialog(&mut self, ctx: &egui::Context) {
         if !self.settings_open {
             return;
         }
         let mut close_clicked = false;
         egui::Modal::new(egui::Id::new("settings_dialog")).show(ctx, |ui| {
-            ui.set_width(320.0);
+            ui.set_width(380.0);
             ui.heading(self.strings.settings_title);
             ui.add_space(8.0);
+            // 页签行（#30 仅 General；#31 在此追加 Steam 页签）。
+            let tab = SettingsTab::General;
+            let style = if self.settings_tab == tab {
+                ButtonStyle::Primary
+            } else {
+                ButtonStyle::Neutral
+            };
+            if styled_button(
+                ui,
+                self.strings.settings_tab_general,
+                style,
+                egui::vec2(88.0, 28.0),
+                true,
+            )
+            .clicked()
+            {
+                self.settings_tab = tab;
+            }
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(8.0);
+            // 内容区滚动：窗口高度有限且 Modal 是 Area 不约束屏幕，滚动区高度由窗口
+            // 高度扣除非滚动行的固定占用（标题+页签行+分隔线+页脚+窗口边距，数值保守
+            // 偏大）得到，保证页脚恒可见；过低窗口下仍保留最小滚动区。
+            let max_scroll_h = (ctx.content_rect().height() - 160.0 - 24.0).clamp(200.0, 420.0);
+            egui::ScrollArea::vertical()
+                .max_height(max_scroll_h)
+                .show(ui, |ui| {
+                    self.settings_general(ui, ctx);
+                });
+            ui.add_space(12.0);
             ui.separator();
             ui.add_space(8.0);
             ui.horizontal(|ui| {
@@ -1003,6 +1079,222 @@ impl App {
         if close_clicked {
             self.settings_open = false;
         }
+    }
+
+    /// General 页签：语言三态（即改即存）→ 关于（GitHub 链接 / 软件版本 / 应用更新
+    /// 检查）→ 补丁更新检查（单按钮；结果永不显示补丁版本号）→ 重新运行向导。
+    fn settings_general(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        // ---- 语言（三态，点击即应用并持久化，无重启） ----
+        card_title(ui, self.strings.settings_language_title);
+        ui.add_space(8.0);
+        let mut lang_changed = false;
+        ui.vertical(|ui| {
+            // 选项文案与向导步骤 1 复用同一组标签（wizard_language_*）。
+            for (lang, label) in [
+                (Language::Auto, self.strings.wizard_language_auto),
+                (Language::Zh, self.strings.wizard_language_zh),
+                (Language::En, self.strings.wizard_language_en),
+            ] {
+                if ui.radio_value(&mut self.lang_pref, lang, label).changed() {
+                    lang_changed = true;
+                }
+            }
+        });
+        if lang_changed {
+            self.set_language(self.lang_pref);
+            self.config.language = self.lang_pref;
+            self.persist_config();
+        }
+        ui.add_space(12.0);
+
+        // ---- 关于（GitHub 链接 / 软件版本 / 应用更新检查） ----
+        card_title(ui, self.strings.settings_about_title);
+        ui.add_space(8.0);
+        // GitHub 项目链接：按钮式链接，点击在浏览器打开仓库页。
+        if styled_button(
+            ui,
+            updater::APP_REPO_PAGE,
+            ButtonStyle::Neutral,
+            egui::vec2(240.0, 28.0),
+            true,
+        )
+        .clicked()
+        {
+            updater::open_in_browser(updater::APP_REPO_PAGE);
+        }
+        ui.add_space(6.0);
+        // 软件版本：crate 版本（构建时固化的单一来源）。
+        ui.label(
+            egui::RichText::new(format!(
+                "{} v{}",
+                self.strings.settings_version_label,
+                env!("CARGO_PKG_VERSION")
+            ))
+            .size(13.0)
+            .color(theme::SUB),
+        );
+        ui.add_space(8.0);
+        // 应用更新检查：只查询并打开下载页，不做任何下载/自替换。
+        let mut do_app_check = false;
+        ui.horizontal(|ui| {
+            if styled_button(
+                ui,
+                self.strings.settings_btn_app_update_check,
+                ButtonStyle::Neutral,
+                egui::vec2(150.0, 28.0),
+                !self.app_update_checking,
+            )
+            .clicked()
+            {
+                do_app_check = true;
+            }
+        });
+        if do_app_check {
+            self.check_app_update(ctx);
+        }
+        match (&self.app_update, self.app_update_checking) {
+            (_, true) => {
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new(self.strings.settings_app_update_checking)
+                        .size(12.5)
+                        .color(theme::WEAK),
+                );
+            }
+            (Some(Ok(r)), false) if r.newer => {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{}{}",
+                            self.strings.settings_app_update_new_version, r.latest_version
+                        ))
+                        .size(12.5)
+                        .color(theme::INK),
+                    );
+                    if styled_button(
+                        ui,
+                        self.strings.settings_btn_open_download_page,
+                        ButtonStyle::Primary,
+                        egui::vec2(120.0, 28.0),
+                        true,
+                    )
+                    .clicked()
+                    {
+                        updater::open_in_browser(updater::APP_RELEASES_PAGE);
+                    }
+                });
+            }
+            (Some(Ok(_)), false) => {
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new(self.strings.settings_app_update_up_to_date)
+                        .size(12.5)
+                        .color(theme::INK),
+                );
+            }
+            (Some(Err(e)), false) => {
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new(self.strings.update_error(e))
+                        .size(12.5)
+                        .color(theme::DANGER),
+                );
+            }
+            (None, false) => {}
+        }
+        ui.add_space(12.0);
+
+        // ---- 补丁更新检查（单按钮；忙碌门禁互斥；结果永不显示补丁版本号）。
+        card_title(ui, self.strings.settings_patch_title);
+        ui.add_space(8.0);
+        // 派生快照：先取结果文案与下载可用性（脱离借用后才可 &mut self 发起动作）。
+        let derived = self.update_flow.derived(self.local_known_version());
+        let patch_result = derived
+            .notice
+            .map(|n| render_patch_notice(&self.strings, &n));
+        let patch_info = derived.download.cloned();
+        let checking = self.gate.current() == Some(BusyKind::Checking);
+        let mut do_patch_check = false;
+        let mut do_patch_download: Option<OnlineInfo> = None;
+        ui.horizontal(|ui| {
+            if styled_button(
+                ui,
+                self.strings.settings_btn_patch_update_check,
+                ButtonStyle::Neutral,
+                egui::vec2(150.0, 28.0),
+                !self.gate.is_busy(),
+            )
+            .clicked()
+            {
+                do_patch_check = true;
+            }
+        });
+        if checking {
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new(self.strings.checking)
+                    .size(12.5)
+                    .color(theme::WEAK),
+            );
+        } else if let Some((ok, text)) = patch_result {
+            ui.add_space(6.0);
+            ui.label(egui::RichText::new(text).size(12.5).color(if ok {
+                theme::INK
+            } else {
+                theme::DANGER
+            }));
+        }
+        // 下载并解压按钮：仅「新补丁可用或本地补丁文件缺失」（文件本位派生）时出现。
+        if patch_info.is_some() {
+            ui.add_space(8.0);
+            if styled_button(
+                ui,
+                self.strings.btn_download_and_extract,
+                ButtonStyle::Primary,
+                egui::vec2(180.0, 28.0),
+                !self.gate.is_busy(),
+            )
+            .clicked()
+            {
+                do_patch_download = patch_info.clone();
+            }
+        }
+        if do_patch_check {
+            self.check_update(ctx);
+        }
+        if let Some(info) = do_patch_download {
+            self.download_update(ctx, info);
+        }
+        ui.add_space(12.0);
+
+        // ---- 重新运行向导（以当前配置为初值）。
+        card_title(ui, self.strings.settings_wizard_title);
+        ui.add_space(8.0);
+        ui.label(
+            egui::RichText::new(self.strings.settings_rerun_wizard_hint)
+                .size(12.0)
+                .color(theme::WEAK),
+        );
+        ui.add_space(8.0);
+        if styled_button(
+            ui,
+            self.strings.settings_btn_rerun_wizard,
+            ButtonStyle::Primary,
+            egui::vec2(160.0, 32.0),
+            !self.gate.is_busy(),
+        )
+        .clicked()
+        {
+            self.rerun_wizard();
+        }
+    }
+
+    /// 「重新运行向导」：以当前会话配置（语言偏好 + Steam 路径）为初值启动向导，并关闭
+    /// 设置对话框（向导替代主界面渲染）。重跑是「编辑」而非「重置」（#29 播种约定）。
+    fn rerun_wizard(&mut self) {
+        self.settings_open = false;
+        self.wizard = Some(wizard::Wizard::new(self.lang_pref, self.steam_path.clone()));
     }
     // ---------- UI ----------
 
@@ -1904,6 +2196,29 @@ mod tests {
         assert_eq!(en, (true, "v1.4.8 (Up to date)".to_string()));
         // 英文界面不应出现中文。
         assert!(!en.1.contains('本'), "en notice 不应含中文: {}", en.1);
+    }
+
+    /// #30 验收：设置对话框「补丁更新检查」结果文案永不渲染补丁版本号——
+    /// 分类来自「更新流程」派生，但三种结果均只呈现定性文案。
+    #[test]
+    fn patch_notice_never_renders_version_numbers() {
+        for lang in [Lang::Zh, Lang::En] {
+            let s = Strings::new(lang);
+            let up = render_patch_notice(&s, &UpdateNotice::UpToDate { version: "1.4.8" });
+            let new = render_patch_notice(&s, &UpdateNotice::NewVersion { version: "1.4.8" });
+            assert_eq!(up, (true, s.settings_patch_up_to_date.to_string()));
+            assert_eq!(new, (true, s.settings_patch_new_version.to_string()));
+            for (_, text) in [&up, &new] {
+                assert!(
+                    !text.contains("1.4.8") && !text.contains("v1"),
+                    "{lang:?} 补丁结果文案不应出现版本号: {text}"
+                );
+            }
+            // 检查失败：错误文案照常映射（错误本身不含版本号）。
+            let e = UpdateError::Network("t".into());
+            let failed = render_patch_notice(&s, &UpdateNotice::CheckFailed(&e));
+            assert_eq!(failed, (false, s.update_error(&e)));
+        }
     }
 
     /// 防御分支：Notice::UpdateChecked 正常经 notice_text 分流，不直达 render_notice；
