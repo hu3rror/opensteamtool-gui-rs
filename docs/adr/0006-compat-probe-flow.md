@@ -1,6 +1,6 @@
 # 兼容性体检：哈希探针 + compat_flow 编排状态机
 
-上游 OpenSteamTool 自重构后不再把特征码打包进 DLL：注入器在 Steam 启动时计算本地核心 DLL 的 SHA-256，并按通道（`steam-monitor` 仓库分支 = 通道）拉取匹配的 TOML 签名/IPC 规约。本工具在 Card 1 提供兼容性体检指示与离线缓存预热，前提是**零阻塞 UI**。
+上游 OpenSteamTool 自重构后不再把特征码打包进 DLL：注入器在 Steam 启动时计算本地核心 DLL 的 SHA-256，并按通道（`steam-monitor` 仓库分支 = 通道）拉取匹配的 TOML 签名/IPC 规约。本工具在 Settings — Steam 的兼容性小节提供体检指示与离线缓存预热（#31 从主页面 Card 1 迁入；主页面仅保留两态风险警示行，#32），前提是**零阻塞 UI**。
 
 ## 决策
 

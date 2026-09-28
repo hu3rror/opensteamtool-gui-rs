@@ -19,3 +19,14 @@
 - 启动自动检查更新：见上，引入启动期网络依赖。
 
 验收：`cargo check --workspace --all-targets` / `cargo clippy --workspace --all-targets` / `cargo test --workspace` 全绿；手动核对——全新便携包运行：应用按钮灰 + 引导行，点「检查更新」成功后「下载并解压新版本」出现；已应用且 Steam 未运行：按钮显示「启动 Steam」；本地版本行在缺文件时恒显「未下载」。
+
+## 修订（#32：主页面精简）
+
+#32 主页面精简后，在线更新 UI（原 Card 3：本地/线上版本行 + 检查/下载按钮）从主页面移除，补丁更新的「检查 → 下载并解压」维护动作收敛到 Settings — General 的「补丁更新检查」小节（流程仍是 `update_flow` 单一事实源，路径不变）。因此「补丁未下载」引导改写：
+
+- **引导指向维护入口**：操作区下方一行弱化提示改为「补丁未下载：请前往 设置 → 通用 → 补丁更新检查，检查后再下载并解压新版本」（i18n `hint_download_patch` 双语改写）。判据（未部署 + `dlls/` 缺文件 → 「应用补丁并启动」置灰）与「不自动联网检查」的决策不变。
+- **版本号从此不渲染**：Card 3 移除后，本地/线上版本退为内部概念（永不渲染）；补丁检查结果通知统一走 `render_patch_notice`（无版本数字，#30 口径）。`update_flow::UpdateLine` 行分类随主页面版本行一并删除，`UpdateNotice` 不再携带版本号。
+- 其余决策（文件本位判据、置灰范围收窄、已应用启动按钮弃用「正常」）不受影响。
+- 原验收中与主页面 Card 3 相关的核对项（主页面「检查更新/下载并解压」按钮、本地/线上版本行渲染）随主页面精简作废，由下方新验收取代。
+
+新验收：主页面仅渲染部署状态 + 操作按钮组 + 健康风险警示行；「补丁未下载」提示指向 Settings — General → 补丁更新检查；`cargo check --workspace --all-targets` / `cargo clippy --workspace --all-targets` / `cargo test --workspace` / `cargo fmt --all --check` 全绿。

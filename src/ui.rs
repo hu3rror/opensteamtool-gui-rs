@@ -1,4 +1,4 @@
-//! egui 界面：顶栏 + 3 卡片 + 确认弹窗。
+//! egui 界面：主页面（部署状态 + 操作按钮组 + 健康风险警示）+ 设置对话框 + 向导 + 确认弹窗。
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -18,7 +18,7 @@ use crate::steam;
 use crate::steam_state::SteamState;
 use crate::theme::{self, ButtonStyle};
 use crate::tray::{Tray, TrayAction};
-use crate::update_flow::{UpdateFlow, UpdateLine, UpdateNotice};
+use crate::update_flow::{UpdateFlow, UpdateNotice};
 use crate::updater::{self, OnlineInfo, UpdateError};
 use crate::wizard::{self, DownloadState, Step as WizardStep};
 use crate::workflow::{self, Action};
@@ -173,23 +173,24 @@ fn render_notice(s: &Strings, notice: &Notice) -> (bool, String) {
     }
 }
 
-/// 检查更新结果通知 → 当前语言文案（分类来自「更新流程」派生，比较已在流程内完成）。
-fn render_update_notice(s: &Strings, n: &UpdateNotice) -> (bool, String) {
+/// 补丁更新检查结果 → 当前语言文案（分类来自「更新流程」派生；同时服务设置对话框与主页面通知栏）。
+/// **永不渲染补丁版本号**（#30 验收）：版本比较只在流程内部完成，
+/// 「已是最新 / 发现新补丁 / 检查失败」三种结果均无版本数字。
+fn render_patch_notice(s: &Strings, n: &UpdateNotice) -> (bool, String) {
     match n {
-        UpdateNotice::UpToDate { version } => (true, format!("v{} {}", version, s.up_to_date)),
-        UpdateNotice::NewVersion { version } => (true, format!("v{} {}", version, s.new_version)),
+        UpdateNotice::UpToDate => (true, s.settings_patch_up_to_date.to_string()),
+        UpdateNotice::NewVersion => (true, s.settings_patch_new_version.to_string()),
         UpdateNotice::CheckFailed(e) => (false, s.update_error(e)),
     }
 }
 
-/// 设置对话框「补丁更新检查」结果 → 当前语言文案（分类来自「更新流程」派生）。
-/// 与 `render_update_notice` 的关键差异：**永不渲染补丁版本号**（#30 验收）——
-/// 版本比较只在流程内部完成，「已是最新 / 发现新补丁 / 检查失败」三种结果均无版本数字。
-fn render_patch_notice(s: &Strings, n: &UpdateNotice) -> (bool, String) {
-    match n {
-        UpdateNotice::UpToDate { .. } => (true, s.settings_patch_up_to_date.to_string()),
-        UpdateNotice::NewVersion { .. } => (true, s.settings_patch_new_version.to_string()),
-        UpdateNotice::CheckFailed(e) => (false, s.update_error(e)),
+/// 主页面健康风险警示文案（#32）：仅「上游尚未适配 / 未找到核心 DLL」两态产出，
+/// 其余健康态（检查中 / 网络不可用 / 已适配未缓存）一律 `None`——瞬时态与正常态不打扰。
+fn health_warning(s: &Strings, summary: CompatSummary) -> Option<&'static str> {
+    match summary {
+        CompatSummary::Pending => Some(s.main_warning_pending),
+        CompatSummary::Missing => Some(s.main_warning_missing),
+        _ => None,
     }
 }
 
@@ -201,10 +202,6 @@ fn render_patch_notice(s: &Strings, n: &UpdateNotice) -> (bool, String) {
 fn row_button_width(available: f32, gap: f32, item_spacing: f32, count: u32) -> f32 {
     let n = count.max(1) as f32;
     ((available - (n - 1.0) * (gap + item_spacing)) / n).max(150.0)
-}
-/// 版本信息行：整行单 label（纯文本，非胶囊标签）。
-fn version_line(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
-    ui.label(egui::RichText::new(text).size(12.5).color(color));
 }
 
 /// 后台线程 → UI 线程的消息。
@@ -977,17 +974,6 @@ impl App {
         }
     }
 
-    /// 路径编辑会话结束（失焦/浏览选定）后提交：仅当空（未设置）或为有效目录时
-    /// 更新持久化镜像并落盘，避免把无效路径固化到下次启动（无效路径仅会话内
-    /// 生效，重启后回退注册表检测——直到 #26 的 wizard 接管「保存路径无效时引导修复」）。
-    fn commit_steam_path(&mut self) {
-        let p = self.steam_path.trim();
-        if p.is_empty() || Path::new(p).is_dir() {
-            self.config.steam_path = p.to_string();
-            self.persist_config();
-        }
-    }
-
     fn check_update(&mut self, ctx: &egui::Context) {
         if !self.gate.start(BusyKind::Checking) {
             return;
@@ -1072,9 +1058,11 @@ impl App {
 
     // ---------- 设置对话框（General 页签；Steam 页签见 #31） ----------
 
-    /// 打开设置：置位，并以当前工作路径播种 Steam 页签的编辑缓冲（重跑即编辑）。
-    fn open_settings(&mut self) {
+    /// 打开设置：置位、切到指定页签，并以当前工作路径播种 Steam 页签的编辑缓冲（重跑即编辑）。
+    /// 顶栏入口传会话内记忆的页签（历史行为「会话内记忆上次页签」）；主页面健康警示显式切 Steam。
+    fn open_settings(&mut self, tab: SettingsTab) {
         self.settings_open = true;
+        self.settings_tab = tab;
         self.settings_steam = SteamPathEditor::new(&self.steam_path);
     }
 
@@ -1365,7 +1353,7 @@ impl App {
     }
 
     /// Settings — Steam 页签（#31）：Steam 路径编辑（文本 + 浏览；失焦/回车校验提交），
-    /// 以及兼容性小节（主页面 Card 1 原样迁移：徽章六态 / 自动与手动预热 / 详情行为不变）。
+    /// 以及兼容性小节（#32 从主页面迁入：徽章六态 / 自动与手动预热 / 详情行为不变）。
     /// 路径编辑与工作路径分离：非法输入只显示内联错误，永不落盘、不污染工作路径。
     fn settings_steam(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         card_title(ui, self.strings.settings_steam_title);
@@ -1414,7 +1402,7 @@ impl App {
                     .color(theme::DANGER),
             );
         }
-        // 兼容性小节：主页面 Card 1 原样迁移（行为与健康度六态不变）。
+        // 兼容性小节：#32 从主页面迁入（行为与健康度六态不变）。
         self.compat_section(ui);
     }
 
@@ -1480,55 +1468,33 @@ impl App {
                 )
                 .clicked()
                 {
-                    self.open_settings();
+                    self.open_settings(self.settings_tab);
                 }
             });
         });
         ui.add_space(6.0);
     }
 
-    fn card1(&mut self, ui: &mut egui::Ui) {
-        card_frame().show(ui, |ui| {
-            ui.set_width(ui.available_width()); // 卡片撑满窗口宽度，避免堆在左侧
-            card_title(ui, self.strings.card1_title);
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                let edit_width = (ui.available_width() - 92.0).max(120.0);
-                let resp = ui.add_sized(
-                    egui::vec2(edit_width, 34.0),
-                    egui::TextEdit::singleline(&mut self.steam_path)
-                        .margin(egui::Margin::symmetric(10, 7))
-                        .hint_text(self.strings.steam_path_label),
-                );
-                if resp.changed() {
-                    self.refresh_status();
-                    let ctx = self.ctx.clone();
-                    self.feed_path_changed(&ctx);
-                }
-                // 编辑会话结束（失焦）即把有效路径落盘到 config.toml（无效路径不固化）。
-                if resp.lost_focus() {
-                    self.commit_steam_path();
-                }
-                if styled_button(
-                    ui,
-                    self.strings.browse,
-                    ButtonStyle::Neutral,
-                    egui::vec2(82.0, 34.0),
-                    true,
-                )
-                .clicked()
-                    && let Some(dir) = rfd::FileDialog::new().pick_folder()
-                {
-                    self.steam_path = dir.display().to_string();
-                    self.refresh_status();
-                    let ctx = self.ctx.clone();
-                    self.feed_path_changed(&ctx);
-                    self.commit_steam_path();
-                }
-            });
-            self.compat_section(ui);
-        });
-        ui.add_space(10.0);
+    /// 主页面健康风险警示行（#32）：仅「上游尚未适配 / 未找到核心 DLL」两态渲染，
+    /// 点击整行跳 Settings — Steam（兼容性细节已迁至该页签）。其余健康态不占位不打扰。
+    fn health_warning_line(&mut self, ui: &mut egui::Ui) {
+        // 快照取自体检流程展示态（零拷贝借用，渲染期无流程借用）。
+        let summary = self.flow.display().summary;
+        let Some(text) = health_warning(&self.strings, summary) else {
+            return;
+        };
+        // 全宽警示行：danger 描边 + 语义浅底（由 DANGER 槽派生，不新增色值，ADR-0010）。
+        let resp = ui.add(
+            egui::Button::new(egui::RichText::new(text).size(12.5).color(theme::DANGER))
+                .fill(theme::badge_bg(theme::DANGER))
+                .stroke(egui::Stroke::new(1.0, theme::DANGER))
+                .corner_radius(egui::CornerRadius::same(8))
+                .min_size(egui::vec2(ui.available_width(), 34.0)),
+        );
+        if resp.clicked() {
+            self.open_settings(SettingsTab::Steam);
+        }
+        ui.add_space(8.0);
     }
 
     /// 喂事件给体检流程并执行其效果（消息臂 / 路径变更 / 手动预热共用）。
@@ -1583,7 +1549,7 @@ impl App {
         }
     }
 
-    /// Card 1 底部「Steam 核心兼容性」小节：第一行标题+状态徽章+操作靠右，第二行辅助说明弱化。
+    /// Settings — Steam 兼容性小节：第一行标题+状态徽章+操作靠右，第二行辅助说明弱化。
     fn compat_section(&mut self, ui: &mut egui::Ui) {
         ui.add_space(10.0);
         // 无分隔线：竖条标题 + 徽章自成边界，直接衔接上方路径输入区。
@@ -1793,7 +1759,7 @@ impl App {
         ui.add_space(10.0);
     }
 
-    /// 独立操作区：等宽按钮并排（位于卡片 2 与卡片 3 之间）。
+    /// 独立操作区（主页面核心闭环，位于部署状态卡片之下）：等宽按钮并排。
     /// 已应用时三枚：运行中为（退出并卸载 / 重启 Steam / 卸载并重启），
     /// 未运行为（启动 Steam / 卸载补丁 / 卸载补丁并重启 Steam）；其余两枚。
     fn action_area(&mut self, ui: &mut egui::Ui) {
@@ -1802,7 +1768,7 @@ impl App {
             let gap = 12.0;
             let spacing = ui.spacing().item_spacing.x;
             // 宽度公式必须扣除 egui 自动插入的 item_spacing 与手动 gap（见 row_button_width），
-            // 否则按钮行实际占宽溢出，把下方卡片（card3 依赖 available_width 撑满）顶到窗口右缘。
+            // 否则按钮行实际占宽溢出，把下方依赖 available_width 撑满的内容顶到窗口右缘。
             match self.status {
                 DeployStatus::Deployed if self.steam_running => {
                     // 「退出 Steam 并卸载补丁」（唯一警戒）/「重启 Steam」/「卸载补丁并重启 Steam」。
@@ -1956,119 +1922,8 @@ impl App {
         ui.add_space(10.0);
     }
 
-    fn card3(&mut self, ui: &mut egui::Ui) {
-        card_frame().show(ui, |ui| {
-            ui.set_width(ui.available_width()); // 卡片撑满窗口宽度
-            card_title(ui, self.strings.card3_title);
-            ui.add_space(10.0);
-
-            // 本地版本行（文件本位，ADR-0011）：文件缺失即「未下载」，version.txt 记录不作数；
-            // 文件齐全且有记录 → v+版本；有文件无记录 → 已本地就绪 (未记录版本)。
-            let (local_text, local_color) = if !dll::dlls_present() {
-                (
-                    format!(
-                        "{}{}",
-                        self.strings.local_version, self.strings.local_ver_missing
-                    ),
-                    theme::WEAK,
-                )
-            } else {
-                match &self.local_version {
-                    Some(v) => (
-                        format!(
-                            "{}v{}",
-                            self.strings.local_version,
-                            v.trim_start_matches('v')
-                        ),
-                        theme::INK,
-                    ),
-                    None => (
-                        format!(
-                            "{}{}",
-                            self.strings.local_version, self.strings.local_ver_ready_no_record
-                        ),
-                        theme::SUB,
-                    ),
-                }
-            };
-            version_line(ui, &local_text, local_color);
-            ui.add_space(6.0);
-
-            // 线上版本行：未知 / 正在检查更新 / v+版本+后缀 / 检查失败。
-            let prefix = self.strings.online_version;
-            // 更新对比同用文件本位：文件缺失时无视版本记录按「本地缺失」比较，
-            // 保证检查后下载按钮必然出现（否则记录版本=线上版本时死路，ADR-0011）。
-            let derived = self.update_flow.derived(self.local_known_version());
-            let (online_text, online_color) = match &derived.line {
-                UpdateLine::Unknown => (format!("{}{}", prefix, self.strings.unknown), theme::SUB),
-                UpdateLine::Checking => {
-                    (format!("{}{}", prefix, self.strings.checking), theme::SUB)
-                }
-                UpdateLine::UpToDate { version } => (
-                    format!("{}v{} {}", prefix, version, self.strings.up_to_date),
-                    theme::SUB,
-                ),
-                UpdateLine::NewVersion { version } => (
-                    format!("{}v{} {}", prefix, version, self.strings.new_version),
-                    theme::SUB,
-                ),
-                UpdateLine::CheckFailed(e) => (
-                    format!(
-                        "{}{} ({})",
-                        prefix,
-                        self.strings.online_check_fail,
-                        self.strings.update_error(e),
-                    ),
-                    theme::DANGER,
-                ),
-            };
-            version_line(ui, &online_text, online_color);
-            ui.add_space(14.0);
-
-            let ctx = ui.ctx().clone();
-            let mut do_check = false;
-            let mut do_download: Option<OnlineInfo> = None;
-
-            // 先只收集按钮意图，避免借用冲突。
-            ui.horizontal(|ui| {
-                if styled_button(
-                    ui,
-                    self.strings.btn_check_update,
-                    ButtonStyle::Neutral,
-                    egui::vec2(96.0, 32.0),
-                    !self.gate.is_busy(),
-                )
-                .clicked()
-                {
-                    do_check = true;
-                }
-
-                if let Some(info) = derived.download
-                    && styled_button(
-                        ui,
-                        self.strings.btn_download_and_extract,
-                        ButtonStyle::Primary,
-                        egui::vec2(150.0, 32.0),
-                        !self.gate.is_busy(),
-                    )
-                    .clicked()
-                {
-                    do_download = Some(info.clone());
-                }
-            });
-
-            if do_check {
-                self.check_update(&ctx);
-            }
-            if let Some(info) = do_download {
-                self.download_update(&ctx, info);
-            }
-        });
-        ui.add_space(10.0);
-    }
-
     /// 文件本位（ADR-0011）：`dlls/` 缺文件时无视版本记录按「本地缺失」比较，
-    /// `derived` 的全部消费者（本地版本行 / 通知文案 / 下载可用性）共用同一判据。
+    /// `derived` 的全部消费者（设置页补丁检查结果 / 通知文案 / 下载可用性）共用同一判据。
     fn local_known_version(&self) -> Option<&str> {
         dll::dlls_present()
             .then_some(self.local_version.as_deref())
@@ -2076,13 +1931,15 @@ impl App {
     }
 
     /// 最近一次结果提示 → 当前语言渲染（切换语言后无需重建 notice，逐帧取当前 strings）。
+    /// 检查更新（补丁更新检查）结果经 `render_patch_notice` 映射：永不渲染补丁版本号
+    /// （#30 验收；#32 后主页面不再有版本行，通知栏是唯一去向，口径与设置对话框一致）。
     fn notice_text(&self) -> Option<(bool, String)> {
         match &self.notice {
             Some(Notice::UpdateChecked) => self
                 .update_flow
                 .derived(self.local_known_version())
                 .notice
-                .map(|n| render_update_notice(&self.strings, &n)),
+                .map(|n| render_patch_notice(&self.strings, &n)),
             Some(n) => Some(render_notice(&self.strings, n)),
             None => None,
         }
@@ -2119,13 +1976,15 @@ impl App {
         }
     }
 
-    /// 主界面内容（向导未激活时渲染）。
+    /// 主界面内容（向导未激活时渲染）：核心闭环 = 部署状态 + 操作按钮组（#32）。
+    /// 已移除：Steam 路径编辑、兼容性小节、在线更新区（全部迁往设置对话框）；
+    /// 本地/线上版本退为内部概念，永不渲染（补丁更新维护在 Settings — General）。
+    /// 新增一行健康风险警示：仅「上游尚未适配 / 未找到核心 DLL」两态出现（点击跳 Settings — Steam）。
     fn main_content(&mut self, ui: &mut egui::Ui) {
         self.top_bar(ui);
-        self.card1(ui);
         self.card2(ui);
+        self.health_warning_line(ui);
         self.action_area(ui);
-        self.card3(ui);
         self.notice_bar(ui);
     }
 }
@@ -2308,50 +2167,38 @@ mod tests {
         assert_eq!(auto_tray_policy(SteamEvent::Stopped, true), None);
     }
 
-    /// 检查更新结果通知文案：分类（已最新/可更新/失败）由「更新流程」派生，此处验证文案映射。
+    /// #32 验收：主页面健康风险警示仅「上游尚未适配 / 未找到核心 DLL」两态产出文案，
+    /// 其余健康态（检查中 / 完美兼容 / 上游已适配未缓存 / 网络不可用）一律不打扰；
+    /// 双语文案均含「Steam」指向（警示行整行点击跳 Settings — Steam）。
     #[test]
-    fn update_notice_text_up_to_date_vs_new_version() {
-        let zh = Strings::new(Lang::Zh);
-        assert_eq!(
-            render_update_notice(&zh, &UpdateNotice::UpToDate { version: "1.4.8" }),
-            (true, "v1.4.8 (本地已是最新版)".to_string())
-        );
-        assert_eq!(
-            render_update_notice(&zh, &UpdateNotice::NewVersion { version: "1.4.8" }),
-            (true, "v1.4.8 (发现可更新版本)".to_string())
-        );
-        let e = updater::UpdateError::Network("t".into());
-        assert_eq!(
-            render_update_notice(&zh, &UpdateNotice::CheckFailed(&e)),
-            (false, zh.update_error(&e))
-        );
+    fn health_warning_only_for_pending_and_missing() {
+        for lang in [Lang::Zh, Lang::En] {
+            let s = Strings::new(lang);
+            for (summary, expect) in [
+                (CompatSummary::Checking, None),
+                (CompatSummary::Ready, None),
+                (CompatSummary::Online, None),
+                (CompatSummary::Network, None),
+                (CompatSummary::Pending, Some(s.main_warning_pending)),
+                (CompatSummary::Missing, Some(s.main_warning_missing)),
+            ] {
+                assert_eq!(health_warning(&s, summary), expect, "{lang:?} {summary:?}");
+            }
+            // 警示文案含「Steam」指向（整行点击跳 Settings — Steam 页签）。
+            assert!(s.main_warning_pending.contains("Steam"), "{lang:?}");
+            assert!(s.main_warning_missing.contains("Steam"), "{lang:?}");
+        }
     }
 
-    /// 切换语言后，检查更新通知重新映射即得新语言文案（结构化分类不锁死语言）。
-    #[test]
-    fn update_notice_follows_language_switch() {
-        let zh = render_update_notice(
-            &Strings::new(Lang::Zh),
-            &UpdateNotice::UpToDate { version: "1.4.8" },
-        );
-        let en = render_update_notice(
-            &Strings::new(Lang::En),
-            &UpdateNotice::UpToDate { version: "1.4.8" },
-        );
-        assert_eq!(zh, (true, "v1.4.8 (本地已是最新版)".to_string()));
-        assert_eq!(en, (true, "v1.4.8 (Up to date)".to_string()));
-        // 英文界面不应出现中文。
-        assert!(!en.1.contains('本'), "en notice 不应含中文: {}", en.1);
-    }
-
-    /// #30 验收：设置对话框「补丁更新检查」结果文案永不渲染补丁版本号——
+    /// #30 验收：补丁更新检查结果文案永不渲染补丁版本号——
     /// 分类来自「更新流程」派生，但三种结果均只呈现定性文案。
+    /// #32 后该映射同时服务设置对话框与主页面通知栏（Card 3 移除，通知栏为唯一去向）。
     #[test]
     fn patch_notice_never_renders_version_numbers() {
         for lang in [Lang::Zh, Lang::En] {
             let s = Strings::new(lang);
-            let up = render_patch_notice(&s, &UpdateNotice::UpToDate { version: "1.4.8" });
-            let new = render_patch_notice(&s, &UpdateNotice::NewVersion { version: "1.4.8" });
+            let up = render_patch_notice(&s, &UpdateNotice::UpToDate);
+            let new = render_patch_notice(&s, &UpdateNotice::NewVersion);
             assert_eq!(up, (true, s.settings_patch_up_to_date.to_string()));
             assert_eq!(new, (true, s.settings_patch_new_version.to_string()));
             for (_, text) in [&up, &new] {
