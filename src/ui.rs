@@ -10,6 +10,7 @@ use egui::Frame;
 use crate::busy::{BusyGate, BusyKind};
 use crate::compat;
 use crate::compat_flow::{self, CompatFlow, CompatSummary};
+use crate::config::{self, Config, Language};
 use crate::dll::{self, DeployStatus};
 use crate::i18n::{Lang, Strings};
 use crate::process::{self, SteamEvent, SteamMonitor};
@@ -263,6 +264,12 @@ impl CompatView {
 }
 
 pub struct App {
+    /// 已持久化的应用配置（config.toml 内存镜像）：只含用户显式提交的选择。语言
+    /// 切换/路径提交先更新它再原子落盘；`steam_path` 工作值（可能来自注册表检测
+    /// 或未提交的编辑缓冲）与之分开，检测结果从不写回（ADR-0012）。
+    config: Config,
+    /// 语言偏好（三态，config.toml 持久化）；`lang` 是其解析出的生效语言。
+    lang_pref: Language,
     lang: Lang,
     strings: Strings,
     steam_path: String,
@@ -362,15 +369,35 @@ impl App {
         install_cjk_font(&cc.egui_ctx);
         install_theme(&cc.egui_ctx);
         let (tx, rx) = mpsc::channel();
-        let lang = crate::i18n::detect_system_lang();
+        // 启动即恢复应用配置（语言偏好 + Steam 路径，见 ADR-0012）：缺失文件 =
+        // 未配置（默认值）；损坏/版本不符 = 类型化错误，降级默认值继续（不 panic、
+        // 不崩溃，错误仅记日志——wizard 落地后再把错误显式呈现到 UI）。
+        let config = match config::load(&config::config_path()) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                log_warn(format!("load config.toml: {e}；使用默认值"));
+                config::Config::defaults()
+            }
+        };
+        let lang_pref = config.language;
+        // auto 跟随系统检测，zh/en 固定（三态解析在 config::Language::effective）。
+        let lang = lang_pref.effective();
         let strings = Strings::new(lang);
         // 窗口标题随语言（zh: OpenSteamTool 一键管理工具 / en: OpenSteamTool Manager）。
         cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Title(
             strings.window_title.to_owned(),
         ));
-        let steam_path = steam::detect_steam_path()
-            .map(|p| p.display().to_string())
-            .unwrap_or_default();
+        // 配置优先恢复 Steam 路径；已持久化路径失效（手改/目录已删）或未设置时
+        // 回退注册表检测（与写入侧同一 is_dir 判据）。检测结果不自动写回配置——
+        // 配置只反映用户显式选择，检测是建议不是选择。
+        let steam_path = if config.steam_path.is_empty() || !Path::new(&config.steam_path).is_dir()
+        {
+            steam::detect_steam_path()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default()
+        } else {
+            config.steam_path.clone()
+        };
         let steam_dir = Path::new(&steam_path);
         let status = dll::check_status(steam_dir);
         let local_version = dll::read_local_version(&dll::dll_dir());
@@ -389,6 +416,8 @@ impl App {
         let flow = CompatFlow::new();
 
         let mut app = Self {
+            config,
+            lang_pref,
             lang,
             strings,
             steam_path,
@@ -596,11 +625,35 @@ impl App {
     }
 
     fn toggle_lang(&mut self) {
-        self.lang = self.lang.toggle();
+        // 顶栏切换把「语言偏好」钉到另一侧（auto 时相对当前生效语言切换）；选择
+        // 持久化，重启后恢复（不再每次回到系统检测）。
+        self.lang_pref = self.lang_pref.toggled(self.lang);
+        self.lang = self.lang_pref.effective();
         self.strings = Strings::new(self.lang);
         self.ctx.send_viewport_cmd(egui::ViewportCommand::Title(
             self.strings.window_title.to_owned(),
         ));
+        self.config.language = self.lang_pref;
+        self.persist_config();
+    }
+
+    /// 把已持久化的配置镜像原子落盘到 `config.toml`；失败仅记日志不中断操作
+    /// （配置是尽力持久化，不是数据正确性关键路径）。
+    fn persist_config(&self) {
+        if let Err(e) = config::save(&config::config_path(), &self.config) {
+            log_warn(format!("persist config: {e}"));
+        }
+    }
+
+    /// 路径编辑会话结束（失焦/浏览选定）后提交：仅当空（未设置）或为有效目录时
+    /// 更新持久化镜像并落盘，避免把无效路径固化到下次启动（无效路径仅会话内
+    /// 生效，重启后回退注册表检测——直到 #26 的 wizard 接管「保存路径无效时引导修复」）。
+    fn commit_steam_path(&mut self) {
+        let p = self.steam_path.trim();
+        if p.is_empty() || Path::new(p).is_dir() {
+            self.config.steam_path = p.to_string();
+            self.persist_config();
+        }
     }
 
     fn check_update(&mut self, ctx: &egui::Context) {
@@ -707,13 +760,25 @@ impl App {
                     let ctx = self.ctx.clone();
                     self.feed_path_changed(&ctx);
                 }
-                if styled_button(ui, self.strings.browse, ButtonStyle::Neutral, egui::vec2(82.0, 34.0), true).clicked()
+                // 编辑会话结束（失焦）即把有效路径落盘到 config.toml（无效路径不固化）。
+                if resp.lost_focus() {
+                    self.commit_steam_path();
+                }
+                if styled_button(
+                    ui,
+                    self.strings.browse,
+                    ButtonStyle::Neutral,
+                    egui::vec2(82.0, 34.0),
+                    true,
+                )
+                .clicked()
                     && let Some(dir) = rfd::FileDialog::new().pick_folder()
                 {
                     self.steam_path = dir.display().to_string();
                     self.refresh_status();
                     let ctx = self.ctx.clone();
                     self.feed_path_changed(&ctx);
+                    self.commit_steam_path();
                 }
             });
             self.compat_section(ui);

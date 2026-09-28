@@ -5,6 +5,7 @@
 mod busy;
 mod compat;
 mod compat_flow;
+mod config;
 mod dll;
 mod fsutil;
 mod i18n;

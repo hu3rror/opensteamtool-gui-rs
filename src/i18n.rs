@@ -11,13 +11,6 @@ pub enum Lang {
 }
 
 impl Lang {
-    pub fn toggle(self) -> Self {
-        match self {
-            Lang::Zh => Lang::En,
-            Lang::En => Lang::Zh,
-        }
-    }
-
     /// 手动切换按钮上的文案：中文界面显示 "EN"，英文界面显示 "中文"。
     pub fn toggle_label(self) -> &'static str {
         match self {
