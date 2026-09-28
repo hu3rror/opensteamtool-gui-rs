@@ -10,12 +10,9 @@ use egui::Frame;
 use crate::busy::{BusyGate, BusyKind};
 use crate::compat;
 use crate::compat_flow::{self, CompatFlow, CompatSummary};
-use crate::config_editor;
-use crate::onlinefix;
 use crate::dll::{self, DeployStatus};
 use crate::i18n::{Lang, Strings};
 use crate::process::{self, SteamEvent, SteamMonitor};
-use crate::settings::{ConfigEditorState, OfStatus, OnlineFixState};
 use crate::steam;
 use crate::steam_state::SteamState;
 use crate::theme::{self, ButtonStyle};
@@ -28,8 +25,6 @@ use crate::workflow::{self, Action};
 
 /// 设置对话框非滚动行的固定高度占用（标题+页签行+顶部固定行+底部固定行+页脚+窗口边距）。
 /// 数值保守偏大：低估会让页脚越界（Modal 是 Area 不约束屏幕），过估只浪费一点滚动区。
-const CFG_FIXED_H: f32 = 300.0; // 配置编辑器页（实测固定行 193 + 安全量）
-const OF_FIXED_H: f32 = 340.0; // OnlineFix 页（实测固定行 234 + 安全量）
 fn install_theme(ctx: &egui::Context) {
     let mut visuals = egui::Visuals::light();
     visuals.panel_fill = theme::PANEL;
@@ -181,17 +176,6 @@ fn render_update_notice(s: &Strings, n: &UpdateNotice) -> (bool, String) {
     }
 }
 
-/// OnlineFix 展示状态 → (文案, 颜色)（状态模块存类型化错误，渲染时按当前语言映射）。
-/// 文案统一经 `Strings`（of_error_text），本函数只保留颜色映射。
-fn of_status_line(strings: &Strings, status: &OfStatus) -> (String, egui::Color32) {
-    match status {
-        OfStatus::Enabled => (strings.of_status_enabled.to_string(), theme::SUCCESS),
-        OfStatus::Disabled => (strings.of_status_disabled.to_string(), theme::WEAK),
-        OfStatus::Copied => (strings.of_copied.to_string(), theme::SUCCESS),
-        OfStatus::Error(e) => (strings.of_error_text(e), theme::DANGER),
-    }
-}
-
 /// n 枚等宽按钮并排时的单按钮宽度：`available` 减去 (n-1) 个手动 gap 与
 /// (n-1) 个 egui 自动插入的 item_spacing 后再均分（egui 在每个 widget 后
 /// 都追加 item_spacing，见 `Layout::advance_after_rects`）。公式漏掉任一项
@@ -245,15 +229,6 @@ enum Notice {
     WorkflowDone(Action, Result<(), workflow::WorkflowError>),
     /// 前置校验失败（类型化错误 → 本地化文案）。
     Precheck(workflow::Precheck),
-}
-
-/// 设置对话框页签（纯 UI 选择，状态层 cfg/of 本就独立，切换零耦合）。
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum SettingsTab {
-    /// 配置编辑器（默认）。
-    Config,
-    /// OnlineFix 启动预设。
-    OnlineFix,
 }
 
 /// 「Steam 核心兼容性」一帧的展示快照（`CompatFlow::display` 零拷贝借用，渲染期无流程借用）。
@@ -322,18 +297,8 @@ pub struct App {
     /// 上一帧是否处于最小化（检测最小化按钮被点击）。
     was_minimized: bool,
 
-    /// 设置对话框是否打开（配置编辑器与 OnlineFix 预设状态见 settings.rs）。
+    /// 设置对话框是否打开（重建落地前为空壳：仅标题 + 关闭）。
     settings_open: bool,
-    /// 配置编辑器状态（缓冲/载入/校验/保存提示，见 settings.rs）。
-    cfg: ConfigEditorState,
-    /// OnlineFix 启动预设状态（账号/AppID/展示状态/写入门闩，见 settings.rs）。
-    of: OnlineFixState,
-    /// 设置对话框当前页签（会话内记忆，默认「配置编辑器」）。
-    settings_tab: SettingsTab,
-    /// 「撤销」按钮点击后的待注入标志（下一帧合成 Ctrl+Z 事件 + 聚焦编辑器）。
-    undo_pending: bool,
-    /// 配置编辑器文本域的实测 widget id（每帧渲染时从 Response 捕获；撤销聚焦用）。
-    editor_id: Option<egui::Id>,
     /// 体检流程状态机（编排见 compat_flow）。
     flow: CompatFlow,
     /// 兼容性明细展开开关（纯 UI 状态，不属于流程）。
@@ -446,11 +411,6 @@ impl App {
             minimize_to_tray: true,
             was_minimized: false,
             settings_open: false,
-            cfg: ConfigEditorState::new(),
-            of: OnlineFixState::new(),
-            settings_tab: SettingsTab::Config,
-            undo_pending: false,
-            editor_id: None,
             flow,
             compat_details_open: false,
         };
@@ -661,314 +621,41 @@ impl App {
         });
     }
 
-    // ---------- 设置对话框（PR-1：TOML 配置编辑器） ----------
+    // ---------- 设置对话框（重建前占位：空壳，仅标题 + 关闭） ----------
 
-    /// 打开设置：置位并标记缓冲待加载（首次进入「配置编辑器」页签时读盘）。
+    /// 打开设置：置位。对话框本体见 `settings_dialog`（Config Editor / OnlineFix 已随 #27 移除）。
     fn open_settings(&mut self) {
         self.settings_open = true;
-        // 配置编辑器：标记待载入（切到该页签首帧读盘）。
-        self.cfg.mark_unloaded();
-        // OnlineFix 区：按当前 Steam 路径刷新账号与 AppID 候选（进程组运行态写入门闩每次写前实时判定）。
-        let steam_dir = Path::new(self.steam_path.trim());
-        self.of.refresh(steam_dir);
     }
 
-    /// 设置对话框主体（模态；Steam 路径无效时仅提示 + 关闭）。
+    /// 设置对话框（模态空壳）：重建落地前仅标题 + 关闭按钮，无任何页签。
     fn settings_dialog(&mut self, ctx: &egui::Context) {
         if !self.settings_open {
             return;
         }
-
-        let steam_dir = Path::new(self.steam_path.trim());
-        let steam_ok = dll::check_status(steam_dir) != DeployStatus::InvalidPath;
-        let target = config_editor::target_path(steam_dir);
-        let file_exists = steam_ok && target.exists();
-        // 窗口内高：中间滚动区高度 = 窗口内高 − 固定行占用，总高永不越界（Modal 是 Area，不约束屏幕）。
-        let win_h = ctx
-            .input(|i| i.viewport().inner_rect)
-            .map_or(520.0, |r| r.height());
-
-        let mut save_clicked = false;
         let mut close_clicked = false;
-        let mut template_clicked = false;
-        let mut template_confirm = false;
-        let mut undo_clicked = false;
-        let mut enable_clicked = false;
-        let mut disable_clicked = false;
-        let mut copy_clicked = false;
-        let mut tab_clicked = None;
-
         egui::Modal::new(egui::Id::new("settings_dialog")).show(ctx, |ui| {
-            ui.set_width(560.0);
+            ui.set_width(320.0);
             ui.heading(self.strings.settings_title);
-            ui.add_space(6.0);
-
-            // 页签行：配置编辑器 / OnlineFix 预设（egui 0.36 无内置 TabView，selectable_label 手写）。
-            ui.horizontal(|ui| {
-                let selected = self.settings_tab == SettingsTab::Config;
-                if ui
-                    .selectable_label(selected, egui::RichText::new(self.strings.settings_tab_config).strong())
-                    .clicked()
-                {
-                    tab_clicked = Some(SettingsTab::Config);
-                }
-                let selected = self.settings_tab == SettingsTab::OnlineFix;
-                if ui
-                    .selectable_label(selected, egui::RichText::new(self.strings.of_title).strong())
-                    .clicked()
-                {
-                    tab_clicked = Some(SettingsTab::OnlineFix);
-                }
-            });
-            ui.add_space(6.0);
-            ui.separator();
-            ui.add_space(6.0);
-
-            if !steam_ok {
-                ui.label(egui::RichText::new(self.strings.settings_no_steam_dir).color(theme::SUB));
-                ui.add_space(14.0);
-                ui.separator();
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if styled_button(ui, self.strings.btn_close, ButtonStyle::Neutral, egui::vec2(80.0, 30.0), true).clicked() {
-                            close_clicked = true;
-                        }
-                    });
-                });
-                return;
-            }
-
-            match self.settings_tab {
-                SettingsTab::Config => {
-                    // 懒加载：首次进入该页签才读盘。
-                    self.cfg.ensure_loaded(&target);
-                    // 顶部固定行：目标文件。
-                    status_line(
-                        ui,
-                        &format!("{}{}", self.strings.settings_target, target.display()),
-                        theme::WEAK,
-                    );
-                    ui.add_space(8.0);
-
-                    // 撤销：上一帧按钮点击 → 本帧合成 Ctrl+Z 并聚焦编辑器（触发 egui 原生撤销，单一系统）。
-                    // 焦点用上一帧渲染捕获的真实 widget id（make_persistent_id 依 ui 作用域而异，不可自行拼装）。
-                    if self.undo_pending {
-                        if let Some(editor_id) = self.editor_id {
-                            ctx.input_mut(|i| i.events.push(egui::Event::Key {
-                                key: egui::Key::Z,
-                                physical_key: None,
-                                pressed: true,
-                                repeat: false,
-                                modifiers: egui::Modifiers::COMMAND,
-                            }));
-                            ui.memory_mut(|mem| mem.request_focus(editor_id));
-                        }
-                        self.undo_pending = false;
-                    }
-
-                    // 中间滚动：仅编辑器。
-                    let h_mid = (win_h - CFG_FIXED_H).max(120.0);
-                    let mut text_edit_id = None;
-                    let editor = egui::ScrollArea::vertical()
-                        .max_height(h_mid)
-                        .show(ui, |ui| {
-                            let resp = ui.add_sized(
-                                egui::vec2(ui.available_width(), (h_mid - 20.0).max(100.0)),
-                                egui::TextEdit::multiline(&mut self.cfg.text)
-                                    .id_salt("settings_cfg_text")
-                                    .code_editor()
-                                    .desired_width(f32::INFINITY),
-                            );
-                            text_edit_id = Some(resp.id);
-                            resp
-                        });
-                    self.editor_id = text_edit_id;
-                    if editor.inner.changed() {
-                        self.cfg.mark_edited(); // 编辑清除「已保存」提示、标记未保存。
-                    }
-                    ui.add_space(6.0);
-
-                    // 底部固定行：状态 + 按钮。
-                    if let Some(err) = &self.cfg.err {
-                        status_line(
-                            ui,
-                            &self.strings.config_edit_error_text(self.lang, err),
-                            theme::DANGER,
-                        );
-                    } else if self.cfg.saved {
-                        status_line(ui, self.strings.ok_config_saved, theme::SUCCESS);
-                    } else if !file_exists {
-                        status_line(ui, self.strings.settings_file_missing, theme::WEAK);
-                    }
-                    ui.add_space(10.0);
-                    ui.horizontal(|ui| {
-                        if styled_button(ui, self.strings.btn_load_template, ButtonStyle::Neutral, egui::vec2(150.0, 30.0), true).clicked()
-                        {
-                            if self.cfg.dirty {
-                                template_confirm = true; // 有未保存修改：先确认再覆盖。
-                            } else {
-                                template_clicked = true;
-                            }
-                        }
-                        ui.add_space(6.0);
-                        if styled_button(ui, self.strings.btn_undo, ButtonStyle::Neutral, egui::vec2(64.0, 30.0), true).clicked() {
-                            undo_clicked = true;
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if styled_button(ui, self.strings.btn_save, ButtonStyle::Primary, egui::vec2(80.0, 30.0), true).clicked() {
-                                save_clicked = true;
-                            }
-                        });
-                    });
-                }
-                SettingsTab::OnlineFix => {
-                    // 写入门闩：快速判定（仅看 steam.exe，2s 缓存）；残留 webhelper 等孤儿由写时实时复查兜底。
-                    let write_blocked = self.steam_running;
-                    if write_blocked {
-                        status_line(ui, self.strings.of_steam_running, theme::WEAK);
-                    } else if self.of.accounts.is_empty() {
-                        status_line(ui, self.strings.of_no_account, theme::WEAK);
-                    } else {
-                        // 顶部固定行：账号选择。
-                        ui.horizontal(|ui| {
-                            ui.label(self.strings.of_account_label);
-                            let label = OnlineFixState::account_name(&self.of.accounts[self.of.account_idx]);
-                            let mut selected_idx = None;
-                            egui::ComboBox::from_id_salt("of_account")
-                                .selected_text(label)
-                                .width(150.0)
-                                .show_ui(ui, |ui| {
-                                    for (i, vdf) in self.of.accounts.iter().enumerate() {
-                                        let selected = self.of.account_idx == i;
-                                        let name = OnlineFixState::account_name(vdf);
-                                        if ui.selectable_label(selected, name).clicked() {
-                                            selected_idx = Some(i);
-                                        }
-                                    }
-                                });
-                            if let Some(i) = selected_idx {
-                                self.of.select_account(i);
-                            }
-                        });
-                        ui.add_space(6.0);
-
-                        // 中间滚动：AppID 输入 + Lua 候选。
-                        let h_mid = (win_h - OF_FIXED_H).max(120.0);
-                        egui::ScrollArea::vertical().max_height(h_mid).show(ui, |ui| {
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label(self.strings.of_appid_label);
-                                let resp = ui.add(
-                                    egui::TextEdit::singleline(&mut self.of.appid)
-                                        .desired_width(96.0)
-                                        .hint_text("0"),
-                                );
-                                if resp.changed() {
-                                    self.of.appid_changed();
-                                }
-                                if !self.of.candidates.is_empty() {
-                                    ui.add_space(8.0);
-                                    let mut picked = None;
-                                    for &id in &self.of.candidates {
-                                        if ui.small_button(id.to_string()).clicked() {
-                                            picked = Some(id);
-                                        }
-                                    }
-                                    if let Some(id) = picked {
-                                        self.of.appid = id.to_string();
-                                        self.of.appid_changed();
-                                    }
-                                }
-                            });
-                        });
-                        ui.add_space(6.0);
-
-                        // 底部固定行：状态 + 按钮 + 单游戏限制提示。
-                        self.of.refresh_status();
-                        if let Some(status) = self.of.status() {
-                            let (text, color) = of_status_line(&self.strings, status);
-                            status_line(ui, &text, color);
-                        }
-                        ui.add_space(8.0);
-                        ui.horizontal(|ui| {
-                            if styled_button(ui, self.strings.of_btn_enable, ButtonStyle::Primary, egui::vec2(120.0, 30.0), true).clicked() {
-                                enable_clicked = true;
-                            }
-                            if styled_button(ui, self.strings.of_btn_disable, ButtonStyle::Neutral, egui::vec2(120.0, 30.0), true).clicked() {
-                                disable_clicked = true;
-                            }
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if styled_button(ui, self.strings.of_btn_copy, ButtonStyle::Neutral, egui::vec2(84.0, 30.0), true).clicked() {
-                                    copy_clicked = true;
-                                }
-                            });
-                        });
-                        ui.add_space(6.0);
-                        // 上游限制提示（spec PR-2）：同一时间仅一个 onlinefix 游戏可运行。
-                        status_line(ui, self.strings.of_single_limit, theme::WEAK);
-                    }
-                }
-            }
-
-            // 页脚：共享「关闭」（始终可见）。
             ui.add_space(8.0);
             ui.separator();
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if styled_button(ui, self.strings.btn_close, ButtonStyle::Neutral, egui::vec2(80.0, 30.0), true).clicked() {
+                    if styled_button(
+                        ui,
+                        self.strings.btn_close,
+                        ButtonStyle::Neutral,
+                        egui::vec2(80.0, 30.0),
+                        true,
+                    )
+                    .clicked()
+                    {
                         close_clicked = true;
                     }
                 });
             });
         });
-
-        // 「从示例模板创建」覆盖确认（顶置模态；是 → 载入模板，否 → 取消）。
-        if template_confirm {
-            let mut confirmed = false;
-            egui::Modal::new(egui::Id::new("confirm_template")).show(ctx, |ui| {
-                ui.set_width(360.0);
-                ui.heading(self.strings.confirm_title);
-                ui.add_space(8.0);
-                ui.label(self.strings.confirm_template_overwrite);
-                ui.add_space(14.0);
-                ui.horizontal(|ui| {
-                    if styled_button(ui, self.strings.yes, ButtonStyle::Primary, egui::vec2(72.0, 30.0), true).clicked() {
-                        confirmed = true;
-                    }
-                    ui.add_space(4.0);
-                    if styled_button(ui, self.strings.no, ButtonStyle::Neutral, egui::vec2(72.0, 30.0), true).clicked() {
-                        // 取消：本帧结束即消失。
-                    }
-                });
-            });
-            if confirmed {
-                template_clicked = true;
-            }
-        }
-
-        if let Some(tab) = tab_clicked {
-            self.settings_tab = tab; // 会话内记忆上次页签。
-        }
-        if undo_clicked {
-            self.undo_pending = true; // 下一帧合成 Ctrl+Z。
-        }
-        if save_clicked {
-            self.cfg.save(&target);
-        }
-        if template_clicked {
-            self.cfg.fill_template();
-        }
-        if enable_clicked {
-            self.of.enable(steam_dir, self.steam_running, &self.steam_state);
-        }
-        if disable_clicked {
-            self.of.disable(steam_dir, self.steam_running, &self.steam_state);
-        }
-        if copy_clicked {
-            ctx.copy_text(onlinefix::ONLINEFIX_ARG.to_owned());
-            self.of.mark_copied();
-        }
         if close_clicked {
             self.settings_open = false;
         }

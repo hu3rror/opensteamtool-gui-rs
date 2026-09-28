@@ -141,6 +141,22 @@ enum RemoteOutcome {
     Error(String),
 }
 
+/// 读取 `<Steam>/opensteamtool.toml` 中 `[remote].url_template`（自定义镜像模板）。
+///
+/// 语义（issue #23 §7.4 第 1 优先级）：自定义镜像**替代**内置 GitHub/jsDelivr 源，
+/// 本函数只负责读值；镜像链决策由 [`build_urls`] 执行。
+/// 文件缺失 / 解析失败 / 键缺失 / 值为空白字符串 → `None`（走官方默认链路）。
+fn remote_url_template(steam_dir: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(steam_dir.join("opensteamtool.toml")).ok()?;
+    let doc = text.parse::<toml_edit::DocumentMut>().ok()?;
+    doc.get("remote")?
+        .get("url_template")?
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+}
+
 /// 构造探测 URL 链：自定义模板存在时**替代**内置源（仅返回自定义 URL）；
 /// 否则 GitHub Raw → jsDelivr 两链（issue #23 §7.4）。
 ///
@@ -302,7 +318,7 @@ fn probe_all_with(
 /// 快速体检（启动/路径变更入口）：离线缓存/验证缓存命中项零网络，立即出绿；
 /// 均未命中项乐观琥珀，后台刷新确认后写入验证缓存。
 pub fn probe_all(steam_dir: &Path) -> OverallHealthReport {
-    let template = crate::config_editor::remote_url_template(steam_dir);
+    let template = remote_url_template(steam_dir);
     let agent = probe_agent();
     let verified = read_verified(&tool_cache_dir());
     probe_all_with(steam_dir, template.as_deref(), |url| head_probe(&agent, url), false, &verified)
@@ -310,7 +326,7 @@ pub fn probe_all(steam_dir: &Path) -> OverallHealthReport {
 
 /// 全量体检（后台网络刷新）：补查镜像链 HEAD，确认适配的项写入验证缓存（下次启动直接绿）。
 pub fn probe_all_refresh(steam_dir: &Path) -> OverallHealthReport {
-    let template = crate::config_editor::remote_url_template(steam_dir);
+    let template = remote_url_template(steam_dir);
     let agent = probe_agent();
     let verified = read_verified(&tool_cache_dir());
     let report = probe_all_with(steam_dir, template.as_deref(), |url| head_probe(&agent, url), true, &verified);
@@ -457,7 +473,7 @@ fn write_cache_file(
 /// T4 暴露给 T5（UI 集成）的入口，T5 接入前保持 allow。
 #[allow(dead_code)]
 pub fn precache(steam_dir: &Path, target: ProbeTarget, sha256: &str) -> Result<(), CompatError> {
-    let template = crate::config_editor::remote_url_template(steam_dir);
+    let template = remote_url_template(steam_dir);
     let urls = build_urls(template.as_deref(), target, sha256);
     let body = download_first(&urls)?;
     write_cache_file(steam_dir, target, sha256, &body)
@@ -468,6 +484,64 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    /// 自定义镜像模板读取：`<Steam>/opensteamtool.toml` 的 `[remote].url_template`。
+    /// 缺失/损坏/键缺失/空值 → None；有效值原样返回（含占位符）。
+    #[test]
+    fn remote_url_template_reads_custom_mirror() {
+        let dir = std::env::temp_dir().join(format!("ost_compat_tpl_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+
+        // 文件不存在 → None（走官方默认链路）。
+        assert_eq!(remote_url_template(&dir), None);
+
+        // 无 `[remote]` 表 → None。
+        fs::write(dir.join("opensteamtool.toml"), "[log]\nlevel = \"debug\"\n").unwrap();
+        assert_eq!(remote_url_template(&dir), None);
+
+        // 键缺失（模板默认注释状态）→ None。
+        fs::write(
+            dir.join("opensteamtool.toml"),
+            "[remote]\n# url_template = \"https://x/{channel}/{component}/{sha256}.toml\"\n",
+        )
+        .unwrap();
+        assert_eq!(remote_url_template(&dir), None);
+
+        // 空串 / 纯空白 → None。
+        fs::write(
+            dir.join("opensteamtool.toml"),
+            "[remote]\nurl_template = \"\"\n",
+        )
+        .unwrap();
+        assert_eq!(remote_url_template(&dir), None);
+        fs::write(
+            dir.join("opensteamtool.toml"),
+            "[remote]\nurl_template = \"   \"\n",
+        )
+        .unwrap();
+        assert_eq!(remote_url_template(&dir), None);
+
+        // 语法错误 → None（容忍用户配置损坏，不报错）。
+        fs::write(
+            dir.join("opensteamtool.toml"),
+            "[remote\nurl_template = \"x\"\n",
+        )
+        .unwrap();
+        assert_eq!(remote_url_template(&dir), None);
+
+        // 有效值 → Some（原样返回，含占位符）。
+        fs::write(
+            dir.join("opensteamtool.toml"),
+            "[remote]\nurl_template = \"https://my.mirror/{channel}/{component}/{sha256}.toml\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            remote_url_template(&dir).as_deref(),
+            Some("https://my.mirror/{channel}/{component}/{sha256}.toml")
+        );
+
+        fs::remove_dir_all(&dir).ok();
+    }
 
     /// 探测目标三方法映射（对齐 issue #23 §7.3 通道映射表）。
     #[test]

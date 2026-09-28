@@ -2,9 +2,6 @@
 
 use crate::busy::BusyKind;
 use crate::compat::CompatError;
-use crate::config_editor::ConfigError;
-use crate::onlinefix::{VdfError, VdfStructureError};
-use crate::settings::{ConfigEditError, OfError};
 use crate::updater::UpdateError;
 use crate::workflow::{Action, Op, Precheck, WorkflowError};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -114,40 +111,7 @@ pub struct Strings {
     pub tray_restart: &'static str,
     pub btn_settings: &'static str,
     pub settings_title: &'static str,
-    /// 设置对话框「配置编辑器」页签标签（OnlineFix 页签复用 of_title）。
-    pub settings_tab_config: &'static str,
-    /// 「目标文件：」前缀（设置对话框显示正在编辑的路径）。
-    pub settings_target: &'static str,
-    pub settings_no_steam_dir: &'static str,
-    pub settings_file_missing: &'static str,
-    pub btn_load_template: &'static str,
-    pub btn_undo: &'static str,
-    /// 「从示例模板创建」覆盖确认弹窗文案（仅存在未保存修改时出现）。
-    pub confirm_template_overwrite: &'static str,
-    pub btn_save: &'static str,
     pub btn_close: &'static str,
-    /// 校验错误前缀（行列定位由 config_error_text 拼接）。
-    pub err_config_parse: &'static str,
-    pub ok_config_saved: &'static str,
-    pub err_config_load: &'static str,
-    pub err_config_save: &'static str,
-    /// OnlineFix 启动预设（PR-2）。
-    pub of_title: &'static str,
-    pub of_steam_running: &'static str,
-    pub of_no_account: &'static str,
-    pub of_account_label: &'static str,
-    pub of_appid_label: &'static str,
-    pub of_status_enabled: &'static str,
-    pub of_status_disabled: &'static str,
-    pub of_btn_enable: &'static str,
-    pub of_btn_disable: &'static str,
-    pub of_btn_copy: &'static str,
-    pub of_copied: &'static str,
-    pub err_of_op: &'static str,
-    pub err_of_invalid_appid: &'static str,
-    pub of_err_root_chain: &'static str,
-    /// 上游限制提示：同一时间仅一个 onlinefix 游戏可运行。
-    pub of_single_limit: &'static str,
     /// Steam 核心兼容性（issue #23 §7.8）。
     pub compat_title: &'static str,
     pub compat_checking: &'static str,
@@ -203,39 +167,6 @@ impl Strings {
         }
     }
 
-    /// TOML 配置校验错误 → 当前语言提示文案（带行列定位）。
-    pub fn config_error_text(&self, lang: Lang, e: &ConfigError) -> String {
-        match lang {
-            Lang::Zh => format!("{}（第 {} 行，第 {} 列）：{}", self.err_config_parse, e.line, e.col, e.message),
-            Lang::En => format!("{} (line {}, column {}): {}", self.err_config_parse, e.line, e.col, e.message),
-        }
-    }
-
-    /// OnlineFix 写入/读取错误 → 当前语言提示文案。
-    pub fn onlinefix_error(&self, e: &VdfError) -> String {
-        match e {
-            VdfError::Io(detail) => format!("{}: {detail}", self.err_of_op),
-            VdfError::Structure(code) => match code {
-                VdfStructureError::MissingRootChain => self.of_err_root_chain.to_string(),
-            },
-        }
-    }
-    /// 配置编辑器类型化错误 → 本地化文案（Load/Save 取前缀，Validation 穿透 lang）。
-    pub fn config_edit_error_text(&self, lang: Lang, e: &ConfigEditError) -> String {
-        match e {
-            ConfigEditError::Load(m) => format!("{}: {m}", self.err_config_load),
-            ConfigEditError::Validation(e) => self.config_error_text(lang, e),
-            ConfigEditError::Save(m) => format!("{}: {m}", self.err_config_save),
-        }
-    }
-    /// OnlineFix 类型化错误 → 当前语言提示文案。
-    pub fn of_error_text(&self, e: &OfError) -> String {
-        match e {
-            OfError::WriteBlocked => self.of_steam_running.to_string(),
-            OfError::InvalidAppid => self.err_of_invalid_appid.to_string(),
-            OfError::Vdf(e) => self.onlinefix_error(e),
-        }
-    }
     /// 兼容性体检错误 → 当前语言提示文案（与 UpdateError 同等待遇；Display 只留给日志）。
     pub fn compat_error_text(&self, e: &CompatError) -> String {
         match e {
@@ -335,34 +266,7 @@ impl Strings {
             tray_restart: "重启 Steam",
             btn_settings: "设置",
             settings_title: "设置",
-            settings_tab_config: "配置编辑器",
-            settings_target: "目标文件：",
-            settings_no_steam_dir: "请先指定有效的 Steam 安装路径，再编辑配置",
-            settings_file_missing: "文件不存在，保存后创建；也可从示例模板开始",
-            btn_load_template: "从示例模板创建",
-            btn_undo: "撤销",
-            confirm_template_overwrite: "从示例模板创建将覆盖当前编辑内容，是否继续？",
-            btn_save: "保存",
             btn_close: "关闭",
-            err_config_parse: "配置格式错误",
-            ok_config_saved: "已保存",
-            err_config_load: "读取配置失败",
-            err_config_save: "保存失败",
-            of_title: "OnlineFix 启动预设",
-            of_steam_running: "Steam 正在运行：请先关闭 Steam 再修改启动参数",
-            of_no_account: "未找到账号配置（userdata/*/config/localconfig.vdf）",
-            of_account_label: "账号：",
-            of_appid_label: "游戏 AppID：",
-            of_status_enabled: "该游戏已启用 -onlinefix",
-            of_status_disabled: "该游戏未启用 -onlinefix",
-            of_btn_enable: "启用 OnlineFix",
-            of_btn_disable: "停用 OnlineFix",
-            of_btn_copy: "复制参数",
-            of_copied: "已复制 -onlinefix",
-            err_of_op: "OnlineFix 操作失败",
-            err_of_invalid_appid: "AppID 无效，请输入数字",
-            of_err_root_chain: "localconfig.vdf 结构异常（缺少 UserLocalConfigStore 根块）",
-            of_single_limit: "注意：同一时间仅一个 onlinefix 游戏可运行",
             compat_title: "Steam 核心兼容性",
             compat_checking: "正在检查兼容性...",
             compat_status_ready: "完美兼容 (已缓存)",
@@ -449,34 +353,7 @@ impl Strings {
             tray_restart: "Restart Steam",
             btn_settings: "Settings",
             settings_title: "Settings",
-            settings_tab_config: "Config Editor",
-            settings_target: "Target file: ",
-            settings_no_steam_dir: "Set a valid Steam install path to edit the config",
-            settings_file_missing: "File does not exist — save to create it, or start from the example template",
-            btn_load_template: "Load Example Template",
-            btn_undo: "Undo",
-            confirm_template_overwrite: "Loading the example template will overwrite your current edits. Continue?",
-            btn_save: "Save",
             btn_close: "Close",
-            err_config_parse: "Invalid config",
-            ok_config_saved: "Saved",
-            err_config_load: "Failed to read config",
-            err_config_save: "Save failed",
-            of_title: "OnlineFix Launch Preset",
-            of_steam_running: "Steam is running — close Steam before changing launch options",
-            of_no_account: "No account config found (userdata/*/config/localconfig.vdf)",
-            of_account_label: "Account: ",
-            of_appid_label: "Game App ID: ",
-            of_status_enabled: "-onlinefix enabled for this game",
-            of_status_disabled: "-onlinefix not enabled",
-            of_btn_enable: "Enable OnlineFix",
-            of_btn_disable: "Disable OnlineFix",
-            of_btn_copy: "Copy Argument",
-            of_copied: "Copied -onlinefix",
-            err_of_op: "OnlineFix operation failed",
-            err_of_invalid_appid: "Invalid App ID — enter a number",
-            of_err_root_chain: "localconfig.vdf is malformed (missing UserLocalConfigStore root)",
-            of_single_limit: "Note: only one onlinefix game can run at a time",
             compat_title: "Steam Core Compatibility",
             compat_checking: "Checking compatibility...",
             compat_status_ready: "Fully Compatible",
@@ -517,78 +394,6 @@ mod tests {
             assert_eq!(
                 s.compat_error_text(&CompatError::Io("y".into())),
                 format!("{}: y", s.err_compat_io)
-            );
-        }
-    }
-
-    /// OfError → 双语文案：三变体各归其位（Vdf 转发 onlinefix_error）。
-    #[test]
-    fn of_error_text_maps_all_variants() {
-        for lang in [Lang::Zh, Lang::En] {
-            let s = Strings::new(lang);
-            assert_eq!(s.of_error_text(&OfError::WriteBlocked), s.of_steam_running);
-            assert_eq!(
-                s.of_error_text(&OfError::InvalidAppid),
-                s.err_of_invalid_appid
-            );
-            let vdf_err = VdfError::Io(std::io::Error::new(std::io::ErrorKind::Other, "t"));
-            assert_eq!(
-                s.of_error_text(&OfError::Vdf(vdf_err)),
-                s.onlinefix_error(&VdfError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "t"
-                )))
-            );
-        }
-    }
-
-    /// ConfigEditError → 双语文案：Load/Validation/Save 三变体；Validation 穿透 lang（行列措辞因语言而异）。
-    #[test]
-    fn config_edit_error_text_maps_variants() {
-        for lang in [Lang::Zh, Lang::En] {
-            let s = Strings::new(lang);
-            assert_eq!(
-                s.config_edit_error_text(lang, &ConfigEditError::Load("m".into())),
-                format!("{}: m", s.err_config_load)
-            );
-            let ce = ConfigError {
-                line: 3,
-                col: 5,
-                message: "e".into(),
-            };
-            assert_eq!(
-                s.config_edit_error_text(lang, &ConfigEditError::Validation(ce.clone())),
-                s.config_error_text(lang, &ce)
-            );
-            assert_eq!(
-                s.config_edit_error_text(lang, &ConfigEditError::Save("m".into())),
-                format!("{}: m", s.err_config_save)
-            );
-        }
-        // 跨语言穿透：zh 实例 + En lang → Validation 按英文格式（措辞随 lang 参数而非实例）。
-        let zh = Strings::new(Lang::Zh);
-        let ce = ConfigError {
-            line: 3,
-            col: 5,
-            message: "e".into(),
-        };
-        let cross = zh.config_edit_error_text(Lang::En, &ConfigEditError::Validation(ce));
-        assert!(
-            cross.contains("line 3"),
-            "跨语言穿透应取 En 行列措辞: {cross}"
-        );
-    }
-
-    /// VdfError::Structure 错误码 → 双语文案（穷尽枚举映射：MissingRootChain → of_err_root_chain）。
-    #[test]
-    fn of_error_text_maps_structure_code() {
-        for lang in [Lang::Zh, Lang::En] {
-            let s = Strings::new(lang);
-            assert_eq!(
-                s.of_error_text(&OfError::Vdf(VdfError::Structure(
-                    VdfStructureError::MissingRootChain
-                ))),
-                s.of_err_root_chain
             );
         }
     }

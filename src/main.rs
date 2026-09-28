@@ -5,13 +5,10 @@
 mod busy;
 mod compat;
 mod compat_flow;
-mod config_editor;
 mod dll;
 mod fsutil;
 mod i18n;
-mod onlinefix;
 mod process;
-mod settings;
 mod steam;
 mod steam_state;
 mod theme;
