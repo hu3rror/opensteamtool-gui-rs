@@ -20,9 +20,13 @@ use crate::theme::{self, ButtonStyle};
 use crate::tray::{Tray, TrayAction};
 use crate::update_flow::{UpdateFlow, UpdateLine, UpdateNotice};
 use crate::updater::{self, OnlineInfo, UpdateError};
+use crate::wizard::{self, DownloadState, Step as WizardStep};
 use crate::workflow::{self, Action};
 
 // 颜色一律取自 theme.rs 语义色板（ADR-0010）：仓库唯一色值来源，勿在此处写内联色值。
+
+/// 向导卡片内容宽度：窄于主界面卡片并整体水平居中，视觉更聚焦、更均衡。
+const WIZARD_CARD_WIDTH: f32 = 430.0;
 
 /// 设置对话框非滚动行的固定高度占用（标题+页签行+顶部固定行+底部固定行+页脚+窗口边距）。
 /// 数值保守偏大：低估会让页脚越界（Modal 是 Area 不约束屏幕），过估只浪费一点滚动区。
@@ -213,6 +217,8 @@ enum Msg {
         epoch: compat_flow::Epoch,
         result: Result<(), compat::CompatError>,
     },
+    /// 首次运行向导的「检查更新 → 下载并解压」完成。
+    WizardDownload(Result<(), UpdateError>),
 }
 
 /// 最近一次结果提示的结构化数据。
@@ -302,6 +308,8 @@ pub struct App {
 
     /// 设置对话框是否打开（重建落地前为空壳：仅标题 + 关闭）。
     settings_open: bool,
+    /// 首次运行向导（`Some` = 向导激活并替代主界面；完成/跳过/关窗后置 `None`）。
+    wizard: Option<wizard::Wizard>,
     /// 体检流程状态机（编排见 compat_flow）。
     flow: CompatFlow,
     /// 兼容性明细展开开关（纯 UI 状态，不属于流程）。
@@ -345,6 +353,216 @@ fn install_cjk_font(ctx: &egui::Context) {
             },
         ],
     ));
+}
+
+/// 首次运行向导的下载动作：检查线上版本后下载解压到 `dlls/`（向导只需一个成败结果）。
+fn wizard_download() -> Result<(), UpdateError> {
+    let info = updater::check_update()?;
+    updater::download_and_extract(&info, &dll::dll_dir())
+}
+
+/// 向导步骤渲染（纯函数：视图 + 文案 → 用户意图 + 卡片矩形；不触碰 App 状态，可单测）。
+///
+/// 布局：窄卡片整体水平居中。`card_frame().show` 的落点不随父布局对齐（Frame 的
+/// `allocate_rect` 原样记录），placer 对齐用的也是父级布局——故外层 `vertical_centered`
+/// 负责把「内容宽 + 边框内外边距」的子区居中，子区内再 `top_down(Center)`（Frame
+/// 子区继承），使卡片内标题/提示/按钮按行居中；输入行占满卡片宽度。
+fn wizard_steps_ui(
+    ui: &mut egui::Ui,
+    strings: Strings,
+    view: &wizard::View,
+) -> (Option<wizard::Event>, egui::Rect) {
+    let mut event: Option<wizard::Event> = None;
+    let mut card_rect = egui::Rect::NOTHING;
+
+    ui.add_space(24.0);
+    let card_w = WIZARD_CARD_WIDTH + card_frame().total_margin().sum().x;
+    // 父级居中布局负责把 card_w 宽的子区水平居中（placer 对齐用的是父布局，传参的
+    // layout 只作用于子区内容）；子区内再 top_down(Center)，使卡片内元素按行居中。
+    ui.vertical_centered(|ui| {
+        ui.allocate_ui_with_layout(
+            egui::vec2(card_w, ui.available_height()),
+            egui::Layout::top_down(egui::Align::Center),
+            |ui| {
+                let resp = card_frame().show(ui, |ui| {
+                    ui.set_width(WIZARD_CARD_WIDTH);
+                    // 标题、步骤指示、提示、单选按钮均按行居中。
+                    ui.label(
+                        egui::RichText::new(strings.wizard_title)
+                            .size(16.0)
+                            .strong()
+                            .color(theme::INK),
+                    );
+                    ui.add_space(4.0);
+                    let n = match view.step {
+                        WizardStep::Language => 1,
+                        WizardStep::SteamPath => 2,
+                        WizardStep::Download => 3,
+                    };
+                    ui.label(
+                        egui::RichText::new(strings.wizard_step_of.replace("{n}", &n.to_string()))
+                            .size(12.0)
+                            .color(theme::WEAK),
+                    );
+                    ui.add_space(18.0);
+
+                    match view.step {
+                        WizardStep::Language => {
+                            ui.label(
+                                egui::RichText::new(strings.wizard_language_prompt).size(13.0),
+                            );
+                            ui.add_space(12.0);
+                            // 选定即推进到步骤 2（该选择立即局部化后续步骤）。
+                            for (lang, label) in [
+                                (Language::Auto, strings.wizard_language_auto),
+                                (Language::Zh, strings.wizard_language_zh),
+                                (Language::En, strings.wizard_language_en),
+                            ] {
+                                if styled_button(
+                                    ui,
+                                    label,
+                                    ButtonStyle::Neutral,
+                                    egui::vec2(240.0, 36.0),
+                                    true,
+                                )
+                                .clicked()
+                                {
+                                    event = Some(wizard::Event::LanguageChosen(lang));
+                                }
+                                ui.add_space(8.0);
+                            }
+                        }
+                        WizardStep::SteamPath => {
+                            ui.label(egui::RichText::new(strings.wizard_path_prompt).size(13.0));
+                            ui.add_space(12.0);
+                            let mut buf = view.steam_path.clone();
+                            // 输入行占满卡片宽度（表单惯例：字段左对齐、撑满可用宽）。
+                            ui.horizontal(|ui| {
+                                let edit_width = (ui.available_width() - 92.0).max(120.0);
+                                let resp = ui.add_sized(
+                                    egui::vec2(edit_width, 34.0),
+                                    egui::TextEdit::singleline(&mut buf)
+                                        .margin(egui::Margin::symmetric(10, 7))
+                                        .hint_text(strings.steam_path_label),
+                                );
+                                if resp.changed() {
+                                    event = Some(wizard::Event::PathEdited(buf.clone()));
+                                }
+                                if styled_button(
+                                    ui,
+                                    strings.browse,
+                                    ButtonStyle::Neutral,
+                                    egui::vec2(82.0, 34.0),
+                                    true,
+                                )
+                                .clicked()
+                                    && let Some(dir) = rfd::FileDialog::new().pick_folder()
+                                {
+                                    event =
+                                        Some(wizard::Event::PathEdited(dir.display().to_string()));
+                                }
+                            });
+                            // 有效性来自状态机快照（PathEdited 同一帧内已推进，下一帧即为最新）。
+                            if !view.path_valid && !view.steam_path.trim().is_empty() {
+                                ui.add_space(6.0);
+                                ui.label(
+                                    egui::RichText::new(strings.wizard_path_invalid)
+                                        .size(12.0)
+                                        .color(theme::DANGER),
+                                );
+                            }
+                            ui.add_space(14.0);
+                            if styled_button(
+                                ui,
+                                strings.wizard_btn_next,
+                                ButtonStyle::Primary,
+                                egui::vec2(140.0, 34.0),
+                                view.path_valid,
+                            )
+                            .clicked()
+                            {
+                                event = Some(wizard::Event::PathSubmitted);
+                            }
+                        }
+                        WizardStep::Download => {
+                            // 子状态文案：Idle 提示需显式开始；Running 进行中；Failed 就地报错。
+                            match &view.download {
+                                DownloadState::Idle => {
+                                    ui.label(
+                                        egui::RichText::new(strings.wizard_download_prompt)
+                                            .size(13.0),
+                                    );
+                                }
+                                DownloadState::Running => {
+                                    ui.label(
+                                        egui::RichText::new(strings.wizard_download_running)
+                                            .size(13.0),
+                                    );
+                                }
+                                DownloadState::Failed(e) => {
+                                    ui.label(
+                                        egui::RichText::new(
+                                            strings
+                                                .wizard_download_failed
+                                                .replace("{err}", &strings.update_error(e)),
+                                        )
+                                        .size(13.0)
+                                        .color(theme::DANGER),
+                                    );
+                                }
+                            }
+                            ui.add_space(16.0);
+                            // 按钮行手动居中（horizontal 占满宽，需前置空间补偿）。
+                            ui.horizontal(|ui| {
+                                let item_gap = ui.spacing().item_spacing.x;
+                                // 主按钮：Idle = 开始下载；Failed = 重试；Running 无主按钮。
+                                let start_label = match &view.download {
+                                    DownloadState::Idle => Some(strings.wizard_btn_download),
+                                    DownloadState::Failed(_) => Some(strings.wizard_btn_retry),
+                                    DownloadState::Running => None,
+                                };
+                                // 副按钮：跳过（任何子状态都可用，跳过不阻塞完成）。
+                                let mut row_w = 120.0; // 跳过按钮恒显示
+                                let mut count = 1;
+                                if start_label.is_some() {
+                                    count += 1;
+                                    row_w += 140.0;
+                                }
+                                row_w += (count - 1) as f32 * item_gap;
+                                ui.add_space(((ui.available_width() - row_w) / 2.0).max(0.0));
+
+                                if let Some(label) = start_label
+                                    && styled_button(
+                                        ui,
+                                        label,
+                                        ButtonStyle::Primary,
+                                        egui::vec2(140.0, 34.0),
+                                        true,
+                                    )
+                                    .clicked()
+                                {
+                                    event = Some(wizard::Event::DownloadRequested);
+                                }
+                                if styled_button(
+                                    ui,
+                                    strings.wizard_btn_skip,
+                                    ButtonStyle::Neutral,
+                                    egui::vec2(120.0, 34.0),
+                                    true,
+                                )
+                                .clicked()
+                                {
+                                    event = Some(wizard::Event::SkipDownload);
+                                }
+                            });
+                        }
+                    }
+                });
+                card_rect = resp.response.rect;
+            },
+        );
+    });
+    (event, card_rect)
 }
 
 /// 自动隐身策略（ADR-0001）：Steam 边沿事件 + 当前窗口显隐 → 目标显隐。
@@ -394,6 +612,10 @@ impl App {
         } else {
             config.steam_path.clone()
         };
+        // 首次运行向导：配置缺失/损坏或已存路径无效时激活（`should_show` 为纯谓词）。
+        // 以当前会话值（配置或注册表检测）播种路径、以配置偏好播种语言；重跑即编辑。
+        let wizard = wizard::should_show(&config::config_path())
+            .then(|| wizard::Wizard::new(lang_pref, steam_path.clone()));
         let steam_dir = Path::new(&steam_path);
         let status = dll::check_status(steam_dir);
         let local_version = dll::read_local_version(&dll::dll_dir());
@@ -436,6 +658,7 @@ impl App {
             minimize_to_tray: true,
             was_minimized: false,
             settings_open: false,
+            wizard,
             flow,
             compat_details_open: false,
         };
@@ -564,6 +787,17 @@ impl App {
                     let ctx = self.ctx.clone();
                     self.on_compat_event(&ctx, compat_flow::Event::PrecacheDone { epoch, result });
                 }
+                Msg::WizardDownload(res) => {
+                    if self.wizard.is_some() {
+                        let ctx = self.ctx.clone();
+                        self.wizard_event(&ctx, wizard::Event::DownloadDone(res));
+                    } else if res.is_ok() {
+                        // 向导已跳过/关窗，但在途下载仍完成：刷新本地版本，避免主界面
+                        // 继续显示陈旧的「补丁缺失」（跳过不等于取消网络请求，以磁盘为准）。
+                        self.local_version = dll::read_local_version(&dll::dll_dir());
+                        self.refresh_status();
+                    }
+                }
             }
         }
     }
@@ -627,14 +861,19 @@ impl App {
     fn toggle_lang(&mut self) {
         // 顶栏切换把「语言偏好」钉到另一侧（auto 时相对当前生效语言切换）；选择
         // 持久化，重启后恢复（不再每次回到系统检测）。
-        self.lang_pref = self.lang_pref.toggled(self.lang);
-        self.lang = self.lang_pref.effective();
+        self.set_language(self.lang_pref.toggled(self.lang));
+        self.config.language = self.lang_pref;
+        self.persist_config();
+    }
+
+    /// 应用语言偏好：更新生效语言、文案、窗口标题（不落盘；持久化由调用方决定）。
+    fn set_language(&mut self, pref: Language) {
+        self.lang_pref = pref;
+        self.lang = pref.effective();
         self.strings = Strings::new(self.lang);
         self.ctx.send_viewport_cmd(egui::ViewportCommand::Title(
             self.strings.window_title.to_owned(),
         ));
-        self.config.language = self.lang_pref;
-        self.persist_config();
     }
 
     /// 把已持久化的配置镜像原子落盘到 `config.toml`；失败仅记日志不中断操作
@@ -672,6 +911,58 @@ impl App {
         self.spawn(ctx, move || {
             Msg::Downloaded(updater::download_and_extract(&info, &dll_dir))
         });
+    }
+
+    // ---------- 首次运行向导（替代主界面，同一窗口） ----------
+
+    /// 向导一帧：渲染当前步骤、收集用户意图、推进状态机并执行效果。
+    fn wizard_ui(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+        let Some(view) = self.wizard.as_ref().map(|w| w.view()) else {
+            return;
+        };
+        let strings = self.strings; // Copy：渲染期自由借用 self。
+        let (event, _) = wizard_steps_ui(ui, strings, &view);
+        if let Some(event) = event {
+            self.wizard_event(ctx, event);
+        }
+    }
+
+    /// 推进向导一个事件：更新语言并执行效果（向导帧 / 下载完成消息 / 关窗兜底共用）。
+    fn wizard_event(&mut self, ctx: &egui::Context, event: wizard::Event) {
+        let (v, effects) = self.wizard.as_mut().unwrap().step(event);
+        self.set_language(v.language);
+        self.exec_wizard_effects(ctx, effects);
+    }
+
+    /// 执行向导效果：spawn 下载，或在结束时持久化语言/路径并切回主界面。
+    fn exec_wizard_effects(&mut self, ctx: &egui::Context, effects: Vec<wizard::Effect>) {
+        for effect in effects {
+            match effect {
+                wizard::Effect::Download => {
+                    let ctx2 = ctx.clone();
+                    self.spawn(&ctx2, || Msg::WizardDownload(wizard_download()));
+                }
+                wizard::Effect::Finish {
+                    language,
+                    steam_path,
+                } => {
+                    // 完成（下载成功）与跳过（显式跳过/关窗）收敛到同一终局：
+                    // 持久化语言与路径，切回主界面。
+                    debug_assert!(
+                        self.wizard.as_ref().is_some_and(|w| w.finished()),
+                        "Finish 效果只能由已结束的向导产出"
+                    );
+                    self.config.language = language;
+                    self.config.steam_path = steam_path.clone();
+                    self.persist_config();
+                    // 语言已在 `wizard_event`（同一 Finish 路径的调用方）应用；此处不重复。
+                    self.steam_path = steam_path;
+                    self.refresh_status();
+                    self.wizard = None;
+                    self.feed_path_changed(ctx);
+                }
+            }
+        }
     }
 
     // ---------- 设置对话框（重建前占位：空壳，仅标题 + 关闭） ----------
@@ -1389,6 +1680,16 @@ impl App {
             });
         }
     }
+
+    /// 主界面内容（向导未激活时渲染）。
+    fn main_content(&mut self, ui: &mut egui::Ui) {
+        self.top_bar(ui);
+        self.card1(ui);
+        self.card2(ui);
+        self.action_area(ui);
+        self.card3(ui);
+        self.notice_bar(ui);
+    }
 }
 
 impl eframe::App for App {
@@ -1403,6 +1704,12 @@ impl eframe::App for App {
         if self.pending_focus {
             self.pending_focus = false;
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+
+        // 向导激活时拦截窗口关闭：取消退出并等同「跳过」落到主界面（永不把用户锁在向导里）。
+        if self.wizard.is_some() && ctx.input(|i| i.viewport().close_requested()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.wizard_event(ctx, wizard::Event::Closed);
         }
 
         // 处理托盘事件（左键/菜单），可能改变窗口显隐。
@@ -1446,19 +1753,20 @@ impl eframe::App for App {
         // eframe 0.36：root Ui 无背景色，须用 CentralPanel 填充整个窗口并绘制背景。
         let mut content_h = 0.0f32;
         egui::CentralPanel::default().show(ui, |ui| {
-            self.top_bar(ui);
-            self.card1(ui);
-            self.card2(ui);
-            self.action_area(ui);
-            self.card3(ui);
-            self.notice_bar(ui);
+            // 首次运行向导替代主界面（同一窗口，无第二原生窗口）。
+            if self.wizard.is_some() {
+                self.wizard_ui(&ctx, ui);
+            } else {
+                self.main_content(ui);
+            }
 
             // 用布局游标测内容底部（min_rect 被 CentralPanel 撑满，不可用）。
             content_h = ui.cursor().top();
         });
 
-        // 首帧按内容高度自适应窗口（消除底部大留白），只设置一次。
-        if !self.autosized && content_h > 0.0 {
+        // 首帧按内容高度自适应窗口（消除底部大留白），只设置一次。向导期间各步
+        // 高度不同，不参与自适应（否则窗口会缩到某一步的高度）。
+        if self.wizard.is_none() && !self.autosized && content_h > 0.0 {
             self.autosized = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
                 ui.available_width().max(620.0),
@@ -1730,6 +2038,54 @@ mod tests {
         assert!(
             long > short_en,
             "Download & Extract New Version 应比 Check Update 更宽，实际 {long}px"
+        );
+    }
+
+    /// 向导布局回归：窄卡片在窗口内水平居中（此前整宽贴左，视觉失衡）；
+    /// 卡片宽度 = 内容宽 + 边框内外边距（含描边），远小于整窗宽。
+    #[test]
+    fn wizard_card_is_horizontally_centered() {
+        let ctx = egui::Context::default();
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(640.0, 520.0),
+            )),
+            ..Default::default()
+        };
+        let mut card = None;
+        let mut full = ctx.run_ui(raw, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let view = wizard::View {
+                    step: WizardStep::Language,
+                    language: Language::Auto,
+                    steam_path: String::new(),
+                    path_valid: false,
+                    download: DownloadState::Idle,
+                };
+                let (_, rect) = wizard_steps_ui(ui, Strings::new(Lang::Zh), &view);
+                card = Some(rect);
+            });
+        });
+        full.textures_delta.clear();
+        let rect = card.expect("向导卡片应有矩形");
+        // 窗口 640 宽（中央面板边距对称）：卡片中心应与窗口中心重合。
+        assert!(
+            (rect.center().x - 320.0).abs() < 0.5,
+            "卡片应水平居中，center.x={}，期望 320",
+            rect.center().x
+        );
+        // 窄卡片：宽度为内容宽 + 边框内外边距，不铺满整窗。
+        let card_w = WIZARD_CARD_WIDTH + card_frame().total_margin().sum().x;
+        assert!(
+            (rect.width() - card_w).abs() < 1.0,
+            "卡片宽应≈{card_w}，实际 {}",
+            rect.width()
+        );
+        assert!(
+            rect.width() < 500.0,
+            "卡片不应是整窗宽（实际 {}",
+            rect.width()
         );
     }
 }

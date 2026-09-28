@@ -17,6 +17,7 @@ mod tray;
 mod ui;
 mod update_flow;
 mod updater;
+mod wizard;
 mod workflow;
 
 use eframe::egui;

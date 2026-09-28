@@ -126,6 +126,24 @@ pub struct Strings {
     pub compat_tip_missing: &'static str,
     pub compat_tip_network: &'static str,
     pub compat_row_dll: &'static str,
+    /// 首次运行向导（wizard 模块渲染）。
+    pub wizard_title: &'static str,
+    /// 步骤指示（`{n}` 由 UI 替换为 1/2/3）。
+    pub wizard_step_of: &'static str,
+    pub wizard_language_prompt: &'static str,
+    pub wizard_language_auto: &'static str,
+    pub wizard_language_zh: &'static str,
+    pub wizard_language_en: &'static str,
+    pub wizard_path_prompt: &'static str,
+    pub wizard_path_invalid: &'static str,
+    pub wizard_btn_next: &'static str,
+    /// 步骤 3 未开始时的提示（下载需用户显式点击，不自动）。
+    pub wizard_download_prompt: &'static str,
+    pub wizard_download_running: &'static str,
+    pub wizard_download_failed: &'static str,
+    pub wizard_btn_download: &'static str,
+    pub wizard_btn_retry: &'static str,
+    pub wizard_btn_skip: &'static str,
 }
 
 impl Strings {
@@ -280,6 +298,21 @@ impl Strings {
             compat_tip_missing: "未找到核心 DLL（steamclient64.dll / steamui.dll）。",
             compat_tip_network: "网络不可用，体检结果未知；已缓存项仍可离线使用。",
             compat_row_dll: "{dll}（{kind}）",
+            wizard_title: "首次运行向导",
+            wizard_step_of: "第 {n} / 3 步",
+            wizard_language_prompt: "请选择界面语言：",
+            wizard_language_auto: "自动（跟随系统）",
+            wizard_language_zh: "中文",
+            wizard_language_en: "English",
+            wizard_path_prompt: "请确认 Steam 安装路径：",
+            wizard_path_invalid: "路径无效：请选择有效的 Steam 安装目录",
+            wizard_btn_next: "下一步",
+            wizard_download_prompt: "补丁尚未下载。点击下方按钮开始下载并解压（可选跳过）。",
+            wizard_download_running: "正在下载并解压补丁...",
+            wizard_download_failed: "补丁下载失败：{err}",
+            wizard_btn_download: "下载并解压",
+            wizard_btn_retry: "重试",
+            wizard_btn_skip: "跳过",
         }
     }
 
@@ -367,6 +400,21 @@ impl Strings {
             compat_tip_missing: "Core DLLs not found (steamclient64.dll / steamui.dll).",
             compat_tip_network: "Network unavailable — results unknown; cached items remain usable offline.",
             compat_row_dll: "{dll} ({kind})",
+            wizard_title: "First-run Setup",
+            wizard_step_of: "Step {n} of 3",
+            wizard_language_prompt: "Choose your interface language:",
+            wizard_language_auto: "Auto (follow system)",
+            wizard_language_zh: "中文",
+            wizard_language_en: "English",
+            wizard_path_prompt: "Confirm your Steam installation path:",
+            wizard_path_invalid: "Invalid path: choose a valid Steam install folder",
+            wizard_btn_next: "Next",
+            wizard_download_prompt: "The patch is not downloaded yet. Click below to download & extract it (or skip).",
+            wizard_download_running: "Downloading & extracting patch...",
+            wizard_download_failed: "Patch download failed: {err}",
+            wizard_btn_download: "Download & Extract",
+            wizard_btn_retry: "Retry",
+            wizard_btn_skip: "Skip",
         }
     }
 }
