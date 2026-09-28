@@ -7,22 +7,25 @@ Windows 原生工具，管理 OpenSteamTool 补丁的部署/卸载与在线更�
 ## 功能
 
 - **部署/卸载补丁**：把 `OpenSteamTool.dll`、`dwmapi.dll`、`xinput1_4.dll` 三个目标 DLL 复制进（或移出）Steam 目录
-- **在线更新**：检查 GitHub Releases 最新版本，下载并解压到本地 `dlls/`
+- **精简主页面**：部署状态 + 操作按钮组（应用并启动 / 启动 / 退出并卸载 / 卸载并重启 / 重启 Steam）；仅当兼容性体检落定「上游尚未适配 / 未找到核心 DLL」时显示一行健康风险警示（点击跳 Settings — Steam）
+- **首次运行向导**：三步引导（语言 → Steam 路径 → 可选补丁下载），任一步可跳过，Settings 中可重跑
+- **双页签设置对话框**：General（语言 / 关于（含应用更新检查）/ 补丁更新检查 / 重新运行向导）与 Steam（路径编辑 + 兼容性体检）
+- **补丁更新维护**：Settings → General → 补丁更新检查——检查后如有新版本即可下载并解压；结果文案不显示补丁版本号
+- **应用更新检查**：Settings → General → 关于区——只检查，发现新版本时打开下载页跳转浏览器（不自更新）
+- **兼容性体检**：对 Steam 核心 DLL 计算哈希并按通道（pattern / IPC）探查上游签名；健康度徽章、自动/手动预热与详情都在 Settings → Steam
 - **Steam 路径自动检测**：按注册表顺序定位，找不到可手动指定
 - **Steam 联动**：检测到 Steam 启动自动藏到系统托盘，退出后恢复；操作完成后自动隐藏
-- **托盘**：左键切换显隐，菜单含「显示」「最小化时自动隐藏到托盘」「退出」
+- **托盘**：左键切换显隐，菜单含「显示」「重启 Steam」「最小化时自动隐藏到托盘」「退出」
 - **中英文切换**：按系统语言自动选择，可手动切换
-- **设置对话框**：编辑 Steam 目录下的上游配置文件 `opensteamtool.toml`（保存前 TOML 语法校验）；文件缺失时可从内置示例模板一键开始
-- **OnlineFix 启动预设**：设置对话框内直接为指定游戏写入/移除 `-onlinefix` 启动选项（写 `localconfig.vdf`，自动备份、需先关 Steam）；支持一键复制参数
 
 ## 使用
 
 1. 到 [Releases](../../releases) 下载最新 ZIP，解压到任意目录
 2. 运行 `opensteamtool-manager.exe`（便携版，无需安装）
-3. 首次使用先补 `dlls/` 目录：点「检查更新」→「下载并解压新版本」自动拉取，或手动放入目标 DLL
-4. 选好 Steam 路径后，点「应用补丁并启动 Steam」
+3. 首次运行自动进入「首次运行向导」：选语言与 Steam 路径，可选下载补丁 DLL（任一步可跳过，稍后再补）
+4. 点「应用补丁并启动 Steam」；若补丁尚未下载，按提示前往 设置 → 通用 → 补丁更新检查，再下载并解压
 
-补丁 DLL 存放在 exe 同目录的 `dlls/`。程序启动无加载感，全部操作在后台线程执行，界面不冻结。
+设置持久化在 exe 同目录的 `config.toml`，整个目录拷贝即迁移。补丁 DLL 存放在 exe 同目录的 `dlls/`。程序启动无加载感，全部操作在后台线程执行，界面不冻结。
 
 ## 构建
 
@@ -58,30 +61,29 @@ git push origin v1.0.0
 
 ## 术语
 
-补丁（Patch）、部署（Deploy）、卸载（Uninstall）、本地版本（Local Version）、线上版本（Online Version）、操作（Action）、自动隐身（Auto-tray）、最小化隐身（Minimize-to-Tray）——定义见 [CONTEXT.md](CONTEXT.md)。
+补丁（Patch）、部署（Deploy）、卸载（Uninstall）、操作（Action）、重启（Restart）、本地版本 / 线上版本（Local Version / Online Version，内部概念）、设置向导（Setup Wizard）、应用更新检查（App Update Check）、补丁更新检查（Patch Update Check）、自动隐身（Auto-tray）、最小化隐身（Minimize-to-Tray）——定义见 [CONTEXT.md](CONTEXT.md)。
 
 ## 源码结构
 
 ```text
 src/
-├── main.rs       # eframe 入口
-├── steam.rs      # 注册表路径检测、steam.exe 启动
+├── main.rs        # eframe 入口
+├── config.rs      # 便携应用配置（exe 同目录 config.toml，ADR-0012）
+├── wizard.rs      # 首次运行向导状态机（ADR-0013）
+├── steam.rs       # 注册表路径检测、steam.exe 启动
 ├── steam_state.rs # Steam 运行状态：共享进程表（alive / group_running / kill）
-├── process.rs    # Steam 进程监视器（2s 轮询缓存与边沿事件）
-├── dll.rs        # 目标 DLL 部署/卸载、本地状态检测
-├── workflow.rs   # 「操作」判定表与顺序执行（plan/execute）
-├── busy.rs       # 忙碌门禁：交互类后台操作互斥（ADR-0007）
-├── updater.rs    # GitHub 检查更新、下载解压
+├── process.rs     # Steam 进程监视器（2s 轮询缓存与边沿事件）
+├── dll.rs         # 目标 DLL 部署/卸载、本地状态检测
+├── workflow.rs    # 「操作」判定表与顺序执行（plan/execute）
+├── busy.rs        # 忙碌门禁：交互类后台操作互斥（ADR-0007）
+├── updater.rs     # 补丁与应用更新检查、下载解压
 ├── update_flow.rs # 更新检查结果唯一事实源（ADR-0008）
-├── compat.rs     # 兼容性体检算子（哈希/探针/预热下载）
+├── compat.rs      # 兼容性体检算子（哈希/探针/预热下载）
 ├── compat_flow.rs # 体检流程编排状态机（ADR-0006）
-├── config_editor.rs # opensteamtool.toml 读取/校验/原子写入（设置对话框）
-├── onlinefix.rs  # localconfig.vdf 启动选项读写（OnlineFix 预设：VDF 解析/备份）
-├── settings.rs   # 设置对话框状态（配置编辑器 + OnlineFix 预设）
-├── fsutil.rs     # 原子写入共享小工具
-├── tray.rs       # 系统托盘
-├── i18n.rs       # 双语文案与错误→文案映射（ADR-0009）
-└── ui.rs         # egui 界面（3 卡片 + 托盘 + 自动隐身接线）
+├── fsutil.rs      # 原子写入共享小工具
+├── tray.rs        # 系统托盘
+├── i18n.rs        # 双语文案与错误→文案映射（ADR-0009）
+└── ui.rs          # egui 界面（主页面 / 设置对话框 / 向导渲染）
 ```
 
 规格说明：已归档为 GitHub issues [#18](https://github.com/hu3rror/opensteamtool-gui-rs/issues/18)–[#23](https://github.com/hu3rror/opensteamtool-gui-rs/issues/23)（SPEC.md 已从仓库移除）。
