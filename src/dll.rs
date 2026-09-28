@@ -54,10 +54,7 @@ pub fn check_status(steam_dir: &Path) -> DeployStatus {
     if steam_dir.as_os_str().is_empty() || !steam_dir.is_dir() {
         return DeployStatus::InvalidPath;
     }
-    if TARGET_DLLS
-        .iter()
-        .all(|dll| steam_dir.join(dll).is_file())
-    {
+    if TARGET_DLLS.iter().all(|dll| steam_dir.join(dll).is_file()) {
         DeployStatus::Deployed
     } else {
         DeployStatus::NotDeployed

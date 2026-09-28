@@ -310,21 +310,18 @@ pub fn precache_targets(report: &OverallHealthReport) -> Vec<(ProbeTarget, Strin
     probes(report)
         .iter()
         .filter_map(|r| match &r.status {
-        compat::ProbeStatus::RemoteAvailable { .. } if !r.signature_cached => {
-            r.sha256.clone().map(|sha| (r.target, sha))
-        }
-        _ => None,
-    })
-    .collect()
+            compat::ProbeStatus::RemoteAvailable { .. } if !r.signature_cached => {
+                r.sha256.clone().map(|sha| (r.target, sha))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// 快速体检后是否需要后台网络刷新：存在短路项（CompatibleOffline）或乐观项
 /// （RemoteAvailable{cached:false}）即需补查。本代数刷新预算已消耗时由流程守卫拦截。
 fn needs_network_refresh(report: &OverallHealthReport) -> bool {
-    probes(report)
-        .map(|p| &p.status)
-        .iter()
-        .any(|s| {
+    probes(report).map(|p| &p.status).iter().any(|s| {
         matches!(
             s,
             compat::ProbeStatus::CompatibleOffline
@@ -482,7 +479,11 @@ mod tests {
         );
         assert_eq!(compat_summary(false, Some(&online)), CompatSummary::Ready);
         let offline = report_with(
-            [S::CompatibleOffline, S::CompatibleOffline, S::CompatibleOffline],
+            [
+                S::CompatibleOffline,
+                S::CompatibleOffline,
+                S::CompatibleOffline,
+            ],
             false,
         );
         assert_eq!(compat_summary(false, Some(&offline)), CompatSummary::Ready);

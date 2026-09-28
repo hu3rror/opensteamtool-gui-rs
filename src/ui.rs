@@ -1,8 +1,8 @@
 //! egui 界面：顶栏 + 3 卡片 + 确认弹窗。
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver, Sender};
 
 use eframe::egui;
 use egui::Frame;
@@ -67,7 +67,6 @@ fn card_frame() -> Frame {
         .corner_radius(egui::CornerRadius::same(10))
         .inner_margin(egui::Margin::symmetric(18, 16))
 }
-
 
 /// 单行文本宽度（按钮自适应撑宽与顶栏标题测宽共用）。
 fn text_width(ui: &egui::Ui, text: &str, font: &egui::FontId, color: egui::Color32) -> f32 {
@@ -190,9 +189,6 @@ fn row_button_width(available: f32, gap: f32, item_spacing: f32, count: u32) -> 
 fn version_line(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
     ui.label(egui::RichText::new(text).size(12.5).color(color));
 }
-
-
-
 
 /// 后台线程 → UI 线程的消息。
 enum Msg {
@@ -614,7 +610,11 @@ impl App {
         self.spawn(ctx, move || {
             let res = workflow::execute(
                 &ops,
-                &workflow::WorkflowCtx { dll_dir, steam_dir, steam },
+                &workflow::WorkflowCtx {
+                    dll_dir,
+                    steam_dir,
+                    steam,
+                },
                 |phase| {
                     let _ = tx.send(Msg::Phase(phase));
                     ctx2.request_repaint();
@@ -731,10 +731,26 @@ impl App {
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // RTL 先放者靠右：语言切换最右，设置在其左（次序维持现状）。
-                if styled_button(ui, self.lang.toggle_label(), ButtonStyle::Neutral, egui::vec2(72.0, 28.0), true).clicked() {
+                if styled_button(
+                    ui,
+                    self.lang.toggle_label(),
+                    ButtonStyle::Neutral,
+                    egui::vec2(72.0, 28.0),
+                    true,
+                )
+                .clicked()
+                {
                     self.toggle_lang();
                 }
-                if styled_button(ui, self.strings.btn_settings, ButtonStyle::Neutral, egui::vec2(72.0, 28.0), true).clicked() {
+                if styled_button(
+                    ui,
+                    self.strings.btn_settings,
+                    ButtonStyle::Neutral,
+                    egui::vec2(72.0, 28.0),
+                    true,
+                )
+                .clicked()
+                {
                     self.open_settings();
                 }
             });
@@ -828,9 +844,9 @@ impl App {
                 } => {
                     let ctx = ctx.clone();
                     self.spawn(&ctx, move || {
-                        let result = targets
-                            .into_iter()
-                            .try_for_each(|(target, sha)| compat::precache(Path::new(&path), target, &sha));
+                        let result = targets.into_iter().try_for_each(|(target, sha)| {
+                            compat::precache(Path::new(&path), target, &sha)
+                        });
                         Msg::CompatPrecached { epoch, result }
                     });
                 }
@@ -852,7 +868,11 @@ impl App {
                 let (rect, _) = ui.allocate_exact_size(egui::vec2(3.0, 13.0), egui::Sense::hover());
                 ui.painter().rect_filled(rect, 0.0, theme::ACCENT);
                 ui.add_space(8.0);
-                ui.label(egui::RichText::new(self.strings.compat_title).size(13.5).strong());
+                ui.label(
+                    egui::RichText::new(self.strings.compat_title)
+                        .size(13.5)
+                        .strong(),
+                );
             });
             ui.add_space(8.0);
             self.compat_badge(ui, v.summary);
@@ -920,19 +940,53 @@ impl App {
     /// 状态徽章（pill badge）：浅色底 + 深色文字 + 状态图标，视觉低于标题、高于辅助行。
     fn compat_badge(&self, ui: &mut egui::Ui, summary: CompatSummary) {
         let (icon, text, fg, bg) = match summary {
-            CompatSummary::Checking => ("○", self.strings.compat_checking, theme::WEAK, theme::BORDER),
-            CompatSummary::Ready => ("✔", self.strings.compat_status_ready, theme::SUCCESS, theme::badge_bg(theme::SUCCESS)),
-            CompatSummary::Online => ("●", self.strings.compat_status_online, theme::WARN, theme::badge_bg(theme::WARN)),
-            CompatSummary::Pending => ("▲", self.strings.compat_status_pending, theme::DANGER, theme::badge_bg(theme::DANGER)),
-            CompatSummary::Missing => ("?", self.strings.compat_status_missing, theme::WEAK, theme::BORDER),
-            CompatSummary::Network => ("?", self.strings.compat_status_network, theme::WEAK, theme::BORDER),
+            CompatSummary::Checking => (
+                "○",
+                self.strings.compat_checking,
+                theme::WEAK,
+                theme::BORDER,
+            ),
+            CompatSummary::Ready => (
+                "✔",
+                self.strings.compat_status_ready,
+                theme::SUCCESS,
+                theme::badge_bg(theme::SUCCESS),
+            ),
+            CompatSummary::Online => (
+                "●",
+                self.strings.compat_status_online,
+                theme::WARN,
+                theme::badge_bg(theme::WARN),
+            ),
+            CompatSummary::Pending => (
+                "▲",
+                self.strings.compat_status_pending,
+                theme::DANGER,
+                theme::badge_bg(theme::DANGER),
+            ),
+            CompatSummary::Missing => (
+                "?",
+                self.strings.compat_status_missing,
+                theme::WEAK,
+                theme::BORDER,
+            ),
+            CompatSummary::Network => (
+                "?",
+                self.strings.compat_status_network,
+                theme::WEAK,
+                theme::BORDER,
+            ),
         };
         egui::Frame::new()
             .fill(bg)
             .corner_radius(egui::CornerRadius::same(12))
             .inner_margin(egui::Margin::symmetric(10, 3))
             .show(ui, |ui| {
-                ui.label(egui::RichText::new(format!("{icon} {text}")).size(12.5).color(fg));
+                ui.label(
+                    egui::RichText::new(format!("{icon} {text}"))
+                        .size(12.5)
+                        .color(fg),
+                );
             });
     }
 
@@ -1218,7 +1272,9 @@ impl App {
             let derived = self.update_flow.derived(self.local_known_version());
             let (online_text, online_color) = match &derived.line {
                 UpdateLine::Unknown => (format!("{}{}", prefix, self.strings.unknown), theme::SUB),
-                UpdateLine::Checking => (format!("{}{}", prefix, self.strings.checking), theme::SUB),
+                UpdateLine::Checking => {
+                    (format!("{}{}", prefix, self.strings.checking), theme::SUB)
+                }
                 UpdateLine::UpToDate { version } => (
                     format!("{}v{} {}", prefix, version, self.strings.up_to_date),
                     theme::SUB,
@@ -1308,7 +1364,8 @@ impl App {
         if let Some(kind) = self.gate.current() {
             ui.horizontal(|ui| {
                 let (rect, _) = ui.allocate_exact_size(egui::vec2(7.0, 7.0), egui::Sense::hover());
-                ui.painter().circle_filled(rect.center(), 3.5, theme::ACCENT);
+                ui.painter()
+                    .circle_filled(rect.center(), 3.5, theme::ACCENT);
                 ui.add_space(6.0);
                 ui.label(
                     egui::RichText::new(self.strings.busy_label(kind))
@@ -1420,12 +1477,26 @@ impl eframe::App for App {
                 ui.label(self.strings.confirm_close_steam);
                 ui.add_space(14.0);
                 ui.horizontal(|ui| {
-                    if styled_button(ui, self.strings.yes, ButtonStyle::Primary, egui::vec2(72.0, 30.0), true).clicked()
+                    if styled_button(
+                        ui,
+                        self.strings.yes,
+                        ButtonStyle::Primary,
+                        egui::vec2(72.0, 30.0),
+                        true,
+                    )
+                    .clicked()
                     {
                         confirmed = true;
                     }
                     ui.add_space(4.0);
-                    if styled_button(ui, self.strings.no, ButtonStyle::Neutral, egui::vec2(72.0, 30.0), true).clicked()
+                    if styled_button(
+                        ui,
+                        self.strings.no,
+                        ButtonStyle::Neutral,
+                        egui::vec2(72.0, 30.0),
+                        true,
+                    )
+                    .clicked()
                     {
                         cancelled = true;
                     }
@@ -1553,7 +1624,10 @@ mod tests {
                 (true, s.success_text(workflow::Action::Launch).to_string())
             );
             assert_eq!(
-                render_notice(&s, &Notice::WorkflowDone(workflow::Action::Launch, Err(wf.clone()))),
+                render_notice(
+                    &s,
+                    &Notice::WorkflowDone(workflow::Action::Launch, Err(wf.clone()))
+                ),
                 (false, s.workflow_error_text(&wf))
             );
             assert_eq!(
@@ -1614,8 +1688,15 @@ mod tests {
         let mut out = None;
         let mut full = ctx.run_ui(raw, |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
-                let short =
-                    styled_button(ui, "检查更新", ButtonStyle::Neutral, egui::vec2(96.0, 32.0), true).rect.width();
+                let short = styled_button(
+                    ui,
+                    "检查更新",
+                    ButtonStyle::Neutral,
+                    egui::vec2(96.0, 32.0),
+                    true,
+                )
+                .rect
+                .width();
                 let long = styled_button(
                     ui,
                     "Download & Extract New Version",
@@ -1625,8 +1706,15 @@ mod tests {
                 )
                 .rect
                 .width();
-                let short_en =
-                    styled_button(ui, "Check Update", ButtonStyle::Neutral, egui::vec2(96.0, 32.0), true).rect.width();
+                let short_en = styled_button(
+                    ui,
+                    "Check Update",
+                    ButtonStyle::Neutral,
+                    egui::vec2(96.0, 32.0),
+                    true,
+                )
+                .rect
+                .width();
                 out = Some((short, long, short_en));
             });
         });
@@ -1644,5 +1732,4 @@ mod tests {
             "Download & Extract New Version 应比 Check Update 更宽，实际 {long}px"
         );
     }
-
 }

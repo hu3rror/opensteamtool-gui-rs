@@ -151,7 +151,10 @@ mod tests {
     #[test]
     fn darken_golden_values() {
         assert_eq!(darken(Color32::WHITE, 1.0), Color32::WHITE);
-        assert_eq!(darken(Color32::WHITE, 0.9), Color32::from_rgb(229, 229, 229));
+        assert_eq!(
+            darken(Color32::WHITE, 0.9),
+            Color32::from_rgb(229, 229, 229)
+        );
         assert_eq!(darken(SUCCESS, 0.92), Color32::from_rgb(0x14, 0x95, 0x44));
         assert_eq!(darken(ACCENT, 0.92), Color32::from_rgb(0x0D, 0x63, 0xAD));
         assert_eq!(darken(ACCENT, 0.0), Color32::from_rgb(0, 0, 0));
@@ -216,7 +219,11 @@ mod tests {
     #[test]
     fn derived_colors_do_not_occupy_slots() {
         let no_dup = |c: Color32| !SLOTS.contains(&c) && !CAUTION_GROUP.contains(&c);
-        for style in [ButtonStyle::Deploy, ButtonStyle::Primary, ButtonStyle::Neutral] {
+        for style in [
+            ButtonStyle::Deploy,
+            ButtonStyle::Primary,
+            ButtonStyle::Neutral,
+        ] {
             let p = style.palette();
             assert!(no_dup(p.hover), "{style:?} hover 占用了槽/警戒色");
             assert_ne!(p.hover, p.bg, "{style:?} hover 与 bg 相同");

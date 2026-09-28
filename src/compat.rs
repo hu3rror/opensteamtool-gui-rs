@@ -10,8 +10,8 @@ use std::fs::{self, File};
 use std::io::{self, Read};
 use std::time::Duration;
 
-use ureq::Agent;
 use std::path::{Path, PathBuf};
+use ureq::Agent;
 
 use sha2::{Digest, Sha256};
 
@@ -171,8 +171,12 @@ fn build_urls(template: Option<&str>, target: ProbeTarget, sha256: &str) -> Vec<
     match template {
         Some(t) => vec![substitute(t)],
         None => vec![
-            substitute("https://raw.githubusercontent.com/OpenSteam001/steam-monitor/{channel}/{component}/{sha256}.toml"),
-            substitute("https://fast.jsdelivr.net/gh/OpenSteam001/steam-monitor@{channel}/{component}/{sha256}.toml"),
+            substitute(
+                "https://raw.githubusercontent.com/OpenSteam001/steam-monitor/{channel}/{component}/{sha256}.toml",
+            ),
+            substitute(
+                "https://fast.jsdelivr.net/gh/OpenSteam001/steam-monitor@{channel}/{component}/{sha256}.toml",
+            ),
         ],
     }
 }
@@ -289,11 +293,36 @@ fn probe_all_with(
     verified: &std::collections::HashMap<ProbeTarget, String>,
 ) -> OverallHealthReport {
     // 哈希去重：steamclient64.dll 由 Pattern 与 IPC 两项共享，只算一次（~25MB×2 → ×1）。
-    let sc_sha = sha256_of_file(&steam_dir.join(ProbeTarget::PatternSteamClient.relative_dll())).ok();
+    let sc_sha =
+        sha256_of_file(&steam_dir.join(ProbeTarget::PatternSteamClient.relative_dll())).ok();
     let ui_sha = sha256_of_file(&steam_dir.join(ProbeTarget::PatternSteamUi.relative_dll())).ok();
-    let steamclient_pattern = probe_one(steam_dir, ProbeTarget::PatternSteamClient, template, &head, network, sc_sha.clone(), verified);
-    let steamui_pattern = probe_one(steam_dir, ProbeTarget::PatternSteamUi, template, &head, network, ui_sha.clone(), verified);
-    let steamclient_ipc = probe_one(steam_dir, ProbeTarget::IpcSteamClient, template, &head, network, sc_sha.clone(), verified);
+    let steamclient_pattern = probe_one(
+        steam_dir,
+        ProbeTarget::PatternSteamClient,
+        template,
+        &head,
+        network,
+        sc_sha.clone(),
+        verified,
+    );
+    let steamui_pattern = probe_one(
+        steam_dir,
+        ProbeTarget::PatternSteamUi,
+        template,
+        &head,
+        network,
+        ui_sha.clone(),
+        verified,
+    );
+    let steamclient_ipc = probe_one(
+        steam_dir,
+        ProbeTarget::IpcSteamClient,
+        template,
+        &head,
+        network,
+        sc_sha.clone(),
+        verified,
+    );
     let reports = [&steamclient_pattern, &steamui_pattern, &steamclient_ipc];
     // Fully Compatible：每项均已适配且本地缓存齐全（issue #23 §7.5）。
     let is_all_compatible = reports.iter().all(|r| {
@@ -321,7 +350,13 @@ pub fn probe_all(steam_dir: &Path) -> OverallHealthReport {
     let template = remote_url_template(steam_dir);
     let agent = probe_agent();
     let verified = read_verified(&tool_cache_dir());
-    probe_all_with(steam_dir, template.as_deref(), |url| head_probe(&agent, url), false, &verified)
+    probe_all_with(
+        steam_dir,
+        template.as_deref(),
+        |url| head_probe(&agent, url),
+        false,
+        &verified,
+    )
 }
 
 /// 全量体检（后台网络刷新）：补查镜像链 HEAD，确认适配的项写入验证缓存（下次启动直接绿）。
@@ -329,7 +364,13 @@ pub fn probe_all_refresh(steam_dir: &Path) -> OverallHealthReport {
     let template = remote_url_template(steam_dir);
     let agent = probe_agent();
     let verified = read_verified(&tool_cache_dir());
-    let report = probe_all_with(steam_dir, template.as_deref(), |url| head_probe(&agent, url), true, &verified);
+    let report = probe_all_with(
+        steam_dir,
+        template.as_deref(),
+        |url| head_probe(&agent, url),
+        true,
+        &verified,
+    );
     // 网络确认 Found 的项持久化为验证缓存；写失败静默（不阻塞 UI 刷新）。
     let entries = verified_from_report(&report);
     let _ = write_verified(&tool_cache_dir(), &entries);
@@ -361,7 +402,11 @@ fn read_verified(tool_dir: &Path) -> std::collections::HashMap<ProbeTarget, Stri
         return HashMap::new();
     };
     let mut map = HashMap::new();
-    for target in [ProbeTarget::PatternSteamClient, ProbeTarget::PatternSteamUi, ProbeTarget::IpcSteamClient] {
+    for target in [
+        ProbeTarget::PatternSteamClient,
+        ProbeTarget::PatternSteamUi,
+        ProbeTarget::IpcSteamClient,
+    ] {
         if let Some(sha) = doc
             .get("verified")
             .and_then(|t| t.get(target_key(target)))
@@ -437,7 +482,9 @@ fn download_first(urls: &[String]) -> Result<Vec<u8>, CompatError> {
     for url in urls {
         match agent.get(url).call() {
             Ok(resp) => {
-                let body = resp.into_body().read_to_vec()
+                let body = resp
+                    .into_body()
+                    .read_to_vec()
                     .map_err(|e| CompatError::Network(format!("read body: {e}")))?;
                 return Ok(body);
             }
@@ -447,8 +494,7 @@ fn download_first(urls: &[String]) -> Result<Vec<u8>, CompatError> {
             Err(e) => last_err = Some(CompatError::Network(e.to_string())),
         }
     }
-    Err(last_err
-        .unwrap_or_else(|| CompatError::Network("no URLs".into())))
+    Err(last_err.unwrap_or_else(|| CompatError::Network("no URLs".into())))
 }
 
 /// 持久化 TOML 到本地缓存：建目录 + 原子写（避免半截文件被上游热重载读到）。
@@ -557,7 +603,10 @@ mod tests {
             "steamclient64.dll"
         );
         assert_eq!(ProbeTarget::PatternSteamUi.relative_dll(), "steamui.dll");
-        assert_eq!(ProbeTarget::IpcSteamClient.relative_dll(), "steamclient64.dll");
+        assert_eq!(
+            ProbeTarget::IpcSteamClient.relative_dll(),
+            "steamclient64.dll"
+        );
     }
 
     /// 标准向量验证：SHA-256("abc")。
@@ -653,14 +702,19 @@ mod tests {
     fn cache_miss_when_missing() {
         let dir = std::env::temp_dir().join(format!("ost_compat_miss_{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
-        assert!(!is_cached(&dir, ProbeTarget::PatternSteamClient, "deadbeef"));
+        assert!(!is_cached(
+            &dir,
+            ProbeTarget::PatternSteamClient,
+            "deadbeef"
+        ));
         assert!(!is_cached(&dir, ProbeTarget::PatternSteamUi, "deadbeef"));
         assert!(!is_cached(&dir, ProbeTarget::IpcSteamClient, "deadbeef"));
         fs::remove_dir_all(&dir).ok();
     }
     /// 伪造 Steam 目录：写两个核心 DLL，返回 (dir, steamclient64 sha, steamui sha)。
     fn fake_steam_dir(tag: &str) -> (PathBuf, String, String) {
-        let dir = std::env::temp_dir().join(format!("ost_compat_probe_{tag}_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("ost_compat_probe_{tag}_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("steamclient64.dll"), b"client-bytes").unwrap();
@@ -758,7 +812,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ost_compat_nodll_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        let report = probe_all_with(&dir, None, |_| RemoteOutcome::Found, true, &std::collections::HashMap::new());
+        let report = probe_all_with(
+            &dir,
+            None,
+            |_| RemoteOutcome::Found,
+            true,
+            &std::collections::HashMap::new(),
+        );
         assert_eq!(report.steamclient_pattern.status, ProbeStatus::FileNotFound);
         assert_eq!(report.steamui_pattern.status, ProbeStatus::FileNotFound);
         assert_eq!(report.steamclient_ipc.status, ProbeStatus::FileNotFound);
@@ -774,10 +834,25 @@ mod tests {
         write_cache(&dir, ProbeTarget::PatternSteamClient, &sc_sha);
         write_cache(&dir, ProbeTarget::PatternSteamUi, &ui_sha);
         write_cache(&dir, ProbeTarget::IpcSteamClient, &sc_sha);
-        let report = probe_all_with(&dir, None, |_| RemoteOutcome::NotFound404, true, &std::collections::HashMap::new());
-        assert_eq!(report.steamclient_pattern.status, ProbeStatus::CompatibleOffline);
-        assert_eq!(report.steamui_pattern.status, ProbeStatus::CompatibleOffline);
-        assert_eq!(report.steamclient_ipc.status, ProbeStatus::CompatibleOffline);
+        let report = probe_all_with(
+            &dir,
+            None,
+            |_| RemoteOutcome::NotFound404,
+            true,
+            &std::collections::HashMap::new(),
+        );
+        assert_eq!(
+            report.steamclient_pattern.status,
+            ProbeStatus::CompatibleOffline
+        );
+        assert_eq!(
+            report.steamui_pattern.status,
+            ProbeStatus::CompatibleOffline
+        );
+        assert_eq!(
+            report.steamclient_ipc.status,
+            ProbeStatus::CompatibleOffline
+        );
         assert!(report.is_all_compatible);
         assert!(!report.has_missing_cache);
         let _ = fs::remove_dir_all(&dir);
@@ -787,7 +862,13 @@ mod tests {
     #[test]
     fn probe_available_online_with_missing_cache() {
         let (dir, _, _) = fake_steam_dir("online");
-        let report = probe_all_with(&dir, None, |_| RemoteOutcome::Found, true, &std::collections::HashMap::new());
+        let report = probe_all_with(
+            &dir,
+            None,
+            |_| RemoteOutcome::Found,
+            true,
+            &std::collections::HashMap::new(),
+        );
         assert_eq!(
             report.steamclient_pattern.status,
             ProbeStatus::RemoteAvailable { cached: false }
@@ -801,7 +882,13 @@ mod tests {
     #[test]
     fn probe_network_error_when_not_cached() {
         let (dir, _, _) = fake_steam_dir("nerr");
-        let report = probe_all_with(&dir, None, |_| RemoteOutcome::Error("timeout".into()), true, &std::collections::HashMap::new());
+        let report = probe_all_with(
+            &dir,
+            None,
+            |_| RemoteOutcome::Error("timeout".into()),
+            true,
+            &std::collections::HashMap::new(),
+        );
         assert!(matches!(
             report.steamclient_pattern.status,
             ProbeStatus::NetworkError(_)
@@ -817,10 +904,25 @@ mod tests {
         write_cache(&dir, ProbeTarget::PatternSteamClient, &sc_sha);
         write_cache(&dir, ProbeTarget::PatternSteamUi, &ui_sha);
         write_cache(&dir, ProbeTarget::IpcSteamClient, &sc_sha);
-        let report = probe_all_with(&dir, None, |_| panic!("head must not be called"), false, &std::collections::HashMap::new());
-        assert_eq!(report.steamclient_pattern.status, ProbeStatus::CompatibleOffline);
-        assert_eq!(report.steamui_pattern.status, ProbeStatus::CompatibleOffline);
-        assert_eq!(report.steamclient_ipc.status, ProbeStatus::CompatibleOffline);
+        let report = probe_all_with(
+            &dir,
+            None,
+            |_| panic!("head must not be called"),
+            false,
+            &std::collections::HashMap::new(),
+        );
+        assert_eq!(
+            report.steamclient_pattern.status,
+            ProbeStatus::CompatibleOffline
+        );
+        assert_eq!(
+            report.steamui_pattern.status,
+            ProbeStatus::CompatibleOffline
+        );
+        assert_eq!(
+            report.steamclient_ipc.status,
+            ProbeStatus::CompatibleOffline
+        );
         assert!(report.is_all_compatible);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -829,7 +931,13 @@ mod tests {
     #[test]
     fn probe_optimistic_when_uncached_and_offline() {
         let (dir, _, _) = fake_steam_dir("optimistic");
-        let report = probe_all_with(&dir, None, |_| panic!("head must not be called"), false, &std::collections::HashMap::new());
+        let report = probe_all_with(
+            &dir,
+            None,
+            |_| panic!("head must not be called"),
+            false,
+            &std::collections::HashMap::new(),
+        );
         assert_eq!(
             report.steamclient_pattern.status,
             ProbeStatus::RemoteAvailable { cached: false }
@@ -850,7 +958,13 @@ mod tests {
         write_cache(&dir, ProbeTarget::PatternSteamClient, &sc_sha);
         write_cache(&dir, ProbeTarget::PatternSteamUi, &ui_sha);
         write_cache(&dir, ProbeTarget::IpcSteamClient, &sc_sha);
-        let report = probe_all_with(&dir, None, |_| RemoteOutcome::Found, true, &std::collections::HashMap::new());
+        let report = probe_all_with(
+            &dir,
+            None,
+            |_| RemoteOutcome::Found,
+            true,
+            &std::collections::HashMap::new(),
+        );
         assert_eq!(
             report.steamclient_pattern.status,
             ProbeStatus::RemoteAvailable { cached: true }
@@ -944,7 +1058,13 @@ mod tests {
     #[test]
     fn verified_from_report_picks_available() {
         let (dir, _, _) = fake_steam_dir("verpick");
-        let report = probe_all_with(&dir, None, |_| RemoteOutcome::Found, true, &std::collections::HashMap::new());
+        let report = probe_all_with(
+            &dir,
+            None,
+            |_| RemoteOutcome::Found,
+            true,
+            &std::collections::HashMap::new(),
+        );
         let entries = verified_from_report(&report);
         assert_eq!(entries.len(), 3);
         let targets: Vec<_> = entries.iter().map(|(t, _)| *t).collect();
@@ -960,7 +1080,13 @@ mod tests {
         let (dir, sc_sha, _) = fake_steam_dir("verhit");
         let mut verified = std::collections::HashMap::new();
         verified.insert(ProbeTarget::PatternSteamClient, sc_sha.clone());
-        let report = probe_all_with(&dir, None, |_| panic!("head must not be called"), false, &verified);
+        let report = probe_all_with(
+            &dir,
+            None,
+            |_| panic!("head must not be called"),
+            false,
+            &verified,
+        );
         assert_eq!(
             report.steamclient_pattern.status,
             ProbeStatus::RemoteAvailable { cached: true }
@@ -984,7 +1110,13 @@ mod tests {
         write_cache(&dir, ProbeTarget::PatternSteamClient, &sc_sha);
         let mut verified = std::collections::HashMap::new();
         verified.insert(ProbeTarget::PatternSteamClient, sc_sha.clone());
-        let report = probe_all_with(&dir, None, |_| panic!("head must not be called"), false, &verified);
+        let report = probe_all_with(
+            &dir,
+            None,
+            |_| panic!("head must not be called"),
+            false,
+            &verified,
+        );
         assert_eq!(
             report.steamclient_pattern.status,
             ProbeStatus::CompatibleOffline

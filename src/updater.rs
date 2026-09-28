@@ -14,8 +14,7 @@ use crate::dll::{TARGET_DLLS, VERSION_FILE};
 const RELEASES_URL: &str =
     "https://api.github.com/repos/OpenSteam001/OpenSteamTool/releases/latest";
 /// 浏览器标识 User-Agent（GitHub API 要求）。
-const USER_AGENT: &str =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36 OpenSteamTool-Manager";
+const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36 OpenSteamTool-Manager";
 
 /// 检查更新请求超时（连接 10s，总体 30s——API 响应小，快超快速失败）。
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -50,7 +49,6 @@ pub(crate) fn download_agent() -> Agent {
         .build()
         .into()
 }
-
 
 /// 更新相关错误，UI 层据此映射双语文案。
 #[derive(Clone, Debug)]
@@ -109,13 +107,11 @@ pub fn check_update() -> Result<OnlineInfo, UpdateError> {
         .get("assets")
         .and_then(|v| v.as_array())
         .and_then(|assets| {
-            assets
-                .iter()
-                .find(|a| {
-                    a.get("name")
-                        .and_then(|n| n.as_str())
-                        .is_some_and(|n| n.ends_with(".zip"))
-                })
+            assets.iter().find(|a| {
+                a.get("name")
+                    .and_then(|n| n.as_str())
+                    .is_some_and(|n| n.ends_with(".zip"))
+            })
         })
         .and_then(|a| a.get("browser_download_url"))
         .and_then(|u| u.as_str())
@@ -154,10 +150,10 @@ pub fn download_and_extract(info: &OnlineInfo, dll_dir: &Path) -> Result<(), Upd
 /// 从内存 zip 中仅提取目标 DLL 集合成员写入 `dll_dir`，成功后写 `version.txt`。
 fn extract_update(bytes: &[u8], dll_dir: &Path, version: &str) -> Result<(), UpdateError> {
     // 便携版可能没有 dlls/ 目录（只拷了 exe），写入前确保存在。
-    std::fs::create_dir_all(dll_dir)
-        .map_err(|e| UpdateError::Io(format!("create dir: {e}")))?;
+    std::fs::create_dir_all(dll_dir).map_err(|e| UpdateError::Io(format!("create dir: {e}")))?;
 
-    let mut archive = ZipArchive::new(Cursor::new(bytes)).map_err(|e| UpdateError::Parse(format!("open zip: {e}")))?;
+    let mut archive = ZipArchive::new(Cursor::new(bytes))
+        .map_err(|e| UpdateError::Parse(format!("open zip: {e}")))?;
 
     let mut extracted: Vec<String> = Vec::new();
     for i in 0..archive.len() {
@@ -215,13 +211,11 @@ mod tests {
             .get("assets")
             .and_then(|v| v.as_array())
             .and_then(|assets| {
-                assets
-                    .iter()
-                    .find(|a| {
-                        a.get("name")
-                            .and_then(|n| n.as_str())
-                            .is_some_and(|n| n.ends_with(".zip"))
-                    })
+                assets.iter().find(|a| {
+                    a.get("name")
+                        .and_then(|n| n.as_str())
+                        .is_some_and(|n| n.ends_with(".zip"))
+                })
             })
             .and_then(|a| a.get("browser_download_url"))
             .and_then(|u| u.as_str())
@@ -239,13 +233,11 @@ mod tests {
             .get("assets")
             .and_then(|v| v.as_array())
             .and_then(|assets| {
-                assets
-                    .iter()
-                    .find(|a| {
-                        a.get("name")
-                            .and_then(|n| n.as_str())
-                            .is_some_and(|n| n.ends_with(".zip"))
-                    })
+                assets.iter().find(|a| {
+                    a.get("name")
+                        .and_then(|n| n.as_str())
+                        .is_some_and(|n| n.ends_with(".zip"))
+                })
             })
             .and_then(|a| a.get("browser_download_url"))
             .and_then(|u| u.as_str());
@@ -261,7 +253,8 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut zw = zip::ZipWriter::new(Cursor::new(&mut buf));
-            let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+            let opts =
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
             for name in [
                 "OpenSteamTool.dll",
                 "dwmapi.dll",
@@ -282,7 +275,10 @@ mod tests {
         for dll in TARGET_DLLS {
             assert!(dir.join(dll).is_file(), "missing {dll}");
         }
-        assert!(!dir.join("readme.txt").exists(), "readme.txt should not be extracted");
+        assert!(
+            !dir.join("readme.txt").exists(),
+            "readme.txt should not be extracted"
+        );
         assert_eq!(
             std::fs::read_to_string(dir.join(VERSION_FILE)).unwrap(),
             "1.4.8"
@@ -298,7 +294,8 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut zw = zip::ZipWriter::new(Cursor::new(&mut buf));
-            let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+            let opts =
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
             for dll in TARGET_DLLS {
                 zw.start_file(dll, opts).unwrap();
                 zw.write_all(b"x").unwrap();
@@ -328,7 +325,8 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut zw = zip::ZipWriter::new(Cursor::new(&mut buf));
-            let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+            let opts =
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
             zw.start_file("readme.txt", opts).unwrap();
             zw.write_all(b"hi").unwrap();
             zw.finish().unwrap();
