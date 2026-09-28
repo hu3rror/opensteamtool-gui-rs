@@ -128,6 +128,12 @@ pub struct Strings {
     pub compat_row_dll: &'static str,
     /// 设置对话框页签（#30 落地 General；#31 追加 Steam）。
     pub settings_tab_general: &'static str,
+    /// 设置对话框页签「Steam」（#31；Steam 路径编辑 + 兼容性小节）。
+    pub settings_tab_steam: &'static str,
+    /// Settings — Steam 路径小节标题（#31）。
+    pub settings_steam_title: &'static str,
+    /// Settings — Steam 手输路径失焦/回车校验失败的内联错误（#31；非法输入不落盘）。
+    pub settings_steam_path_invalid: &'static str,
     /// Settings — General 语言小节标题。
     pub settings_language_title: &'static str,
     /// Settings — General 关于小节标题。
@@ -305,6 +311,9 @@ impl Strings {
             settings_title: "设置",
             btn_close: "关闭",
             settings_tab_general: "通用",
+            settings_tab_steam: "Steam",
+            settings_steam_title: "Steam 路径",
+            settings_steam_path_invalid: "路径无效：请输入有效的 Steam 安装目录",
             settings_language_title: "语言",
             settings_about_title: "关于",
             settings_version_label: "软件版本",
@@ -423,6 +432,9 @@ impl Strings {
             settings_title: "Settings",
             btn_close: "Close",
             settings_tab_general: "General",
+            settings_tab_steam: "Steam",
+            settings_steam_title: "Steam Path",
+            settings_steam_path_invalid: "Invalid path: enter a valid Steam install folder",
             settings_language_title: "Language",
             settings_about_title: "About",
             settings_version_label: "Version",

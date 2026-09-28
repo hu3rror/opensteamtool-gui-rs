@@ -28,6 +28,10 @@ use crate::workflow::{self, Action};
 /// 向导卡片内容宽度：窄于主界面卡片并整体水平居中，视觉更聚焦、更均衡。
 const WIZARD_CARD_WIDTH: f32 = 430.0;
 
+/// 设置对话框内容宽度：须容纳 Settings — Steam 页签兼容性小节首行（标题 + 徽章 +
+/// 预热/详细信息按钮，英文为最宽组合，见 `settings_steam_compat_row_fits_dialog_width`）。
+const SETTINGS_DIALOG_WIDTH: f32 = 580.0;
+
 fn install_theme(ctx: &egui::Context) {
     let mut visuals = egui::Visuals::light();
     visuals.panel_fill = theme::PANEL;
@@ -245,10 +249,65 @@ enum Notice {
     Precheck(workflow::Precheck),
 }
 
-/// 设置对话框页签（#30 落地 General；#31 在此追加 Steam）。
+/// 设置对话框页签。#30 落地 General；#31 追加 Steam（Steam 路径编辑 + 兼容性小节）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum SettingsTab {
     General,
+    Steam,
+}
+
+/// Settings — Steam 页签的路径编辑状态（纯逻辑：编辑缓冲 + 提交判定，可单测）。
+///
+/// 与工作路径 `steam_path` 分离（ADR-0012 精神）：手输文本先落缓冲，失焦/回车提交
+/// 时才判定——有效输入产出提交值（由调用方更新工作路径、持久化并喂体检流程）；非法
+/// 输入不产出提交值，仅置内联错误（#31 验收：非法输入永不落盘、不污染工作路径）。
+/// 渲染在 UI 层（`settings_steam`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SteamPathEditor {
+    /// 文本框当前内容（TextEdit 直接改写；打开对话框时以工作路径播种）。
+    buffer: String,
+    /// 上次提交是否非法（内联错误显示；编辑后清除）。
+    invalid: bool,
+}
+
+/// 路径提交结果（调用方按结果动作；判据与分支全部可单测）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SteamPathCommit {
+    /// 有效且值已变更：调用方更新工作路径、落盘 App Config 并喂体检流程。
+    Changed(String),
+    /// 有效但未变更（含未设置的空串与现值相同）：无需落盘/刷新/喂流程。
+    Unchanged,
+    /// 非空且非目录：非法（置内联错误，不产出提交值，调用方不落盘）。
+    Invalid,
+}
+
+impl SteamPathEditor {
+    /// 以当前工作路径为初值（打开设置对话框时调用；编辑起点 = 现值，编辑而非重置）。
+    fn new(seed: &str) -> Self {
+        Self {
+            buffer: seed.to_string(),
+            invalid: false,
+        }
+    }
+
+    /// 提交（失焦/回车）：判据与主页面路径提交同口径（ADR-0012「空 = 未设置」是合法
+    /// 终态，`config.toml` 允许空 `steam_path`、启动回退注册表检测）——空串视为未设置
+    /// （不报错、值未变更时无动作），非空则须为有效目录。与向导步骤 2 的严格判据
+    /// （空也拒绝）不同：那是「必须有路径才能继续」的流程，设置页是「可留空」的编辑。
+    fn submit(&mut self, current: &str) -> SteamPathCommit {
+        let p = self.buffer.trim();
+        if p.is_empty() || Path::new(p).is_dir() {
+            self.invalid = false;
+            if p == current {
+                SteamPathCommit::Unchanged
+            } else {
+                SteamPathCommit::Changed(p.to_string())
+            }
+        } else {
+            self.invalid = true;
+            SteamPathCommit::Invalid
+        }
+    }
 }
 
 /// 「Steam 核心兼容性」一帧的展示快照（`CompatFlow::display` 零拷贝借用，渲染期无流程借用）。
@@ -325,8 +384,10 @@ pub struct App {
 
     /// 设置对话框是否打开。
     settings_open: bool,
-    /// 设置对话框当前页签（#30 仅 General；#31 追加 Steam）。
+    /// 设置对话框当前页签（#30 General + #31 Steam）。
     settings_tab: SettingsTab,
+    /// Settings — Steam 页签路径编辑状态（缓冲 + 内联错误；打开对话框时播种）。
+    settings_steam: SteamPathEditor,
     /// 应用更新检查结果（Settings — General About 区；None = 尚未检查）。
     /// 检查中由 `app_update_checking` 表达（发起时覆盖旧结果）。
     app_update: Option<Result<updater::AppUpdateCheckResult, UpdateError>>,
@@ -683,6 +744,7 @@ impl App {
             was_minimized: false,
             settings_open: false,
             settings_tab: SettingsTab::General,
+            settings_steam: SteamPathEditor::new(""),
             app_update: None,
             app_update_checking: false,
             wizard,
@@ -1010,12 +1072,13 @@ impl App {
 
     // ---------- 设置对话框（General 页签；Steam 页签见 #31） ----------
 
-    /// 打开设置：置位。
+    /// 打开设置：置位，并以当前工作路径播种 Steam 页签的编辑缓冲（重跑即编辑）。
     fn open_settings(&mut self) {
         self.settings_open = true;
+        self.settings_steam = SteamPathEditor::new(&self.steam_path);
     }
 
-    /// 设置对话框：页签骨架 + General 页签（#30）。全部控件即改即生效并持久化
+    /// 设置对话框：页签骨架 + General / Steam 页签。全部控件即改即生效并持久化
     /// （无 OK/Cancel）；补丁更新检查 / 下载并解压仍走忙碌门禁互斥。
     /// 布局：标题 + 页签行固定，中间内容区滚动（窗口高度有限，Modal 是 Area 不约束屏幕）。
     fn settings_dialog(&mut self, ctx: &egui::Context) {
@@ -1024,27 +1087,33 @@ impl App {
         }
         let mut close_clicked = false;
         egui::Modal::new(egui::Id::new("settings_dialog")).show(ctx, |ui| {
-            ui.set_width(380.0);
+            ui.set_width(SETTINGS_DIALOG_WIDTH);
             ui.heading(self.strings.settings_title);
             ui.add_space(8.0);
-            // 页签行（#30 仅 General；#31 在此追加 Steam 页签）。
-            let tab = SettingsTab::General;
-            let style = if self.settings_tab == tab {
-                ButtonStyle::Primary
-            } else {
-                ButtonStyle::Neutral
-            };
-            if styled_button(
-                ui,
-                self.strings.settings_tab_general,
-                style,
-                egui::vec2(88.0, 28.0),
-                true,
-            )
-            .clicked()
-            {
-                self.settings_tab = tab;
-            }
+            // 页签行（#30 General + #31 Steam）。
+            ui.horizontal(|ui| {
+                for (tab, label) in [
+                    (SettingsTab::General, self.strings.settings_tab_general),
+                    (SettingsTab::Steam, self.strings.settings_tab_steam),
+                ] {
+                    let style = if self.settings_tab == tab {
+                        ButtonStyle::Primary
+                    } else {
+                        ButtonStyle::Neutral
+                    };
+                    if styled_button(ui, label, style, egui::vec2(88.0, 28.0), true).clicked()
+                        && self.settings_tab != tab
+                    {
+                        // 离开 Steam 页签前提交未落地路径编辑：页签行先于内容区渲染，
+                        // 点击页签会夺走焦点但 Steam 文本框当帧不再渲染，失焦提交被吞。
+                        if self.settings_tab == SettingsTab::Steam {
+                            self.commit_settings_steam_path(ctx);
+                        }
+                        self.settings_tab = tab;
+                    }
+                    ui.add_space(4.0);
+                }
+            });
             ui.add_space(8.0);
             ui.separator();
             ui.add_space(8.0);
@@ -1054,8 +1123,9 @@ impl App {
             let max_scroll_h = (ctx.content_rect().height() - 160.0 - 24.0).clamp(200.0, 420.0);
             egui::ScrollArea::vertical()
                 .max_height(max_scroll_h)
-                .show(ui, |ui| {
-                    self.settings_general(ui, ctx);
+                .show(ui, |ui| match self.settings_tab {
+                    SettingsTab::General => self.settings_general(ui, ctx),
+                    SettingsTab::Steam => self.settings_steam(ui, ctx),
                 });
             ui.add_space(12.0);
             ui.separator();
@@ -1077,6 +1147,9 @@ impl App {
             });
         });
         if close_clicked {
+            // 关闭前提交 Steam 页签未落地编辑（兜底：无论焦点时序，有效提交都不丢失；
+            // 未变更的判定让重复提交是 no-op）。
+            self.commit_settings_steam_path(ctx);
             self.settings_open = false;
         }
     }
@@ -1287,6 +1360,78 @@ impl App {
         .clicked()
         {
             self.rerun_wizard();
+        }
+    }
+
+    /// Settings — Steam 页签（#31）：Steam 路径编辑（文本 + 浏览；失焦/回车校验提交），
+    /// 以及兼容性小节（主页面 Card 1 原样迁移：徽章六态 / 自动与手动预热 / 详情行为不变）。
+    /// 路径编辑与工作路径分离：非法输入只显示内联错误，永不落盘、不污染工作路径。
+    fn settings_steam(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        card_title(ui, self.strings.settings_steam_title);
+        ui.add_space(8.0);
+        let mut do_commit = false;
+        ui.horizontal(|ui| {
+            let edit_width = (ui.available_width() - 92.0).max(120.0);
+            let resp = ui.add_sized(
+                egui::vec2(edit_width, 34.0),
+                egui::TextEdit::singleline(&mut self.settings_steam.buffer)
+                    .margin(egui::Margin::symmetric(10, 7))
+                    .hint_text(self.strings.steam_path_label),
+            );
+            // 编辑即作废上次提交的错误判定（错误只属于「提交时」的判据）。
+            if resp.changed() {
+                self.settings_steam.invalid = false;
+            }
+            // 失焦或回车提交：单行 TextEdit 回车即放弃焦点，`lost_focus` 同时覆盖两者
+            // （egui 0.36 `TextEdit::singleline` 文档：enter → losing focus）。
+            if resp.lost_focus() {
+                do_commit = true;
+            }
+            if styled_button(
+                ui,
+                self.strings.browse,
+                ButtonStyle::Neutral,
+                egui::vec2(82.0, 34.0),
+                true,
+            )
+            .clicked()
+                && let Some(dir) = rfd::FileDialog::new().pick_folder()
+            {
+                // 浏览选定 = 有效目录：直接写入缓冲并提交（与手输同一收敛）。
+                self.settings_steam.buffer = dir.display().to_string();
+                do_commit = true;
+            }
+        });
+        if do_commit {
+            self.commit_settings_steam_path(ctx);
+        }
+        if self.settings_steam.invalid {
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new(self.strings.settings_steam_path_invalid)
+                    .size(12.0)
+                    .color(theme::DANGER),
+            );
+        }
+        // 兼容性小节：主页面 Card 1 原样迁移（行为与健康度六态不变）。
+        self.compat_section(ui);
+    }
+
+    /// Settings — Steam 页签路径提交（失焦/回车/浏览选定/关闭对话框/离开页签统一收敛）：
+    /// 编辑器判定有效且值已变更 → 更新工作路径、原子落盘 App Config、刷新部署状态并喂
+    /// 体检流程（代数推进 + 防抖与主页面路径变更同一机制，见 `feed_path_changed`）；
+    /// 判定非法 → 仅置内联错误，不触碰工作路径与配置（#31 验收：非法输入不落盘）；
+    /// 判定未变更 → 无动作（不重复落盘/刷新/喂流程）。
+    fn commit_settings_steam_path(&mut self, ctx: &egui::Context) {
+        match self.settings_steam.submit(&self.steam_path) {
+            SteamPathCommit::Invalid | SteamPathCommit::Unchanged => {}
+            SteamPathCommit::Changed(p) => {
+                self.steam_path = p.clone();
+                self.config.steam_path = p;
+                self.persist_config();
+                self.refresh_status();
+                self.feed_path_changed(ctx);
+            }
         }
     }
 
@@ -2353,6 +2498,133 @@ mod tests {
         assert!(
             long > short_en,
             "Download & Extract New Version 应比 Check Update 更宽，实际 {long}px"
+        );
+    }
+
+    /// Settings — Steam 页签编辑状态（#31 验收核心）：非法输入提交 → 不产出提交值且
+    /// 置内联错误；有效输入 → 产出 trim 后的路径并清错误。提交结果以类型化枚举表达——
+    /// 调用方只能对 `Changed` 落盘/喂体检流程，`Invalid` 无从写入（类型级不变量）。
+    #[test]
+    fn steam_path_editor_submit_commits_valid_dir_only() {
+        let dir = std::env::temp_dir().join(format!("ost_steam_tab_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // 空缓冲 = 未设置：设置语义下是合法终态（ADR-0012），不报错；
+        // 现值也为空 → Unchanged（不重复落盘）。
+        let mut e = SteamPathEditor::new("");
+        assert_eq!(e.submit(""), SteamPathCommit::Unchanged);
+        assert!(!e.invalid, "空串不应触发内联错误");
+        // 现值非空而缓冲为空（用户清空）→ 提交未设置（落空串，等同主页面提交语义）。
+        assert_eq!(
+            e.submit("C:/Steam"),
+            SteamPathCommit::Changed(String::new())
+        );
+        assert!(!e.invalid);
+
+        // 非空且非目录 → 非法：不产出提交值、置内联错误。
+        e.buffer = "Z:/definitely/not/a/real/dir_7f3a".into();
+        assert_eq!(e.submit("C:/Steam"), SteamPathCommit::Invalid);
+        assert!(e.invalid, "非法提交应置内联错误");
+
+        // 有效目录 → 产出 trim 后路径，错误清除。
+        let p = dir.display().to_string();
+        e.buffer = format!("  {p}  ");
+        assert_eq!(e.submit("C:/Steam"), SteamPathCommit::Changed(p.clone()));
+        assert!(!e.invalid, "有效提交应清除内联错误");
+
+        // 与现值相同 → Unchanged（跳过落盘/刷新/喂流程；错误态已清）。
+        assert_eq!(e.submit(&p), SteamPathCommit::Unchanged);
+        assert!(!e.invalid);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 打开设置对话框以当前工作路径播种编辑缓冲（重跑即编辑：起点 = 现值）。
+    #[test]
+    fn steam_path_editor_seeds_buffer_from_working_path() {
+        let e = SteamPathEditor::new("C:/Program Files (x86)/Steam");
+        assert_eq!(e.buffer, "C:/Program Files (x86)/Steam");
+        assert!(!e.invalid);
+    }
+
+    /// 设置对话框内容宽度须容纳 Steam 页签兼容性小节首行（复刻 `compat_section` 首行
+    /// 的排布：竖条标题 + 徽章 + 右侧「预热/详细信息」按钮）。健康度 Online 是宽度的
+    /// 最坏组合（徽章文案最长 + 两个按钮都出现），英文又宽于中文；两种语言都不能溢出。
+    /// 断言两件事：左块（标题+徽章）右缘不超内容右界；右块最左按钮左缘不小于其起点
+    /// （right_to_left 溢出会向左侧出界，落在对话框边框之外）。
+    #[test]
+    fn settings_steam_compat_row_fits_dialog_width() {
+        let ctx = egui::Context::default();
+        install_theme(&ctx);
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(640.0, 520.0),
+            )),
+            ..Default::default()
+        };
+        let mut violations = Vec::new();
+        let mut full = ctx.run_ui(raw, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                ui.set_width(SETTINGS_DIALOG_WIDTH);
+                for lang in [Lang::Zh, Lang::En] {
+                    let s = Strings::new(lang);
+                    ui.horizontal(|ui| {
+                        let avail_right = ui.available_width();
+                        // 竖条标题块（compat_section 原样复刻）。
+                        ui.horizontal(|ui| {
+                            ui.allocate_exact_size(egui::vec2(3.0, 13.0), egui::Sense::hover());
+                            ui.add_space(8.0);
+                            ui.label(egui::RichText::new(s.compat_title).size(13.5).strong());
+                        });
+                        ui.add_space(8.0);
+                        // 徽章（Online 文案为最宽）。
+                        let badge = egui::Frame::new()
+                            .corner_radius(egui::CornerRadius::same(12))
+                            .inner_margin(egui::Margin::symmetric(10, 3))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new(format!("● {}", s.compat_status_online))
+                                        .size(12.5),
+                                );
+                            })
+                            .response
+                            .rect;
+                        // 左块（标题 + 徽章）右缘不得超出内容右界。
+                        if badge.right() > avail_right + 0.5 {
+                            violations.push(format!(
+                                "{lang:?} 左块右缘 {} 超过可用宽 {avail_right}",
+                                badge.right()
+                            ));
+                        }
+                        // 右侧动作块起点（egui 自动加了 item_spacing）。
+                        let block_left = ui.cursor().left();
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let _ = ui.button(s.compat_btn_details);
+                            let precache = styled_button(
+                                ui,
+                                s.compat_btn_precache,
+                                ButtonStyle::Neutral,
+                                egui::vec2(132.0, 26.0),
+                                true,
+                            );
+                            // 右块最左元素左缘不得越过其起点（否则溢出到对话框左侧外）。
+                            if precache.rect.left() + 0.5 < block_left {
+                                violations.push(format!(
+                                    "{lang:?} 预热按钮左缘 {} 越过右块起点 {block_left}",
+                                    precache.rect.left()
+                                ));
+                            }
+                        });
+                    });
+                }
+            });
+        });
+        full.textures_delta.clear();
+        assert!(
+            violations.is_empty(),
+            "兼容性小节首行在对话框宽度 {SETTINGS_DIALOG_WIDTH} 下溢出:\n{}",
+            violations.join("\n")
         );
     }
 
