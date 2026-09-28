@@ -49,9 +49,19 @@ pub fn dlls_present() -> bool {
     target_dlls_present(&dll_dir())
 }
 
-/// 根据 Steam 路径判断本地部署状态。
+/// 有效 Steam 目录判据：trim 后非空且为目录。空 = 未设置（ADR-0012 的合法终态）；
+/// 空串是否放行由调用方按语境决定——向导步骤 2 拒绝空路径（必须有路径才能继续），
+/// 设置页允许空（编辑语义下可留空）、启动回退把无效配置视为未设置。
+/// 与 `wizard` 步骤 2 提交、`SteamPathEditor::submit`、启动恢复共用同一口径（ADR-0013）。
+pub fn is_valid_steam_dir(path: &str) -> bool {
+    let p = path.trim();
+    !p.is_empty() && Path::new(p).is_dir()
+}
+
+/// 根据 Steam 路径判断本地部署状态。路径判据共用 [`is_valid_steam_dir`]（ADR-0013）：
+/// 非有效目录 → `InvalidPath`（调用方先 trim，见该函数语义）。
 pub fn check_status(steam_dir: &Path) -> DeployStatus {
-    if steam_dir.as_os_str().is_empty() || !steam_dir.is_dir() {
+    if !is_valid_steam_dir(&steam_dir.to_string_lossy()) {
         return DeployStatus::InvalidPath;
     }
     if TARGET_DLLS.iter().all(|dll| steam_dir.join(dll).is_file()) {
@@ -88,6 +98,19 @@ pub fn uninstall(steam_dir: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 共享口径（ADR-0013）：非空（trim 后）且为目录才有效；前后空白先 trim 再判目录。
+    #[test]
+    fn is_valid_steam_dir_requires_nonempty_existing_dir() {
+        let dir = std::env::temp_dir().join(format!("ost_valid_dir_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(!is_valid_steam_dir(""));
+        assert!(!is_valid_steam_dir("   "));
+        assert!(!is_valid_steam_dir("Z:/nope_12345"));
+        assert!(is_valid_steam_dir(&dir.display().to_string()));
+        assert!(is_valid_steam_dir(&format!("  {}  ", dir.display())));
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn empty_path_is_invalid() {

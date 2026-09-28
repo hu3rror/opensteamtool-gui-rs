@@ -317,7 +317,7 @@ impl SteamPathEditor {
     /// （空也拒绝）不同：那是「必须有路径才能继续」的流程，设置页是「可留空」的编辑。
     fn submit(&mut self, current: &str) -> SteamPathCommit {
         let p = self.buffer.trim();
-        if p.is_empty() || Path::new(p).is_dir() {
+        if p.is_empty() || dll::is_valid_steam_dir(p) {
             self.invalid = false;
             if p == current {
                 SteamPathCommit::Unchanged
@@ -461,6 +461,56 @@ fn install_cjk_font(ctx: &egui::Context) {
     ));
 }
 
+/// Steam 路径编辑行（单行文本 + 浏览按钮）——向导步骤 2 与 Settings — Steam 共用
+/// 同一布局块（宽度公式、TextEdit 边距/hint、浏览按钮尺寸），一处演化两处跟随。
+/// 直接改写调用方传入的缓冲；返回本帧的交互快照，调用方按自己的状态处理
+/// （向导只消费 `changed` 喂 `PathEdited`；设置页 `changed` 清内联错误、`commit` 提交）。
+/// 两个信号相互独立：同帧「编辑 + 失焦」（如 CJK 输入法提交与点击同帧）两者都须
+/// 送达——合并成单枚举后写覆盖会丢其一（向导漏喂事件/设置页漏提交）。
+#[derive(Clone, Copy, Debug, Default)]
+struct PathEditRow {
+    /// 文本被编辑或浏览选定（缓冲已就地更新）。
+    changed: bool,
+    /// 失焦（回车/点击别处）或浏览选定：提交信号（向导不消费）。
+    commit: bool,
+}
+
+fn path_edit_row(ui: &mut egui::Ui, strings: Strings, buffer: &mut String) -> PathEditRow {
+    let mut row = PathEditRow::default();
+    // 输入行占满可用宽（表单惯例：字段左对齐、撑满可用宽）。
+    ui.horizontal(|ui| {
+        let edit_width = (ui.available_width() - 92.0).max(120.0);
+        let resp = ui.add_sized(
+            egui::vec2(edit_width, 34.0),
+            egui::TextEdit::singleline(buffer)
+                .margin(egui::Margin::symmetric(10, 7))
+                .hint_text(strings.steam_path_label),
+        );
+        if resp.changed() {
+            row.changed = true;
+        }
+        // 失焦或回车提交：egui 0.36 单行 TextEdit 回车即放弃焦点，`lost_focus` 覆盖两者。
+        if resp.lost_focus() {
+            row.commit = true;
+        }
+        if styled_button(
+            ui,
+            strings.browse,
+            ButtonStyle::Neutral,
+            egui::vec2(82.0, 34.0),
+            true,
+        )
+        .clicked()
+            && let Some(dir) = rfd::FileDialog::new().pick_folder()
+        {
+            *buffer = dir.display().to_string();
+            row.changed = true;
+            row.commit = true;
+        }
+    });
+    row
+}
+
 /// 首次运行向导的下载动作：检查线上版本后下载解压到 `dlls/`（向导只需一个成败结果）。
 fn wizard_download() -> Result<(), UpdateError> {
     let info = updater::check_update()?;
@@ -542,32 +592,12 @@ fn wizard_steps_ui(
                             ui.label(egui::RichText::new(strings.wizard_path_prompt).size(13.0));
                             ui.add_space(12.0);
                             let mut buf = view.steam_path.clone();
-                            // 输入行占满卡片宽度（表单惯例：字段左对齐、撑满可用宽）。
-                            ui.horizontal(|ui| {
-                                let edit_width = (ui.available_width() - 92.0).max(120.0);
-                                let resp = ui.add_sized(
-                                    egui::vec2(edit_width, 34.0),
-                                    egui::TextEdit::singleline(&mut buf)
-                                        .margin(egui::Margin::symmetric(10, 7))
-                                        .hint_text(strings.steam_path_label),
-                                );
-                                if resp.changed() {
-                                    event = Some(wizard::Event::PathEdited(buf.clone()));
-                                }
-                                if styled_button(
-                                    ui,
-                                    strings.browse,
-                                    ButtonStyle::Neutral,
-                                    egui::vec2(82.0, 34.0),
-                                    true,
-                                )
-                                .clicked()
-                                    && let Some(dir) = rfd::FileDialog::new().pick_folder()
-                                {
-                                    event =
-                                        Some(wizard::Event::PathEdited(dir.display().to_string()));
-                                }
-                            });
+                            // 文本编辑或浏览选定都喂 PathEdited（缓冲已就地更新）；失焦
+                            // 向导不消费——推进只由「下一步」按钮的 PathSubmitted 触发（行为与抽取前一致）。
+                            let row = path_edit_row(ui, strings, &mut buf);
+                            if row.changed {
+                                event = Some(wizard::Event::PathEdited(buf.clone()));
+                            }
                             // 有效性来自状态机快照（PathEdited 同一帧内已推进，下一帧即为最新）。
                             if !view.path_valid && !view.steam_path.trim().is_empty() {
                                 ui.add_space(6.0);
@@ -710,8 +740,7 @@ impl App {
         // 配置优先恢复 Steam 路径；已持久化路径失效（手改/目录已删）或未设置时
         // 回退注册表检测（与写入侧同一 is_dir 判据）。检测结果不自动写回配置——
         // 配置只反映用户显式选择，检测是建议不是选择。
-        let steam_path = if config.steam_path.is_empty() || !Path::new(&config.steam_path).is_dir()
-        {
+        let steam_path = if !dll::is_valid_steam_dir(&config.steam_path) {
             steam::detect_steam_path()
                 .map(|p| p.display().to_string())
                 .unwrap_or_default()
@@ -1383,38 +1412,15 @@ impl App {
         card_title(ui, self.strings.settings_steam_title);
         ui.add_space(8.0);
         let mut do_commit = false;
-        ui.horizontal(|ui| {
-            let edit_width = (ui.available_width() - 92.0).max(120.0);
-            let resp = ui.add_sized(
-                egui::vec2(edit_width, 34.0),
-                egui::TextEdit::singleline(&mut self.settings_steam.buffer)
-                    .margin(egui::Margin::symmetric(10, 7))
-                    .hint_text(self.strings.steam_path_label),
-            );
-            // 编辑即作废上次提交的错误判定（错误只属于「提交时」的判据）。
-            if resp.changed() {
-                self.settings_steam.invalid = false;
-            }
-            // 失焦或回车提交：单行 TextEdit 回车即放弃焦点，`lost_focus` 同时覆盖两者
-            // （egui 0.36 `TextEdit::singleline` 文档：enter → losing focus）。
-            if resp.lost_focus() {
-                do_commit = true;
-            }
-            if styled_button(
-                ui,
-                self.strings.browse,
-                ButtonStyle::Neutral,
-                egui::vec2(82.0, 34.0),
-                true,
-            )
-            .clicked()
-                && let Some(dir) = rfd::FileDialog::new().pick_folder()
-            {
-                // 浏览选定 = 有效目录：直接写入缓冲并提交（与手输同一收敛）。
-                self.settings_steam.buffer = dir.display().to_string();
-                do_commit = true;
-            }
-        });
+        let row = path_edit_row(ui, self.strings, &mut self.settings_steam.buffer);
+        // 编辑即作废上次提交的错误判定（错误只属于「提交时」的判据）。
+        if row.changed {
+            self.settings_steam.invalid = false;
+        }
+        // 浏览选定 = 有效目录：直接写入缓冲并提交（与手输同一收敛）；失焦/回车同样提交。
+        if row.commit {
+            do_commit = true;
+        }
         if do_commit {
             self.commit_settings_steam_path(ctx);
         }

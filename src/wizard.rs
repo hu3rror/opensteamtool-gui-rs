@@ -12,6 +12,7 @@
 use std::path::Path;
 
 use crate::config::{self, Language};
+use crate::dll;
 use crate::updater::UpdateError;
 
 /// 向导三步。
@@ -119,7 +120,7 @@ impl Wizard {
                 Vec::new()
             }
             Event::PathSubmitted if self.step == Step::SteamPath => {
-                if is_valid_steam_path(&self.steam_path) {
+                if dll::is_valid_steam_dir(&self.steam_path) {
                     // 只推进到步骤 3，不自动下载：由用户点击「下载并解压」显式开始
                     // （自动下载有入侵感，见 #29 交互决定）。
                     self.step = Step::Download;
@@ -164,7 +165,7 @@ impl Wizard {
             step: self.step,
             language: self.language,
             steam_path: self.steam_path.clone(),
-            path_valid: is_valid_steam_path(&self.steam_path),
+            path_valid: dll::is_valid_steam_dir(&self.steam_path),
             download: self.download.clone(),
         }
     }
@@ -188,16 +189,10 @@ impl Wizard {
 /// 非有效目录（空 = 未设置）。除此外一律不显示——正常启动不打扰老用户。
 pub fn should_show(config_path: &Path) -> bool {
     match config::load(config_path) {
-        Ok(config) => !is_valid_steam_path(&config.steam_path),
+        Ok(config) => !dll::is_valid_steam_dir(&config.steam_path),
         // 损坏/版本不符 → 启动已降级默认值（ADR-0012），等同未配置。
         Err(_) => true,
     }
-}
-
-/// 有效 Steam 路径判据：非空且为目录（与 ADR-0012 的启动回退同一 `is_dir` 口径）。
-pub fn is_valid_steam_path(path: &str) -> bool {
-    let p = path.trim();
-    !p.is_empty() && Path::new(p).is_dir()
 }
 
 #[cfg(test)]
@@ -272,12 +267,12 @@ mod tests {
     #[test]
     fn valid_path_requires_nonempty_existing_dir() {
         let dir = tmp_dir("valid_path");
-        assert!(!is_valid_steam_path(""));
-        assert!(!is_valid_steam_path("   "));
-        assert!(!is_valid_steam_path("Z:/nope_12345"));
-        assert!(is_valid_steam_path(&dir.display().to_string()));
+        assert!(!dll::is_valid_steam_dir(""));
+        assert!(!dll::is_valid_steam_dir("   "));
+        assert!(!dll::is_valid_steam_dir("Z:/nope_12345"));
+        assert!(dll::is_valid_steam_dir(&dir.display().to_string()));
         // 前后空白先 trim 再判目录。
-        assert!(is_valid_steam_path(&format!("  {}  ", dir.display())));
+        assert!(dll::is_valid_steam_dir(&format!("  {}  ", dir.display())));
         std::fs::remove_dir_all(&dir).ok();
     }
 
