@@ -32,6 +32,30 @@ const WIZARD_CARD_WIDTH: f32 = 430.0;
 /// 预热/详细信息按钮，英文为最宽组合，见 `settings_steam_compat_row_fits_dialog_width`）。
 const SETTINGS_DIALOG_WIDTH: f32 = 580.0;
 
+/// 设置对话框固定骨架高度（标题 + 页签行 + 分隔线 + 页脚按钮 + 窗口边距 + 模态框帧边距）。
+/// 实测（测试夹具，真实 `egui::Modal` + 应用字体/主题）内容骨架约 185；取 208 保守偏大，
+/// 使「骨架 + 滚动区」在任意内高下都小于等于窗口（页脚及模态框帧完整可见）。
+/// 历史值 184 偏小 8px：滚动区随窗口放大后页脚始终悬在窗口底缘外 8px（#32 回归放大此缺陷）。
+const SETTINGS_DIALOG_SKELETON_H: f32 = 208.0;
+/// 设置对话框滚动区高度下限（低窗口时仍保留最小可滚动内容区）。
+const SETTINGS_SCROLL_MIN_H: f32 = 200.0;
+
+/// 设置对话框滚动区高度：窗口内高扣固定骨架（保守偏大，见 SETTINGS_DIALOG_SKELETON_H）。
+/// 内高 ≥ 骨架 + 滚动区下限时对话框恰好放下（余量由滚动区吸收，页脚恒可见）；
+/// 更低时滚动区缩到下限、页脚被窗口底部裁掉（#32 主页面精简回归的症状，
+/// 见测试 `settings_dialog_footer_visible_at_autosized_window`）。
+fn settings_scroll_height(window_inner_h: f32) -> f32 {
+    (window_inner_h - SETTINGS_DIALOG_SKELETON_H).clamp(SETTINGS_SCROLL_MIN_H, 420.0)
+}
+
+/// 首帧自适应窗口内高：内容高 + 底部余量，且不低于设置对话框可完整呈现的最小内高
+/// （骨架 + 滚动区下限）。主页面精简（#32）后内容显著变矮（实测最矮形态 215）：若只随
+/// 内容收缩，窗口 251 会裁掉设置对话框页脚（用户须手动放大窗口才看得全——报告的症状），
+/// 见 `settings_dialog_footer_visible_at_autosized_window`。
+fn autosize_inner_height(content_h: f32) -> f32 {
+    (content_h + 36.0).max(SETTINGS_DIALOG_SKELETON_H + SETTINGS_SCROLL_MIN_H)
+}
+
 fn install_theme(ctx: &egui::Context) {
     let mut visuals = egui::Visuals::light();
     visuals.panel_fill = theme::PANEL;
@@ -1108,7 +1132,7 @@ impl App {
             // 内容区滚动：窗口高度有限且 Modal 是 Area 不约束屏幕，滚动区高度由窗口
             // 高度扣除非滚动行的固定占用（标题+页签行+分隔线+页脚+窗口边距，数值保守
             // 偏大）得到，保证页脚恒可见；过低窗口下仍保留最小滚动区。
-            let max_scroll_h = (ctx.content_rect().height() - 160.0 - 24.0).clamp(200.0, 420.0);
+            let max_scroll_h = settings_scroll_height(ctx.content_rect().height());
             egui::ScrollArea::vertical()
                 .auto_shrink([false; 2])
                 .max_height(max_scroll_h)
@@ -2063,11 +2087,12 @@ impl eframe::App for App {
 
         // 首帧按内容高度自适应窗口（消除底部大留白），只设置一次。向导期间各步
         // 高度不同，不参与自适应（否则窗口会缩到某一步的高度）。
+        // #32 回归修复：内容变矮后仍不得低于设置对话框的最小内高（见 autosize_inner_height）。
         if self.wizard.is_none() && !self.autosized && content_h > 0.0 {
             self.autosized = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
                 ui.available_width().max(620.0),
-                content_h + 36.0,
+                autosize_inner_height(content_h),
             )));
         }
 
@@ -2522,5 +2547,209 @@ mod tests {
             "卡片不应是整窗宽（实际 {}",
             rect.width()
         );
+    }
+
+    // ==================== #32 回归：自适应窗口 vs 设置对话框 ====================
+
+    /// 复刻主页面精简后（#32）的首帧内容：顶栏 + 部署状态卡片 + 操作按钮行（通知栏空）。
+    /// 返回与 `App::ui` 同口径的内容底缘（`ui.cursor().top()`）。
+    fn slim_main_content_height(ctx: &egui::Context, lang: Lang) -> f32 {
+        let mut h = 0.0f32;
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(640.0, 800.0),
+            )),
+            ..Default::default()
+        };
+        let mut full = ctx.run_ui(raw, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let s = Strings::new(lang);
+                // top_bar 复刻。
+                ui.horizontal(|ui| {
+                    let h2 = 28.0;
+                    let font = egui::FontId::proportional(16.0);
+                    let tw = text_width(ui, s.app_title, &font, theme::INK);
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(tw, h2), egui::Sense::hover());
+                    ui.painter().text(
+                        rect.left_center(),
+                        egui::Align2::LEFT_CENTER,
+                        s.app_title,
+                        font,
+                        theme::INK,
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let _ = styled_button(
+                            ui,
+                            lang.toggle_label(),
+                            ButtonStyle::Neutral,
+                            egui::vec2(72.0, 28.0),
+                            true,
+                        );
+                        let _ = styled_button(
+                            ui,
+                            s.btn_settings,
+                            ButtonStyle::Neutral,
+                            egui::vec2(72.0, 28.0),
+                            true,
+                        );
+                    });
+                });
+                ui.add_space(6.0);
+                // card2 复刻（部署状态）。
+                card_frame().show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    card_title(ui, s.card2_title);
+                    ui.add_space(10.0);
+                    status_line(ui, s.status_not_deployed, theme::WEAK);
+                });
+                ui.add_space(10.0);
+                // 健康警示：正常态（Ready）不渲染，跳过。
+                // action_area 复刻（NotDeployed 两按钮；dlls 就绪 → 无引导行）。
+                ui.horizontal(|ui| {
+                    let gap = 12.0;
+                    let spacing = ui.spacing().item_spacing.x;
+                    let size = egui::vec2(
+                        row_button_width(ui.available_width(), gap, spacing, 2),
+                        36.0,
+                    );
+                    let _ =
+                        styled_button(ui, s.btn_apply_and_launch, ButtonStyle::Deploy, size, true);
+                    ui.add_space(gap);
+                    let _ =
+                        styled_button(ui, s.btn_launch_normal, ButtonStyle::Neutral, size, true);
+                });
+                ui.add_space(10.0);
+                h = ui.cursor().top();
+            });
+        });
+        full.textures_delta.clear();
+        h
+    }
+
+    /// 复刻设置对话框骨架（真实 `egui::Modal` + 固定行 + 滚动区 + 页脚），返回页脚
+    /// 「关闭」按钮底缘 Y（> 窗口内高 = 被裁掉）。**每次自建全新 Context**：Modal/Area
+    /// 的位置与尺寸记忆挂在 Context 上，复用同一 Context 会让后续渲染沿用上次放置（
+    /// 位置漂移，测量失真）；每次首放置（左上角 + 边距）才是真实打开对话框的几何。
+    fn settings_dialog_footer_bottom(lang: Lang, inner_h: f32) -> (f32, f32, f32) {
+        let ctx = egui::Context::default();
+        install_cjk_font(&ctx); // 与应用同字体：中文字体行高与默认字体不同，骨架测量须同源。
+        install_theme(&ctx);
+        let mut footer = 0.0f32;
+        let mut modal_top = 0.0f32;
+        let mut scroll_bottom = 0.0f32;
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(640.0, inner_h),
+            )),
+            ..Default::default()
+        };
+        let mut full = ctx.run_ui(raw, |ui| {
+            egui::Modal::new(egui::Id::new("settings_dialog_repro")).show(ui, |ui| {
+                let s = Strings::new(lang);
+                modal_top = ui.cursor().top();
+                ui.set_width(SETTINGS_DIALOG_WIDTH);
+                ui.heading(s.settings_title);
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    let _ = styled_button(
+                        ui,
+                        s.settings_tab_general,
+                        ButtonStyle::Primary,
+                        egui::vec2(88.0, 28.0),
+                        true,
+                    );
+                    ui.add_space(4.0);
+                    let _ = styled_button(
+                        ui,
+                        s.settings_tab_steam,
+                        ButtonStyle::Neutral,
+                        egui::vec2(88.0, 28.0),
+                        true,
+                    );
+                });
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(8.0);
+                let max_scroll_h = settings_scroll_height(inner_h);
+                let scroll_resp = egui::ScrollArea::vertical()
+                    .auto_shrink([false; 2])
+                    .max_height(max_scroll_h)
+                    .show(ui, |ui| {
+                        for i in 0..12 {
+                            ui.label(format!("settings section line {i}"));
+                        }
+                    });
+                scroll_bottom = scroll_resp.inner_rect.bottom();
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let r = styled_button(
+                            ui,
+                            s.btn_close,
+                            ButtonStyle::Neutral,
+                            egui::vec2(80.0, 30.0),
+                            true,
+                        );
+                        footer = r.rect.bottom();
+                    });
+                });
+            });
+        });
+        full.textures_delta.clear();
+        (modal_top, scroll_bottom, footer)
+    }
+
+    /// 回归（#32）：瘦身主页面首帧自适应后的窗口内高下，设置对话框页脚（关闭按钮）必须完整
+    /// 可见。修复前自适应只随内容收缩（215+36=251），页脚底缘 320 越出窗口底 69px——用户
+    /// 必须手动最大化/放大窗口才能看到全部设置界面（报告的 bug）。双语各测一遍（英文高度
+    /// 相同但独立验证骨架不受语言影响）。
+    #[test]
+    fn settings_dialog_footer_visible_at_autosized_window() {
+        let ctx = egui::Context::default();
+        install_theme(&ctx);
+        for lang in [Lang::Zh, Lang::En] {
+            // 内容最矮的现实形态（NotDeployed + dlls 就绪 + 无健康警示 + 无通知栏）。
+            let content_h = slim_main_content_height(&ctx, lang);
+            let inner_h = autosize_inner_height(content_h);
+            let (top, _, footer) = settings_dialog_footer_bottom(lang, inner_h);
+            assert!(
+                top >= 0.0 && footer <= inner_h + 0.5,
+                "{lang:?}: 自适应内高 {inner_h}（内容 {content_h}）下设置对话框顶 {top} / 页脚底缘 {footer} 越出窗口（被裁掉）"
+            );
+        }
+    }
+
+    /// 自适应窗口内高下限：任何现实内容高都不应把窗口压到设置对话框最小内高（骨架 +
+    /// 滚动区下限）以下；且在自适应内高下骨架+滚动区必须放得下（页脚不越界的代数保证）。
+    #[test]
+    fn autosize_inner_height_never_below_settings_min() {
+        for content_h in [150.0, 215.0, 250.0, 280.0, 350.0, 500.0, 700.0] {
+            let inner_h = autosize_inner_height(content_h);
+            let min = SETTINGS_DIALOG_SKELETON_H + SETTINGS_SCROLL_MIN_H;
+            assert!(
+                inner_h >= min,
+                "content_h={content_h} -> 自适应内高 {inner_h} 低于设置对话框最小内高 {min}"
+            );
+            assert!(
+                SETTINGS_DIALOG_SKELETON_H + settings_scroll_height(inner_h) <= inner_h + 0.5,
+                "content_h={content_h}: 骨架+滚动区超出自适应内高 {inner_h}"
+            );
+        }
+    }
+
+    /// 滚动区公式：低窗口保下限 200、高窗口封顶 420、中段随窗口线性吸收余量。
+    #[test]
+    fn settings_scroll_height_clamps() {
+        assert_eq!(settings_scroll_height(100.0), 200.0);
+        assert_eq!(settings_scroll_height(251.0), 200.0);
+        assert_eq!(settings_scroll_height(408.0), 200.0);
+        assert_eq!(settings_scroll_height(416.0), 208.0);
+        assert_eq!(settings_scroll_height(628.0), 420.0);
+        assert_eq!(settings_scroll_height(1000.0), 420.0);
     }
 }
