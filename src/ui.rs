@@ -500,7 +500,7 @@ impl App {
     }
 
     /// 按当前 Steam 路径有效性同步托盘「重启 Steam」项可用性（路径无效置灰）。
-    /// 语义：Steam 运行中点击为「重启」；未运行时点击等价「正常启动」
+    /// 语义：Steam 运行中点击为「重启」；未运行时点击等价「直接启动」
     /// （Restart 的关闭步骤对未运行进程组是 no-op，见 workflow::plan）。
     /// 在 `status` 每次变化处调用（收敛进 `refresh_status`）。
     fn sync_tray_restart_enabled(&mut self) {
@@ -1260,7 +1260,7 @@ impl App {
 
     /// 独立操作区：等宽按钮并排（位于卡片 2 与卡片 3 之间）。
     /// 已应用时三枚：运行中为（退出并卸载 / 重启 Steam / 卸载并重启），
-    /// 未运行为（正常启动 Steam / 卸载补丁 / 卸载补丁并重启 Steam）；其余两枚。
+    /// 未运行为（启动 Steam / 卸载补丁 / 卸载补丁并重启 Steam）；其余两枚。
     fn action_area(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         ui.horizontal(|ui| {
@@ -1312,14 +1312,15 @@ impl App {
                     }
                 }
                 DeployStatus::Deployed => {
-                    // Steam 已退出 → 「正常启动 Steam」/「卸载补丁」/「卸载补丁并重启 Steam」。
+                    // Steam 已退出 → 「启动 Steam」/「卸载补丁」/「卸载补丁并重启 Steam」。
+                    // 按钮写「启动」而非「正常启动」——带补丁启动不是正常启动（见 ADR-0011）。
                     let size = egui::vec2(
                         row_button_width(ui.available_width(), gap, spacing, 3),
                         36.0,
                     );
                     if styled_button(
                         ui,
-                        self.strings.btn_launch_normal,
+                        self.strings.btn_launch,
                         ButtonStyle::Neutral,
                         size,
                         !self.gate.is_busy(),
@@ -1363,7 +1364,8 @@ impl App {
                         self.strings.btn_apply_and_launch,
                         ButtonStyle::Deploy,
                         size,
-                        !self.gate.is_busy(),
+                        // 补丁未下载（dlls/ 缺文件）时置灰，避免点了才报 NoTargetDlls（见 ADR-0011）。
+                        !self.gate.is_busy() && dll::dlls_present(),
                     )
                     .clicked()
                     {
@@ -1406,6 +1408,16 @@ impl App {
                 }
             }
         });
+        // 补丁未下载引导（ADR-0011）：未部署 + dlls/ 缺文件时「应用补丁并启动」已置灰，
+        // 提示按「检查更新 → 下载并解压」两步走（决策显式不自动联网检查）。
+        if self.status == DeployStatus::NotDeployed && !dll::dlls_present() {
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new(self.strings.hint_download_patch)
+                    .size(12.0)
+                    .color(theme::WEAK),
+            );
+        }
         ui.add_space(10.0);
     }
 
@@ -1415,39 +1427,43 @@ impl App {
             card_title(ui, self.strings.card3_title);
             ui.add_space(10.0);
 
-            // 本地版本行：v + 版本 / 已本地就绪 (未记录版本) / 未下载 (dlls 文件夹缺失文件)。
-            let dll_dir = dll::dll_dir();
-            let all_local_exist = dll::TARGET_DLLS.iter().all(|d| dll_dir.join(d).is_file());
-            let (local_text, local_color) = match &self.local_version {
-                Some(v) => (
-                    format!(
-                        "{}v{}",
-                        self.strings.local_version,
-                        v.trim_start_matches('v')
-                    ),
-                    theme::INK,
-                ),
-                None if all_local_exist => (
-                    format!(
-                        "{}{}",
-                        self.strings.local_version, self.strings.local_ver_ready_no_record
-                    ),
-                    theme::SUB,
-                ),
-                None => (
+            // 本地版本行（文件本位，ADR-0011）：文件缺失即「未下载」，version.txt 记录不作数；
+            // 文件齐全且有记录 → v+版本；有文件无记录 → 已本地就绪 (未记录版本)。
+            let (local_text, local_color) = if !dll::dlls_present() {
+                (
                     format!(
                         "{}{}",
                         self.strings.local_version, self.strings.local_ver_missing
                     ),
                     theme::WEAK,
-                ),
+                )
+            } else {
+                match &self.local_version {
+                    Some(v) => (
+                        format!(
+                            "{}v{}",
+                            self.strings.local_version,
+                            v.trim_start_matches('v')
+                        ),
+                        theme::INK,
+                    ),
+                    None => (
+                        format!(
+                            "{}{}",
+                            self.strings.local_version, self.strings.local_ver_ready_no_record
+                        ),
+                        theme::SUB,
+                    ),
+                }
             };
             version_line(ui, &local_text, local_color);
             ui.add_space(6.0);
 
             // 线上版本行：未知 / 正在检查更新 / v+版本+后缀 / 检查失败。
             let prefix = self.strings.online_version;
-            let derived = self.update_flow.derived(self.local_version.as_deref());
+            // 更新对比同用文件本位：文件缺失时无视版本记录按「本地缺失」比较，
+            // 保证检查后下载按钮必然出现（否则记录版本=线上版本时死路，ADR-0011）。
+            let derived = self.update_flow.derived(self.local_known_version());
             let (online_text, online_color) = match &derived.line {
                 UpdateLine::Unknown => (format!("{}{}", prefix, self.strings.unknown), theme::SUB),
                 UpdateLine::Checking => (format!("{}{}", prefix, self.strings.checking), theme::SUB),
@@ -1514,12 +1530,20 @@ impl App {
         ui.add_space(10.0);
     }
 
+    /// 文件本位（ADR-0011）：`dlls/` 缺文件时无视版本记录按「本地缺失」比较，
+    /// `derived` 的全部消费者（本地版本行 / 通知文案 / 下载可用性）共用同一判据。
+    fn local_known_version(&self) -> Option<&str> {
+        dll::dlls_present()
+            .then_some(self.local_version.as_deref())
+            .flatten()
+    }
+
     /// 最近一次结果提示 → 当前语言渲染（切换语言后无需重建 notice，逐帧取当前 strings）。
     fn notice_text(&self) -> Option<(bool, String)> {
         match &self.notice {
             Some(Notice::UpdateChecked) => self
                 .update_flow
-                .derived(self.local_version.as_deref())
+                .derived(self.local_known_version())
                 .notice
                 .map(|n| render_update_notice(&self.strings, &n)),
             Some(n) => Some(render_notice(&self.strings, n)),

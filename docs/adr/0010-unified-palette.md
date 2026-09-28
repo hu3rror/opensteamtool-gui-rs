@@ -21,7 +21,7 @@ Rust 版外观此前逐按钮/逐状态手写配色：27 个常量 + 4 处内联
   - Deploy（绿实心 / 白字，无描边）：应用补丁并启动 Steam
   - Primary（accent 蓝实心 / 白字，无描边）：下载并解压新版本 / 保存 / 确认
   - Caution（警戒组天蓝描边）：仅「退出 Steam 并卸载补丁」
-  - Neutral（白底描边 / 次级文字）：其余全部按钮（正常启动 / 重启 / 卸载 / 卸载补丁并重启 / 检查更新 / 一键缓存签名 / 浏览 / 取消 / 设置 / 语言切换；原 Launch + Secondary + UninstallRestart + Lang 统一并入，含「卸载并重启」从蓝实心降级）
+  - Neutral（白底描边 / 次级文字）：其余全部按钮（启动 / 正常启动（未部署时）/ 重启 / 卸载 / 卸载补丁并重启 / 检查更新 / 一键缓存签名 / 浏览 / 取消 / 设置 / 语言切换；原 Launch + Secondary + UninstallRestart + Lang 统一并入，含「卸载并重启」从蓝实心降级）
 - **命名收拢**：旧 STATUS_INSTALLED / BTN_DEPLOY_BG / DOT_RUNNING → `SUCCESS`；ERR_RED → `DANGER`；STATUS_WARN → `WARN`；ACCENT 沿用。作废常量：ACCENT_ACTIVE、FILL_SECONDARY、BTN_DEPLOY_HOVER、BTN_SECONDARY_HOVER、BTN_UNINSTALL_A_*、BTN_UNINSTALL_B_*、BADGE_*。
 - **顶栏对齐**：标题按固定行高（28px）手绘文本（LEFT_CENTER 垂直居中锚点），与右侧设置按钮（72×28）垂直同轴；设置与语言切换按钮同尺寸、同 Neutral 样式；按钮左右次序维持现状（语言切换最右）。外层必须 `horizontal`——`with_layout(left_to_right)` 的子区域会吃满剩余空间把后续内容顶出可视区（原型已验证）。
 - **结构**：新建 `src/theme.rs` 收纳色槽常量、警戒组、派生函数（`darken` / `blend` / `badge_bg` / `selection_bg`）与按钮样式解析表；ui.rs 只引用语义名，不出现任何内联色值字面量（有源码扫描测试守卫）。派生函数与解析表可单测（金样值），色板不变量有测试（槽数恰 12、派生色不占槽、仓库无越权色值）。

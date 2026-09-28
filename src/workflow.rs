@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::busy::BusyKind;
-use crate::dll::{self, TARGET_DLLS};
+use crate::dll;
 use crate::steam;
 use crate::steam_state::SteamState;
 
@@ -17,7 +17,8 @@ use crate::steam_state::SteamState;
 pub enum Action {
     /// 应用补丁并启动 Steam（部署 + 启动）。
     ApplyAndLaunch,
-    /// 正常启动 Steam。
+    /// 启动 Steam（不含补丁操作；已部署补丁时即带补丁启动，UI 写「启动 Steam」
+    /// 而非「正常启动」——见 ADR-0011）。
     Launch,
     /// 退出 Steam 并卸载补丁。
     ExitAndUninstall,
@@ -100,7 +101,7 @@ pub fn plan(
     if !steam_dir.is_dir() {
         return Err(Precheck::NoSteamDir);
     }
-    if action == Action::ApplyAndLaunch && !TARGET_DLLS.iter().all(|d| dll_dir.join(d).is_file()) {
+    if action == Action::ApplyAndLaunch && !dll::target_dlls_present(dll_dir) {
         return Err(Precheck::NoTargetDlls);
     }
     let needs_exe = matches!(
@@ -160,6 +161,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dll::TARGET_DLLS;
 
     /// 建临时目录并写入三个目标 DLL（返回目录）。
     fn tmp_dlls(name: &str) -> PathBuf {
