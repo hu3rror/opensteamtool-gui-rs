@@ -1122,6 +1122,7 @@ impl App {
             // 偏大）得到，保证页脚恒可见；过低窗口下仍保留最小滚动区。
             let max_scroll_h = (ctx.content_rect().height() - 160.0 - 24.0).clamp(200.0, 420.0);
             egui::ScrollArea::vertical()
+                .auto_shrink([false; 2])
                 .max_height(max_scroll_h)
                 .show(ui, |ui| match self.settings_tab {
                     SettingsTab::General => self.settings_general(ui, ctx),
