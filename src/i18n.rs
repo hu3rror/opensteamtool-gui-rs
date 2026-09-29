@@ -127,6 +127,10 @@ pub struct Strings {
     pub settings_steam_path_invalid: &'static str,
     /// Settings — 通用 页签语言小节标题。
     pub settings_language_title: &'static str,
+    /// Settings — 通用 页签系统托盘小节标题（#37）。
+    pub settings_tray_title: &'static str,
+    /// Settings — 通用 页签最小化隐身勾选项（#37；与托盘菜单勾选同一事实源）。
+    pub settings_tray_minimize: &'static str,
     /// 关于页签软件版本行前缀（实际版本号由 crate 版本拼接）。
     pub settings_version_label: &'static str,
     /// Settings — 关于 页签应用更新小节标题（软件版本 + 应用更新检查）。
@@ -319,6 +323,8 @@ impl Strings {
             settings_steam_title: "Steam 路径",
             settings_steam_path_invalid: "路径无效：请输入有效的 Steam 安装目录",
             settings_language_title: "语言",
+            settings_tray_title: "系统托盘",
+            settings_tray_minimize: "最小化时隐藏到系统托盘",
             settings_version_label: "软件版本",
             settings_app_update_title: "应用更新",
             settings_btn_app_update_check: "检查应用更新",
@@ -437,6 +443,8 @@ impl Strings {
             settings_steam_title: "Steam Path",
             settings_steam_path_invalid: "Invalid path: enter a valid Steam install folder",
             settings_language_title: "Language",
+            settings_tray_title: "System Tray",
+            settings_tray_minimize: "Hide to tray when minimized",
             settings_version_label: "Version",
             settings_app_update_title: "App Update",
             settings_btn_app_update_check: "Check App Update",

@@ -34,11 +34,12 @@ impl Tray {
         show_label: &str,
         quit_label: &str,
         minimize_label: &str,
+        minimize_checked: bool,
         restart_label: &str,
     ) -> Option<Self> {
         let show_item = MenuItem::new(show_label, true, None);
         let quit_item = MenuItem::new(quit_label, true, None);
-        let minimize_item = CheckMenuItem::new(minimize_label, true, true, None);
+        let minimize_item = CheckMenuItem::new(minimize_label, true, minimize_checked, None);
         let restart_item = MenuItem::new(restart_label, true, None);
         let menu = Menu::new();
         menu.append(&show_item).ok()?;
@@ -74,6 +75,11 @@ impl Tray {
     /// 「最小化时自动隐藏到托盘」是否勾选。
     pub fn is_minimize_to_tray(&self) -> bool {
         self.minimize_item.is_checked()
+    }
+
+    /// 程序化设置「最小化时自动隐藏到托盘」勾选态（设置对话框勾选时同步到托盘菜单）。
+    pub fn set_minimize_to_tray(&self, checked: bool) {
+        self.minimize_item.set_checked(checked);
     }
 
     /// 拉取一个待处理的托盘动作（非阻塞）。无事件返回 None。

@@ -236,6 +236,7 @@ mod tests {
             version: CONFIG_VERSION,
             steam_path: steam_path.into(),
             language: Language::Auto,
+            minimize_to_tray: true,
         };
         config::save(&dir.join(CONFIG_FILE), &cfg).unwrap();
     }

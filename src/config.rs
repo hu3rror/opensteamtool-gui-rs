@@ -87,15 +87,18 @@ pub struct Config {
     pub steam_path: String,
     /// 语言偏好（三态）。
     pub language: Language,
+    /// 最小化时是否自动隐藏到托盘（缺省启用；字段缺失 = true，老配置无迁移）。
+    pub minimize_to_tray: bool,
 }
 
 impl Config {
-    /// 缺文件/内容非法时的兜底默认值：未设置路径、跟随系统。
+    /// 缺文件/内容非法时的兜底默认值：未设置路径、跟随系统、托盘隐身启用。
     pub fn defaults() -> Self {
         Self {
             version: CONFIG_VERSION,
             steam_path: String::new(),
             language: Language::Auto,
+            minimize_to_tray: true,
         }
     }
 }
@@ -158,10 +161,20 @@ fn parse(text: &str) -> Result<Config, ConfigError> {
         .and_then(Language::parse)
         .ok_or_else(|| ConfigError::Parse("missing or invalid language".into()))?;
 
+    // 最小化隐身：字段缺失 = 默认启用（老配置无该字段，不迁移不 bump 版本）；
+    // 存在但类型非法仍严格报错（不宽容吞掉写错的值）。
+    let minimize_to_tray = match doc.get("minimize_to_tray") {
+        None => true,
+        Some(v) => v
+            .as_bool()
+            .ok_or_else(|| ConfigError::Parse("minimize_to_tray must be a boolean".into()))?,
+    };
+
     Ok(Config {
         version: CONFIG_VERSION,
         steam_path,
         language,
+        minimize_to_tray,
     })
 }
 
@@ -172,6 +185,7 @@ fn serialize(config: &Config) -> String {
     doc["version"] = toml_edit::value(config.version as i64);
     doc["steam_path"] = toml_edit::value(config.steam_path.trim().to_owned());
     doc["language"] = toml_edit::value(config.language.as_str());
+    doc["minimize_to_tray"] = toml_edit::value(config.minimize_to_tray);
     doc.to_string()
 }
 
@@ -187,24 +201,27 @@ mod tests {
         dir
     }
 
-    /// 三语言 × 有/无路径的完整往返：save → load 恒等。
+    /// 三语言 × 有/无路径 × 托盘开关的完整往返：save → load 恒等。
     #[test]
     fn round_trip_all_fields() {
         let dir = tmp_dir("roundtrip");
         let path = dir.join(CONFIG_FILE);
         for lang in [Language::Auto, Language::Zh, Language::En] {
             for steam_path in ["C:/Program Files (x86)/Steam", ""] {
-                let cfg = Config {
-                    version: CONFIG_VERSION,
-                    steam_path: steam_path.into(),
-                    language: lang,
-                };
-                save(&path, &cfg).unwrap();
-                assert_eq!(
-                    load(&path).unwrap(),
-                    cfg,
-                    "round-trip {lang:?} {steam_path:?}"
-                );
+                for minimize_to_tray in [true, false] {
+                    let cfg = Config {
+                        version: CONFIG_VERSION,
+                        steam_path: steam_path.into(),
+                        language: lang,
+                        minimize_to_tray,
+                    };
+                    save(&path, &cfg).unwrap();
+                    assert_eq!(
+                        load(&path).unwrap(),
+                        cfg,
+                        "round-trip {lang:?} {steam_path:?} {minimize_to_tray}"
+                    );
+                }
             }
         }
         std::fs::remove_dir_all(&dir).ok();
@@ -219,6 +236,24 @@ mod tests {
         assert_eq!(cfg.steam_path, "");
         assert_eq!(cfg.language, Language::Auto);
         assert_eq!(cfg.version, CONFIG_VERSION);
+        assert!(cfg.minimize_to_tray, "缺省应启用托盘隐身");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 老配置无 `minimize_to_tray` 字段：缺省启用，不迁移不 bump 版本（#37）。
+    #[test]
+    fn missing_minimize_to_tray_defaults_enabled() {
+        let dir = tmp_dir("oldcfg");
+        let path = dir.join(CONFIG_FILE);
+        std::fs::write(
+            &path,
+            "version = 1\nsteam_path = \"C:/S\"\nlanguage = \"zh\"",
+        )
+        .unwrap();
+        let cfg = load(&path).unwrap();
+        assert_eq!(cfg.language, Language::Zh);
+        assert_eq!(cfg.steam_path, "C:/S");
+        assert!(cfg.minimize_to_tray, "字段缺失应默认启用");
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -244,6 +279,13 @@ mod tests {
         std::fs::write(
             &path,
             "version = 1\nsteam_path = \"C:/S\"\nlanguage = \"fr\"",
+        )
+        .unwrap();
+        assert!(matches!(load(&path), Err(ConfigError::Parse(_))));
+        // minimize_to_tray 类型非法（存在但非布尔：不宽容吞掉写错的值）。
+        std::fs::write(
+            &path,
+            "version = 1\nsteam_path = \"C:/S\"\nlanguage = \"zh\"\nminimize_to_tray = \"yes\"",
         )
         .unwrap();
         assert!(matches!(load(&path), Err(ConfigError::Parse(_))));

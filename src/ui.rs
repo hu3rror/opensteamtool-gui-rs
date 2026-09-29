@@ -560,7 +560,8 @@ pub struct App {
     autosized: bool,
     /// 显示窗口后待发送的 Focus（置顶）命令。
     pending_focus: bool,
-    /// 最小化时是否自动隐藏到托盘（托盘菜单勾选项）。
+    /// 最小化时是否自动隐藏到托盘（#37：config.toml 持久化；设置页勾选与托盘
+    /// 菜单勾选共用此同一事实源，任一入口变更双向同步并落盘）。
     minimize_to_tray: bool,
     /// 上一帧是否处于最小化（检测最小化按钮被点击）。
     was_minimized: bool,
@@ -993,11 +994,13 @@ impl App {
             strings.tray_show,
             strings.tray_quit,
             strings.tray_minimize,
+            config.minimize_to_tray,
             strings.tray_restart,
         );
 
         let flow = CompatFlow::new();
 
+        let minimize_to_tray = config.minimize_to_tray;
         let mut app = Self {
             config,
             lang_pref,
@@ -1020,7 +1023,7 @@ impl App {
             window_visible: true,
             autosized: false,
             pending_focus: false,
-            minimize_to_tray: true,
+            minimize_to_tray,
             was_minimized: false,
             settings_open: false,
             settings_tab: SettingsTab::General,
@@ -1087,6 +1090,17 @@ impl App {
             tray.set_restart_enabled(self.status != DeployStatus::InvalidPath);
         }
     }
+
+    /// 最小化隐身偏好的唯一写入点（#37）：设置对话框勾选与托盘菜单勾选共用
+    /// `config.minimize_to_tray` 同一事实源，任一入口变更即同步另一入口并持久化。
+    fn set_minimize_to_tray(&mut self, checked: bool) {
+        self.minimize_to_tray = checked;
+        self.config.minimize_to_tray = checked;
+        self.persist_config();
+        if let Some(tray) = &self.tray {
+            tray.set_minimize_to_tray(checked);
+        }
+    }
     /// 处理托盘事件：切换显隐 / 显示 / 退出。
     fn handle_tray_events(&mut self) {
         let Some(tray) = &self.tray else { return };
@@ -1107,7 +1121,7 @@ impl App {
                     self.tray = None;
                     std::process::exit(0);
                 }
-                TrayAction::ToggleMinimizeToTray => self.minimize_to_tray = minimize_checked,
+                TrayAction::ToggleMinimizeToTray => self.set_minimize_to_tray(minimize_checked),
                 TrayAction::RestartSteam => self.request_action(&ctx, Action::Restart),
             }
         }
@@ -1431,7 +1445,8 @@ impl App {
         }
     }
 
-    /// 通用页签（#34 重组）：语言下拉（即改即存）→ 重新运行向导（低频操作，Neutral 样式）。
+    /// 通用页签（#34 重组 + #37 托盘行）：语言下拉（即改即存）→ 系统托盘勾选
+    /// （即改即存，与托盘菜单双向同步）→ 重新运行向导（低频操作，Neutral 样式）。
     /// 语言选项与向导步骤 1 共用同一份选项表（`Strings::language_options`），新增语言只改一处。
     fn settings_general(&mut self, ui: &mut egui::Ui) {
         // ---- 语言（下拉；选中即应用并持久化，无重启） ----
@@ -1444,6 +1459,18 @@ impl App {
             self.set_language(lang);
             self.config.language = lang;
             self.persist_config();
+        }
+
+        // ---- 系统托盘（勾选即改即存；与托盘菜单勾选同一事实源双向同步，见 #37） ----
+        ui.add_space(12.0);
+        card_title(ui, self.strings.settings_tray_title);
+        ui.add_space(8.0);
+        let mut minimize_to_tray = self.minimize_to_tray;
+        if ui
+            .checkbox(&mut minimize_to_tray, self.strings.settings_tray_minimize)
+            .changed()
+        {
+            self.set_minimize_to_tray(minimize_to_tray);
         }
     }
 
