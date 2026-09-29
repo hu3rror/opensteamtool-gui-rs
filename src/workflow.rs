@@ -30,13 +30,13 @@ pub enum Action {
 
 impl Action {
     /// 点击时若 Steam 在运行**需要先弹「关闭确认」框**的操作（确认流判定）。
-    /// 注意：`Restart` 恒含关闭步骤但不弹确认框（按钮语义即「关闭并重启」，
-    /// 再确认是冗余打扰）；`plan` 对 `Restart` 无条件先关闭。
+    /// #36 修订：只有两个卸载类复合动作（退出并卸载 / 卸载并重启）需要确认；
+    /// 「应用补丁并启动」意图明确（补丁应用本身就是目的），Steam 运行中直接
+    /// 放行走「优雅退出 → 部署 → 拉起」（见 ui.rs `request_action` 的
+    /// `kill_first` 派生）；`Restart` 恒含关闭步骤但不弹确认框（按钮语义即
+    /// 「关闭并重启」，再确认是冗余打扰）。
     pub fn asks_to_close_steam(self) -> bool {
-        matches!(
-            self,
-            Action::ApplyAndLaunch | Action::ExitAndUninstall | Action::UninstallAndRestart
-        )
+        matches!(self, Action::ExitAndUninstall | Action::UninstallAndRestart)
     }
 }
 
@@ -89,8 +89,8 @@ pub struct WorkflowError {
 
 /// 动作判定表 + 前置校验。返回有序执行步骤；前置不满足返回 `Precheck`。
 ///
-/// `kill_first` 表示先关闭 Steam（确认弹窗同意后为 true；仅 `asks_to_close_steam`
-/// 的动作会走到该分支）。
+/// `kill_first` 表示先关闭 Steam：确认弹窗同意后为 true，或「应用补丁并启动」在
+/// Steam 运行中直接放行时同样为 true（#36：ApplyAndLaunch 不再弹确认框）。
 pub fn plan(
     action: Action,
     kill_first: bool,
@@ -347,10 +347,12 @@ mod tests {
         std::fs::remove_dir_all(&steam).ok();
     }
 
-    // 6. Action::asks_to_close_steam 表：三个需先弹确认，Launch 不需（Restart 恒关闭但不弹）。
+    // 6. Action::asks_to_close_steam 表（#36 修订）：仅两个卸载类复合动作需先弹确认；
+    //    ApplyAndLaunch 不再弹（Steam 运行中直接放行走优雅退出，见 ui.rs）；Launch 不需
+    //    （Restart 恒关闭但不弹）。
     #[test]
     fn action_asks_to_close_steam_table() {
-        assert!(Action::ApplyAndLaunch.asks_to_close_steam());
+        assert!(!Action::ApplyAndLaunch.asks_to_close_steam());
         assert!(!Action::Launch.asks_to_close_steam());
         assert!(Action::ExitAndUninstall.asks_to_close_steam());
         assert!(Action::UninstallAndRestart.asks_to_close_steam());

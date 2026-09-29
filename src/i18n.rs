@@ -31,6 +31,8 @@ pub struct Strings {
     pub window_title: &'static str,
     pub steam_path_label: &'static str,
     pub browse: &'static str,
+    /// 部署状态卡片标题（#36：原「本地应用状态 / LOCAL PATCH STATUS」改为词表定名
+    /// 「部署状态 / DEPLOY STATUS」；accent bar 形态不变）。
     pub card2_title: &'static str,
     pub status_invalid: &'static str,
     pub status_deployed: &'static str,
@@ -70,6 +72,8 @@ pub struct Strings {
     /// 兼容性体检本地文件操作失败（CompatError::Io）。
     pub err_compat_io: &'static str,
     pub err_write_local: &'static str,
+    /// 「应用补丁并启动」成功反馈（#36：原「已部署补丁 / Patch deployed」改为
+    /// 「补丁已应用 / Patch applied」——「已部署」不再作为任何状态词出现）。
     pub ok_deployed: &'static str,
     pub ok_uninstalled: &'static str,
     pub ok_launched: &'static str,
@@ -261,15 +265,15 @@ impl Strings {
             window_title: "OpenSteamTool 一键管理工具",
             steam_path_label: "路径",
             browse: "浏览...",
-            card2_title: "本地应用状态",
+            card2_title: "部署状态",
             status_invalid: "【未应用】请先指定有效的 Steam 安装路径",
             status_deployed: "【已应用】OpenSteamTool 补丁已成功生效",
             status_not_deployed: "【未应用】检测到补丁文件未完整部署",
             btn_apply_and_launch: "▶ 应用补丁并启动 Steam",
             btn_launch_normal: "▶ 正常启动 Steam",
             btn_launch: "▶ 启动 Steam",
-            btn_exit_and_uninstall: "◀ 退出 Steam 并卸载补丁",
-            btn_uninstall_and_restart: "◀ 卸载补丁并重启 Steam",
+            btn_exit_and_uninstall: "⏏ 退出 Steam 并卸载补丁",
+            btn_uninstall_and_restart: "⏏ 卸载补丁并重启 Steam",
             btn_restart_steam: "↻ 重启 Steam",
             hint_download_patch: "补丁未下载：请点击上方「检查补丁更新」下载新版本",
             main_warning_pending: "⚠ Steam 核心兼容性异常：上游尚未适配此版本（点击前往 设置 → Steam）",
@@ -292,7 +296,7 @@ impl Strings {
             err_parse_version: "解析线上版本失败",
             err_compat_io: "本地文件操作失败",
             err_write_local: "写入本地文件失败",
-            ok_deployed: "已部署补丁",
+            ok_deployed: "补丁已应用",
             ok_uninstalled: "已卸载补丁",
             ok_launched: "Steam 已启动",
             ok_restarted: "Steam 已重启",
@@ -379,15 +383,15 @@ impl Strings {
             window_title: "OpenSteamTool Manager",
             steam_path_label: "Path",
             browse: "Browse...",
-            card2_title: "LOCAL PATCH STATUS",
+            card2_title: "DEPLOY STATUS",
             status_invalid: "[Not Applied] Please specify a valid Steam path",
             status_deployed: "[Applied] OpenSteamTool patch is now active",
             status_not_deployed: "[Not Applied] Patch files incomplete or missing",
             btn_apply_and_launch: "▶ Apply Patch & Launch Steam",
             btn_launch_normal: "▶ Launch Steam Normally",
             btn_launch: "▶ Launch Steam",
-            btn_exit_and_uninstall: "◀ Exit Steam & Uninstall Patch",
-            btn_uninstall_and_restart: "◀ Uninstall Patch & Restart Steam",
+            btn_exit_and_uninstall: "⏏ Exit Steam & Uninstall Patch",
+            btn_uninstall_and_restart: "⏏ Uninstall Patch & Restart Steam",
             btn_restart_steam: "↻ Restart Steam",
             hint_download_patch: "Patch not downloaded: click 'Check Patch Update' above to download",
             main_warning_pending: "⚠ Steam core compatibility issue: this version is not yet supported upstream (click to open Settings → Steam)",
@@ -410,7 +414,7 @@ impl Strings {
             err_parse_version: "Failed to parse online version",
             err_compat_io: "Local file operation failed",
             err_write_local: "Failed to write local files",
-            ok_deployed: "Patch deployed",
+            ok_deployed: "Patch applied",
             ok_uninstalled: "Patch removed",
             ok_launched: "Steam launched",
             ok_restarted: "Steam restarted",
@@ -628,5 +632,49 @@ mod tests {
             assert_eq!(s.busy_label(BusyKind::Downloading), s.busy_downloading);
             assert_eq!(s.busy_label(BusyKind::ClosingSteam), s.busy_killing);
         }
+    }
+
+    /// #36：卸载类按钮符号 ⏏（启动 ▶ / 重启 ↻）；卡片标题「部署状态 / DEPLOY
+    /// STATUS」；应用成功反馈「补丁已应用 / Patch applied」。覆盖携带状态词的 UI
+    /// 字段，确保「◀」「已部署」与 "deployed" 不作为任何状态词残留（zh + en）。
+    #[test]
+    fn ui_copy_follows_v36_terminology() {
+        let zh = Strings::new(Lang::Zh);
+        let en = Strings::new(Lang::En);
+        for (lang, s) in [(Lang::Zh, &zh), (Lang::En, &en)] {
+            // 符号按动作定型：卸载类 ⏏；启动 ▶；重启 ↻。
+            assert!(s.btn_exit_and_uninstall.starts_with('⏏'));
+            assert!(s.btn_uninstall_and_restart.starts_with('⏏'));
+            assert!(s.btn_apply_and_launch.starts_with('▶'));
+            assert!(s.btn_launch.starts_with('▶'));
+            assert!(s.btn_launch_normal.starts_with('▶'));
+            assert!(s.btn_restart_steam.starts_with('↻'));
+            // 状态词残留检查：可能携带「部署/应用」状态词的字段全量过一遍。
+            let statusish = [
+                s.card2_title,
+                s.status_invalid,
+                s.status_deployed,
+                s.status_not_deployed,
+                s.ok_deployed,
+                s.ok_uninstalled,
+                s.busy_deploying,
+                s.busy_uninstalling,
+                s.err_deploy,
+                s.err_uninstall,
+            ];
+            for t in statusish {
+                assert!(!t.contains('◀'), "{lang:?} 文案 {t} 残留 ◀");
+                assert!(!t.contains("已部署"), "{lang:?} 文案 {t} 残留 已部署");
+                assert!(
+                    !t.to_lowercase().contains("deployed"),
+                    "{lang:?} 文案 {t} 残留 deployed"
+                );
+            }
+        }
+        // 卡片标题与成功反馈的精确文案（#36 定稿）。
+        assert_eq!(zh.card2_title, "部署状态");
+        assert_eq!(en.card2_title, "DEPLOY STATUS");
+        assert_eq!(zh.ok_deployed, "补丁已应用");
+        assert_eq!(en.ok_deployed, "Patch applied");
     }
 }

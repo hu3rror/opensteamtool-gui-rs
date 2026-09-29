@@ -1132,7 +1132,10 @@ impl App {
         }
     }
 
-    /// 用户点击操作按钮：Steam 在运行且操作需关闭 Steam → 弹确认框；否则直接执行。
+    /// 用户点击操作按钮：Steam 运行中且操作需关闭 Steam → 弹确认框；否则直接执行。
+    /// #36：Steam 运行中「应用补丁并启动」不再弹确认框，直接放行走
+    /// 优雅退出 → 部署 → 拉起（`kill_first` 随运行态派生为 true）；
+    /// 两个卸载类复合动作保留确认框；「重启 Steam」恒不弹。
     fn request_action(&mut self, ctx: &egui::Context, action: Action) {
         if self.gate.is_busy() {
             return;
@@ -1141,7 +1144,12 @@ impl App {
             self.confirm = Some(action);
             return;
         }
-        self.start_action(ctx, action, false);
+        // #36：Steam 运行中「应用补丁并启动」免除确认框，但部署前仍需先关 Steam
+        // （DLL 被占用；`plan` 在 kill_first 时首插 CloseSteam）。此分支与
+        // `Action::asks_to_close_steam` 正交——该表只决定「是否弹框」，本行决定
+        // 免框直行时的 kill_first（新增免框动作需同步此处）。
+        let kill_first = self.steam_running && action == Action::ApplyAndLaunch;
+        self.start_action(ctx, action, kill_first);
     }
 
     fn start_action(&mut self, ctx: &egui::Context, action: Action, kill_first: bool) {
@@ -2335,6 +2343,60 @@ mod tests {
             egui::epaint::text::Fonts::new(egui::epaint::text::TextOptions::default(), defs);
         assert!(fonts.has_glyph(&egui::FontId::proportional(14.0), 'X')); // latin sanity
         assert!(fonts.has_glyph(&egui::FontId::proportional(14.0), '中'));
+    }
+
+    /// #36：操作按钮符号（▶ 应用/启动 / ↻ 重启 / ⏏ 卸载类）必须在真实字体栈
+    /// （egui 默认字体 + 系统中文字体 fallback）中渲染为真实字形，不得退化为
+    /// 替换框（tofu）。egui 的 `has_glyph` 在字形归属脸 == 替换脸时存在已知误报
+    /// （epaint 源码 TODO 注明），故用布局级检查：符号渲染出的字形（atlas uv）
+    /// 不得等于替换字符（◻ / ?）的字形。
+    #[test]
+    fn action_symbols_render_real_glyphs_in_app_font_stack() {
+        let mut defs = egui::FontDefinitions::default();
+        if let Some(font_data) = read_system_cjk_font() {
+            defs.font_data
+                .insert("cjk-test".into(), std::sync::Arc::new(font_data));
+            defs.families
+                .entry(egui::FontFamily::Proportional)
+                .or_default()
+                .push("cjk-test".into());
+            defs.families
+                .entry(egui::FontFamily::Monospace)
+                .or_default()
+                .push("cjk-test".into());
+        }
+        let mut fonts =
+            egui::epaint::text::Fonts::new(egui::epaint::text::TextOptions::default(), defs);
+        // 单个字符布局 → 渲染出的字形 uv 列表（缺字时 egui 换成替换字符的字形）。
+        let uv = |fonts: &mut egui::epaint::text::Fonts, text: &str| {
+            let mut view = fonts.with_pixels_per_point(1.0);
+            let galley = view.layout(
+                text.to_owned(),
+                egui::FontId::proportional(14.0),
+                theme::WHITE,
+                f32::INFINITY,
+            );
+            galley
+                .rows
+                .iter()
+                .flat_map(|r| r.glyphs.iter().map(|g| g.uv_rect))
+                .collect::<Vec<_>>()
+        };
+        // 替换字形对照：egui 的替换字符是 ◻（找不到才退 ?）。
+        let tofu = [uv(&mut fonts, "◻"), uv(&mut fonts, "?")];
+        for (sym, name) in [('▶', "应用/启动"), ('↻', "重启"), ('⏏', "卸载类")] {
+            let rendered = uv(&mut fonts, &sym.to_string());
+            assert_eq!(
+                rendered.len(),
+                1,
+                "{name} 符号 {sym:?} 布局应恰好产出一个字形"
+            );
+            assert!(
+                rendered != tofu[0] && rendered != tofu[1],
+                "{name} 符号 {sym:?}（U+{:04X}）渲染成了替换框（tofu）",
+                sym as u32
+            );
+        }
     }
 
     /// 未注册任何 CJK 字体时，默认字体确实无中文字形（红/绿判别用）。
