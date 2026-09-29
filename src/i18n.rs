@@ -123,7 +123,7 @@ pub struct Strings {
     pub settings_steam_path_invalid: &'static str,
     /// Settings — 通用 页签语言小节标题。
     pub settings_language_title: &'static str,
-    /// 更新页签软件版本行前缀（实际版本号由 crate 版本拼接）。
+    /// 关于页签软件版本行前缀（实际版本号由 crate 版本拼接）。
     pub settings_version_label: &'static str,
     /// Settings — 关于 页签应用更新小节标题（软件版本 + 应用更新检查）。
     pub settings_app_update_title: &'static str,
@@ -138,7 +138,7 @@ pub struct Strings {
     /// 补丁检查结果文案（永不出现补丁版本号，见 #30）。
     pub settings_patch_up_to_date: &'static str,
     pub settings_patch_new_version: &'static str,
-    /// Settings — 通用 页签重新运行向导小节标题。
+    /// Settings — 关于 页签重新运行向导小节标题。
     pub settings_wizard_title: &'static str,
     pub settings_btn_rerun_wizard: &'static str,
     /// 重新运行向导提示（以当前配置为初值）。

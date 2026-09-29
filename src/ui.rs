@@ -16,7 +16,7 @@ use crate::i18n::{Lang, Strings};
 use crate::process::{self, SteamEvent, SteamMonitor};
 use crate::steam;
 use crate::steam_state::SteamState;
-use crate::theme::{self, ButtonStyle};
+use crate::theme::{self, ButtonPalette, ButtonStyle};
 use crate::tray::{Tray, TrayAction};
 use crate::update_flow::{UpdateFlow, UpdateNotice};
 use crate::updater::{self, OnlineInfo, UpdateError};
@@ -134,21 +134,7 @@ fn styled_button(
     };
     let (rect, response) = ui.allocate_exact_size(size, sense);
     if ui.is_rect_visible(rect) {
-        let fill = if enabled && response.hovered() {
-            palette.hover
-        } else {
-            palette.bg
-        };
-        let stroke = palette
-            .border
-            .map_or(egui::Stroke::NONE, |c| egui::Stroke::new(1.0, c));
-        ui.painter().rect(
-            rect,
-            egui::CornerRadius::same(8),
-            fill,
-            stroke,
-            egui::StrokeKind::Inside,
-        );
+        paint_button_chrome(ui, rect, enabled && response.hovered(), palette);
         let color = if enabled { palette.fg } else { theme::WEAK };
         ui.painter().text(
             rect.center(),
@@ -161,6 +147,22 @@ fn styled_button(
     response
 }
 
+/// 按钮底/描边/圆角绘制（styled_button / gear_button / github_link_button 共用，
+/// 评审修复：消除三处重复的 Neutral chrome）。颜色只来自语义色板（ADR-0010）。
+fn paint_button_chrome(ui: &mut egui::Ui, rect: egui::Rect, hovered: bool, palette: ButtonPalette) {
+    let fill = if hovered { palette.hover } else { palette.bg };
+    let stroke = palette
+        .border
+        .map_or(egui::Stroke::NONE, |c| egui::Stroke::new(1.0, c));
+    ui.painter().rect(
+        rect,
+        egui::CornerRadius::same(8),
+        fill,
+        stroke,
+        egui::StrokeKind::Inside,
+    );
+}
+
 /// 顶栏设置入口：程序化绘制的齿轮图标按钮（#34）——字体无关，不依赖任何系统的
 /// 字形覆盖（⚙ 在无 CJK 字体的英文系统上会变豆腐块）。配色取自 Neutral 按钮样式
 /// （ADR-0010）；悬停 tooltip 保留文字名，保住可发现性。
@@ -170,17 +172,7 @@ fn gear_button(ui: &mut egui::Ui, tooltip: &str) -> egui::Response {
     let response = response.on_hover_text(tooltip);
     if ui.is_rect_visible(rect) {
         let hovered = response.hovered();
-        let fill = if hovered { palette.hover } else { palette.bg };
-        let stroke = palette
-            .border
-            .map_or(egui::Stroke::NONE, |c| egui::Stroke::new(1.0, c));
-        ui.painter().rect(
-            rect,
-            egui::CornerRadius::same(8),
-            fill,
-            stroke,
-            egui::StrokeKind::Inside,
-        );
+        paint_button_chrome(ui, rect, hovered, palette);
         let color = if hovered { theme::ACCENT } else { palette.fg };
         paint_gear(ui.painter(), rect.center(), color);
     }
@@ -220,17 +212,7 @@ fn github_link_button(
     let response = response.on_hover_text(tooltip);
     if ui.is_rect_visible(rect) {
         let hovered = response.hovered();
-        let fill = if hovered { palette.hover } else { palette.bg };
-        let stroke = palette
-            .border
-            .map_or(egui::Stroke::NONE, |c| egui::Stroke::new(1.0, c));
-        ui.painter().rect(
-            rect,
-            egui::CornerRadius::same(8),
-            fill,
-            stroke,
-            egui::StrokeKind::Inside,
-        );
+        paint_button_chrome(ui, rect, hovered, palette);
         // 内容组（图标 + 文字）整体居中于按钮。
         let group_w = icon_w + text_w;
         let left = rect.left() + (rect.width() - group_w) / 2.0;
@@ -239,11 +221,13 @@ fn github_link_button(
                 egui::pos2(left, rect.center().y - 8.0),
                 egui::vec2(16.0, 16.0),
             );
+            // 内嵌 mark 为官方浅色版（白底可见性差）：用 INK 着色使浅色像素乘成墨色，
+            // 在白色按钮上呈现深色 Octocat（评审修复；theme::WHITE 在白底上不可见）。
             ui.painter().image(
                 tex.id(),
                 icon_rect,
                 egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                theme::WHITE,
+                theme::INK,
             );
         }
         ui.painter().text(
@@ -376,7 +360,7 @@ enum Msg {
     },
     /// 首次运行向导的「检查更新 → 下载并解压」完成。
     WizardDownload(Result<(), UpdateError>),
-    /// 应用更新检查完成（Settings — 更新页签；只读查询，不进忙碌门禁）。
+    /// 应用更新检查完成（Settings — 关于页签；只读查询，不进忙碌门禁）。
     AppUpdateChecked(Result<updater::AppUpdateCheckResult, UpdateError>),
 }
 
@@ -534,7 +518,7 @@ pub struct App {
     settings_tab: SettingsTab,
     /// Settings — Steam 页签路径编辑状态（缓冲 + 内联错误；打开对话框时播种）。
     settings_steam: SteamPathEditor,
-    /// 应用更新检查结果（Settings — 更新页签；None = 尚未检查）。
+    /// 应用更新检查结果（Settings — 关于页签；None = 尚未检查）。
     /// 检查中由 `app_update_checking` 表达（发起时覆盖旧结果）。
     app_update: Option<Result<updater::AppUpdateCheckResult, UpdateError>>,
     /// 应用更新检查是否在途（自管忙碌：只读查询不进 Busy Gate，按钮在途自禁用）。
@@ -1234,7 +1218,7 @@ impl App {
 
     /// 应用更新检查：查询本仓库最新发布并与当前程序版本比较。只读查询，不进忙碌门禁
     /// （不互斥补丁/操作类后台任务）；检查中按钮自禁用防重复发起，结果仅呈现在
-    /// Settings — 更新页签。不下载、不自替换（明确非目标）。
+    /// Settings — 关于页签。不下载、不自替换（明确非目标）。
     fn check_app_update(&mut self, ctx: &egui::Context) {
         if self.app_update_checking {
             return;
@@ -1833,6 +1817,13 @@ impl App {
         report: &compat::OverallHealthReport,
         summary: CompatSummary,
     ) {
+        // 展开当帧滚动到明细**起点**贴顶（#34 复看 + 评审修复：此前滚到明细末尾居中，
+        // 明细高于视口时首行 steamclient64.dll (IPC) 会被顶出视口上方；滚起点则首行必见）。
+        // 仅一帧，随后交还滚动控制。
+        if self.compat_scroll_pending {
+            self.compat_scroll_pending = false;
+            ui.scroll_to_cursor(Some(egui::Align::TOP));
+        }
         ui.add_space(6.0);
         // 状态说明：Checking 为瞬时态不显示。
         if summary != CompatSummary::Checking {
@@ -1884,12 +1875,6 @@ impl App {
             {
                 self.request_precache(&ctx);
             }
-        }
-        // 展开当帧滚动到明细可见（#34 复看：点击「详细信息」即见 steamclient64.dll
-        // (IPC) 等明细行，无需手动滚动；仅一帧，随后交还滚动控制）。
-        if self.compat_scroll_pending {
-            self.compat_scroll_pending = false;
-            ui.scroll_to_cursor(Some(egui::Align::Center));
         }
     }
 
