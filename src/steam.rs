@@ -20,7 +20,7 @@ pub fn detect_steam_path() -> Option<PathBuf> {
     for (hive, subkey) in STEAM_REG_PATHS {
         let key = match RegKey::predef(hive).open_subkey(subkey) {
             Ok(k) => k,
-            Err(_) => continue, // 尝试下一个注册表位置
+            Err(_) => continue,
         };
         let value: Result<String, _> = key.get_value("SteamPath");
         if let Ok(path) = value {
@@ -81,7 +81,7 @@ fn close_steam_with_budget(
     shutdown_budget: Duration,
 ) -> Result<(), String> {
     if !steam.group_running(steam_dir) {
-        return Ok(()); // 本就未运行
+        return Ok(());
     }
     // 仅当本目录的 steam.exe 实例在运行才发优雅信号：`-shutdown` 在无实例时可能
     // 意外启动 Steam（他处安装的 steam.exe 不算），纯孤儿进程应直接硬杀。
@@ -94,7 +94,7 @@ fn close_steam_with_budget(
             .spawn()
             .is_ok();
         if sent && steam.wait_group_empty(steam_dir, shutdown_budget) {
-            return Ok(()); // 优雅退出完成
+            return Ok(());
         }
     }
     steam.kill(steam_dir)

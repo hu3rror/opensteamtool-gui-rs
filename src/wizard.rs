@@ -241,8 +241,6 @@ mod tests {
         config::save(&dir.join(CONFIG_FILE), &cfg).unwrap();
     }
 
-    // ---------- 触发判据（临时目录注入） ----------
-
     /// 缺文件 = 未配置 → 显示向导；有效路径 → 永不显示（「never otherwise」）。
     #[test]
     fn trigger_missing_vs_valid_path() {
@@ -300,8 +298,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    // ---------- 状态机：步进 ----------
-
     /// 完整步进：语言 → 路径 → 下载 → 完成；效果与终局正确。
     #[test]
     fn step_progression_to_completion() {
@@ -335,7 +331,6 @@ mod tests {
         );
         assert!(fx.is_empty(), "进入步骤 3 不应产出下载效果");
 
-        // 显式点击「下载并解压」才启动。
         let (v, fx) = w.step(Event::DownloadRequested);
         assert!(matches!(v.download, DownloadState::Running));
         assert_eq!(fx, vec![Effect::Download]);
@@ -377,8 +372,6 @@ mod tests {
         std::fs::remove_dir_all(&steam).ok();
     }
 
-    // ---------- 状态机：下载失败 / 重试 / 跳过 ----------
-
     /// 下载失败 → 停留步骤 3 且可重试；重试成功后完成。
     #[test]
     fn download_failure_then_retry_succeeds() {
@@ -391,7 +384,6 @@ mod tests {
         assert!(fx.is_empty(), "失败不结束向导");
         assert!(!w.finished());
 
-        // 重试：重新进入 Running 并再次产出下载效果。
         let (v, fx) = w.step(Event::DownloadRequested);
         assert!(matches!(v.download, DownloadState::Running));
         assert_eq!(fx, vec![Effect::Download]);
@@ -505,7 +497,6 @@ mod tests {
         let (v, _) = w.step(Event::LanguageChosen(Language::Zh));
         assert_eq!(v.step, Step::Language, "再次改语言仍不推进");
         assert_eq!(v.language, Language::Zh);
-        // 步骤 2 才接受的路径事件在步骤 1 被忽略，不推进。
         let (v, fx) = w.step(Event::PathEdited("C:/x".into()));
         assert_eq!(v.step, Step::Language);
         assert!(fx.is_empty());
@@ -560,8 +551,6 @@ mod tests {
         w.step(Event::DownloadRequested);
         w
     }
-
-    // ---------- 步骤 3 就绪态（补丁已下载，ADR-0011 文件本位判据） ----------
 
     /// 补丁已下载（`dlls/` 三目标 DLL 齐全）→ 进入步骤 3 呈现就绪态而非「尚未下载」；
     /// 就绪态点「完成」（复用跳过事件）→ 收敛终局（持久化语言与路径）。

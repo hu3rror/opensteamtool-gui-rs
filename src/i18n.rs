@@ -31,8 +31,7 @@ pub struct Strings {
     pub window_title: &'static str,
     pub steam_path_label: &'static str,
     pub browse: &'static str,
-    /// 部署状态卡片标题（#36：原「本地应用状态 / LOCAL PATCH STATUS」改为词表定名
-    /// 「部署状态 / DEPLOY STATUS」；accent bar 形态不变）。
+    /// 部署状态卡片标题（词表定名「部署状态 / DEPLOY STATUS」，#36）。
     pub card2_title: &'static str,
     pub status_invalid: &'static str,
     pub status_deployed: &'static str,
@@ -46,12 +45,9 @@ pub struct Strings {
     /// 「重启 Steam」（已应用且 Steam 运行中时显示；纯 Steam 操作，无补丁）。
     pub btn_restart_steam: &'static str,
     /// 补丁未下载引导（操作区下方弱化提示；未部署且 dlls/ 缺文件时显示）。
-    /// ADR-0011 修订（#32 → #34 修订）：主页面补丁更新按钮已迁回主页面，引导指向
-    /// 操作区上方的「检查补丁更新」按钮（先检查 → 再下载并解压），不自动联网检查。
+    /// 指向操作区上方的「检查补丁更新」按钮（先检查 → 再下载并解压），不自动联网检查。
     pub hint_download_patch: &'static str,
-    /// 主页面健康风险警示（#32）：上游尚未适配此版本（点击跳 Settings — Steam）。
     pub main_warning_pending: &'static str,
-    /// 主页面健康风险警示（#32）：未找到核心 DLL（点击跳 Settings — Steam）。
     pub main_warning_missing: &'static str,
     pub btn_download_and_extract: &'static str,
     pub checking: &'static str,
@@ -69,11 +65,9 @@ pub struct Strings {
     pub err_network: &'static str,
     pub err_no_zip: &'static str,
     pub err_parse_version: &'static str,
-    /// 兼容性体检本地文件操作失败（CompatError::Io）。
     pub err_compat_io: &'static str,
     pub err_write_local: &'static str,
-    /// 「应用补丁并启动」成功反馈（#36：原「已部署补丁 / Patch deployed」改为
-    /// 「补丁已应用 / Patch applied」——「已部署」不再作为任何状态词出现）。
+    /// 「应用补丁并启动」成功反馈（词表定名「补丁已应用 / Patch applied」，#36）。
     pub ok_deployed: &'static str,
     pub ok_uninstalled: &'static str,
     pub ok_launched: &'static str,
@@ -90,7 +84,6 @@ pub struct Strings {
     pub btn_uninstall: &'static str,
     /// 托盘菜单「最小化时自动隐藏到托盘」勾选项。
     pub tray_minimize: &'static str,
-    /// 托盘菜单「重启 Steam」入口。
     pub tray_restart: &'static str,
     pub settings_title: &'static str,
     pub btn_close: &'static str,
@@ -115,29 +108,22 @@ pub struct Strings {
     pub compat_tip_missing: &'static str,
     pub compat_tip_network: &'static str,
     pub compat_row_dll: &'static str,
-    /// 设置对话框页签（#30 落地 General；#31 追加 Steam；#34 重组为 通用/关于/Steam）。
+    /// 设置对话框页签：通用 / 关于 / Steam。
     pub settings_tab_general: &'static str,
-    /// 设置对话框页签「关于」（#34 修订：应用更新 + 仓库信息 + 设置向导，取代原「更新」页签）。
     pub settings_tab_about: &'static str,
-    /// 设置对话框页签「Steam」（#31；Steam 路径编辑 + 兼容性小节）。
     pub settings_tab_steam: &'static str,
-    /// Settings — Steam 路径小节标题（#31）。
     pub settings_steam_title: &'static str,
     /// Settings — Steam 手输路径失焦/回车校验失败的内联错误（#31；非法输入不落盘）。
     pub settings_steam_path_invalid: &'static str,
-    /// Settings — 通用 页签语言小节标题。
     pub settings_language_title: &'static str,
-    /// Settings — 通用 页签系统托盘小节标题（#37）。
     pub settings_tray_title: &'static str,
     /// Settings — 通用 页签最小化隐身勾选项（#37；与托盘菜单勾选同一事实源）。
     pub settings_tray_minimize: &'static str,
     /// 关于页签软件版本行前缀（实际版本号由 crate 版本拼接）。
     pub settings_version_label: &'static str,
-    /// Settings — 关于 页签应用更新小节标题（软件版本 + 应用更新检查）。
     pub settings_app_update_title: &'static str,
     pub settings_btn_app_update_check: &'static str,
     pub settings_app_update_checking: &'static str,
-    /// App 更新检查「已是最新」。
     pub settings_app_update_up_to_date: &'static str,
     /// App 更新检查「发现新版本」前缀（后接版本号，如 v0.6.3）。
     pub settings_app_update_new_version: &'static str,
@@ -146,22 +132,15 @@ pub struct Strings {
     /// 补丁检查结果文案（永不出现补丁版本号，见 #30）。
     pub settings_patch_up_to_date: &'static str,
     pub settings_patch_new_version: &'static str,
-    /// Settings — 关于 页签重新运行向导小节标题。
     pub settings_wizard_title: &'static str,
     pub settings_btn_rerun_wizard: &'static str,
-    /// 重新运行向导提示（以当前配置为初值）。
     pub settings_rerun_wizard_hint: &'static str,
-    /// 主页面部署状态卡片辅助行：Steam 正在运行。
     pub status_steam_running: &'static str,
-    /// 主页面部署状态卡片辅助行：Steam 未运行。
     pub status_steam_stopped: &'static str,
     /// 顶栏设置齿轮按钮的悬停提示（图标按钮，可发现性靠 tooltip）。
     pub settings_gear_tooltip: &'static str,
-    /// 设置对话框页签行右侧 GitHub 入口的项目名文字（点击打开仓库页）。
     pub settings_github_label: &'static str,
-    /// 关于页签 GitHub 小节标题（仓库链接入口）。
     pub settings_github_title: &'static str,
-    /// 首次运行向导（wizard 模块渲染）。
     pub wizard_title: &'static str,
     /// 步骤指示（`{n}` 由 UI 替换为 1/2/3）。
     pub wizard_step_of: &'static str,
@@ -174,13 +153,11 @@ pub struct Strings {
     pub wizard_btn_next: &'static str,
     /// 步骤 3 未开始时的提示（下载需用户显式点击，不自动）。
     pub wizard_download_prompt: &'static str,
-    /// 步骤 3 就绪态提示（补丁已下载，无需再下载）。
     pub wizard_download_ready: &'static str,
     pub wizard_download_running: &'static str,
     pub wizard_download_failed: &'static str,
     pub wizard_btn_download: &'static str,
     pub wizard_btn_retry: &'static str,
-    /// 就绪态收尾按钮（补丁已下载时的「完成」）。
     pub wizard_btn_done: &'static str,
     pub wizard_btn_skip: &'static str,
 }

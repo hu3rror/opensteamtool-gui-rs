@@ -149,7 +149,7 @@ impl CompatFlow {
 
     fn on_probe_done(&mut self, epoch: Epoch, report: OverallHealthReport) -> Vec<Effect> {
         if epoch != self.epoch {
-            return Vec::new(); // 陈旧代数：丢弃。
+            return Vec::new();
         }
         self.checking = false;
         self.report = Some(report.clone());
@@ -164,7 +164,6 @@ impl CompatFlow {
                 });
             }
         }
-        // 自动预热：体检落定 Online 且无预热进行中 → 自动触发。
         if should_auto_precache(&report, self.precaching) {
             let targets = precache_targets(&report);
             if !targets.is_empty() {
@@ -401,8 +400,6 @@ mod tests {
             .find(|e| matches!(e, Effect::Precache { .. }))
     }
 
-    // ==================== compat_summary / precache_targets（自 ui.rs 迁入） ====================
-
     /// 检查中 / 无报告 → Checking（骨架态）。
     #[test]
     fn compat_summary_checking_when_in_progress() {
@@ -518,14 +515,11 @@ mod tests {
             ],
             true,
         );
-        // 第一项离线缓存已存在（算子层探针时判定的事实）→ 不收集。
         r.steamclient_pattern.signature_cached = true;
         let targets = precache_targets(&r);
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].0, ProbeTarget::PatternSteamUi);
     }
-
-    // ==================== 状态机转移 ====================
 
     /// 路径变更推进代数、产出快速体检效果、展示检查态；同路径防抖无动作。
     #[test]
@@ -543,11 +537,9 @@ mod tests {
         assert!(d.report.is_none());
         assert_eq!(d.summary, CompatSummary::Checking);
 
-        // 同路径 → 无动作。
         let (_, effects) = flow.step(Event::PathChanged("A".into()));
         assert!(effects.is_empty());
 
-        // 新路径 → 代数推进。
         let (_, effects) = flow.step(Event::PathChanged("B".into()));
         assert_eq!(
             effects,
@@ -581,7 +573,6 @@ mod tests {
         let new = start_probe(&mut flow, "B");
         assert_ne!(old, new);
 
-        // 旧代数的快速体检结果晚到 → 忽略（展示仍为 B 的检查态）。
         let (d, effects) = flow.step(Event::ProbeDone {
             epoch: old,
             report: report_with(all(S::RemoteAvailable { cached: true }), false),
@@ -590,7 +581,6 @@ mod tests {
         assert!(d.report.is_none());
         assert!(d.checking);
 
-        // 旧代数的刷新/预热完成 → 同样忽略。
         let (_, effects) = flow.step(Event::RefreshDone {
             epoch: old,
             report: report_with(all(S::RemoteAvailable { cached: true }), false),
@@ -622,7 +612,6 @@ mod tests {
             }]
         );
 
-        // 同代数再来一份短路报告（复检场景）→ 不再刷新。
         let (_, effects) = flow.step(Event::ProbeDone {
             epoch,
             report: shortcut,
@@ -648,7 +637,6 @@ mod tests {
         assert!(effects.is_empty());
         assert_eq!(d.summary, CompatSummary::Network);
 
-        // 网络恢复后同代数复检 → 刷新预算已消耗，不重试。
         let (_, effects) = flow.step(Event::ProbeDone {
             epoch,
             report: report_with(all(S::CompatibleOffline), false),
@@ -661,7 +649,6 @@ mod tests {
     fn refresh_merge_preserves_inflight_precache() {
         let mut flow = CompatFlow::new();
         let epoch = start_probe(&mut flow, "A");
-        // Online 报告 → 同时产出刷新 + 自动预热。
         let (_, effects) = flow.step(Event::ProbeDone {
             epoch,
             report: report_with(all(S::RemoteAvailable { cached: false }), true),
@@ -669,7 +656,6 @@ mod tests {
         assert!(effects.iter().any(|e| matches!(e, Effect::Refresh { .. })));
         assert!(find_precache(&effects).is_some());
 
-        // 刷新晚到：合并报告、清刷新在途，不得抹掉在途预热。
         let confirmed = report_with(all(S::RemoteAvailable { cached: true }), false);
         let (d, effects) = flow.step(Event::RefreshDone {
             epoch,
@@ -679,7 +665,6 @@ mod tests {
         assert!(d.precaching, "刷新不得抹掉在途预热");
         assert!(d.report.is_some());
 
-        // 预热完成：成功 → 复检 + 预热成功提示。
         let (d, effects) = flow.step(Event::PrecacheDone {
             epoch,
             result: Ok(()),
@@ -720,7 +705,6 @@ mod tests {
             other => panic!("expected auto precache, got {other:?}"),
         }
 
-        // 自动失败 → 静默：无错误提示，报告保持 Online（手动入口保留）。
         let (d, effects) = flow.step(Event::PrecacheDone {
             epoch,
             result: Err(CompatError::Network("boom".into())),
@@ -735,12 +719,10 @@ mod tests {
     #[test]
     fn manual_precache_requires_report_and_targets() {
         let mut flow = CompatFlow::new();
-        // 从未体检 → 无动作。
         let (_, effects) = flow.step(Event::PrecacheRequested);
         assert!(effects.is_empty());
 
         let epoch = start_probe(&mut flow, "A");
-        // 无目标（上游未适配）→ 无动作。
         let (_, effects) = flow.step(Event::ProbeDone {
             epoch,
             report: report_with(all(S::IncompatiblePending), false),
@@ -749,7 +731,6 @@ mod tests {
         let (_, effects) = flow.step(Event::PrecacheRequested);
         assert!(effects.is_empty());
 
-        // Online 态 → 自动预热启动；手动请求在途去重。
         let (_, effects) = flow.step(Event::ProbeDone {
             epoch,
             report: report_with(all(S::RemoteAvailable { cached: false }), true),
@@ -758,7 +739,6 @@ mod tests {
         let (_, effects) = flow.step(Event::PrecacheRequested);
         assert!(effects.is_empty()); // 已在途 → 去重
 
-        // 自动失败静默后手动重试 → 手动预热启动（手动/自动差异经失败路径断言）。
         let _ = flow.step(Event::PrecacheDone {
             epoch,
             result: Err(CompatError::Network("auto boom".into())),
@@ -767,7 +747,6 @@ mod tests {
         assert!(d.precaching);
         assert!(find_precache(&effects).is_some(), "manual precache effect");
 
-        // 手动失败 → 就地显示错误（CompatError 类型活到渲染，逐分支双语映射）。
         let (d, _) = flow.step(Event::PrecacheDone {
             epoch,
             result: Err(CompatError::Io("manual boom".into())),
@@ -786,7 +765,6 @@ mod tests {
         });
         assert!(effects.iter().any(|e| matches!(e, Effect::Refresh { .. })));
 
-        // 预热成功 → 复检（同代数！）+ 预热成功提示。
         let (d, effects) = flow.step(Event::PrecacheDone {
             epoch,
             result: Ok(()),
@@ -802,14 +780,12 @@ mod tests {
             }]
         );
 
-        // 复检落定全缓存（短路项）→ 刷新预算已消耗，不产出二次刷新。
         let (d, effects) = flow.step(Event::ProbeDone {
             epoch,
             report: report_with(all(S::CompatibleOffline), false),
         });
         assert!(effects.is_empty(), "复检不得再次触发网络刷新: {effects:?}");
         assert_eq!(d.summary, CompatSummary::Ready);
-        // 预热成功提示在复检后保留。
         assert!(d.precache_done);
     }
 
@@ -818,7 +794,6 @@ mod tests {
     fn precache_done_lifecycle() {
         let mut flow = CompatFlow::new();
         let epoch = start_probe(&mut flow, "A");
-        // 自动预热触发（Online）→ 成功 → 提示置位 → 复检落定缓存就位（短路项）→ 提示保留。
         let _ = flow.step(Event::ProbeDone {
             epoch,
             report: report_with(all(S::RemoteAvailable { cached: false }), true),
@@ -834,21 +809,18 @@ mod tests {
         });
         assert!(d.precache_done);
 
-        // 晚到的网络刷新合并 → 提示保留。
         let (d, _) = flow.step(Event::RefreshDone {
             epoch,
             report: report_with(all(S::RemoteAvailable { cached: true }), false),
         });
         assert!(d.precache_done);
 
-        // 新预热开始（Online 报告再次触发自动预热）→ 清除。
         let (d, _) = flow.step(Event::ProbeDone {
             epoch,
             report: report_with(all(S::RemoteAvailable { cached: false }), true),
         });
         assert!(!d.precache_done);
 
-        // 路径变更 → 全清（提示/在途/错误）。
         let (d, _) = flow.step(Event::PathChanged("B".into()));
         assert!(!d.precache_done);
         assert!(!d.precaching);

@@ -6,8 +6,6 @@
 
 use eframe::egui::Color32;
 
-// ---------- 基础语义槽（12 个，11 个不同色值） ----------
-
 /// 主蓝：主按钮底 / accent bar / 蓝字 / selection 描边。
 pub const ACCENT: Color32 = Color32::from_rgb(0x0F, 0x6C, 0xBD);
 /// 成功绿：Deploy 按钮底 / 成功状态文字与圆点。
@@ -22,7 +20,7 @@ pub const INK: Color32 = Color32::from_rgb(0x0F, 0x17, 0x2A);
 pub const SUB: Color32 = Color32::from_rgb(0x33, 0x41, 0x55);
 /// 弱化文字 / 禁用态 / 灰状态。
 pub const WEAK: Color32 = Color32::from_rgb(0x64, 0x74, 0x8B);
-/// 面板底（兼 TextEdit / hover 底；旧 FILL_SECONDARY 并入）。
+/// 面板底（兼 TextEdit / hover 底）。
 pub const PANEL: Color32 = Color32::from_rgb(0xF8, 0xF9, 0xFA);
 /// 卡片底。
 pub const CARD: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xFF);
@@ -33,8 +31,6 @@ pub const BORDER: Color32 = Color32::from_rgb(0xE2, 0xE8, 0xF0);
 /// 控件描边（输入框 / 次按钮）。
 pub const ENTRY: Color32 = Color32::from_rgb(0xCB, 0xD5, 0xE1);
 
-// ---------- 警戒组（唯一写死例外，仅「退出 Steam 并卸载补丁」使用） ----------
-
 /// 警戒浅底。
 pub const CAUTION_BG: Color32 = Color32::from_rgb(0xF0, 0xF9, 0xFF);
 /// 警戒 hover 底。
@@ -43,8 +39,6 @@ pub const CAUTION_HOVER: Color32 = Color32::from_rgb(0xE0, 0xF2, 0xFE);
 pub const CAUTION_FG: Color32 = Color32::from_rgb(0x02, 0x84, 0xC7);
 /// 警戒描边。
 pub const CAUTION_BORDER: Color32 = Color32::from_rgb(0x7D, 0xD3, 0xFC);
-
-// ---------- 派生函数 ----------
 
 /// 实心按钮 hover 暗化比例（Neutral 为 0.9）。
 const SOLID_HOVER: f32 = 0.92;
@@ -80,8 +74,6 @@ pub fn selection_bg() -> Color32 {
 pub fn accent_hover() -> Color32 {
     darken(ACCENT, SOLID_HOVER)
 }
-
-// ---------- 按钮样式（4 类，解析表即唯一配色来源） ----------
 
 /// 按钮解析结果：精确底色 / hover / 文字色 / 描边。
 #[derive(Clone, Copy, Debug, PartialEq)]

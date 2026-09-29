@@ -147,8 +147,8 @@ fn styled_button(
     response
 }
 
-/// 按钮底/描边/圆角绘制（styled_button / gear_button / github_link_button 共用，
-/// 评审修复：消除三处重复的 Neutral chrome）。颜色只来自语义色板（ADR-0010）。
+/// 按钮底/描边/圆角绘制（styled_button / gear_button / github_link_button 共用）。
+/// 颜色只来自语义色板（ADR-0010）。
 fn paint_button_chrome(ui: &mut egui::Ui, rect: egui::Rect, hovered: bool, palette: ButtonPalette) {
     let fill = if hovered { palette.hover } else { palette.bg };
     let stroke = palette
@@ -179,8 +179,7 @@ fn gear_button(ui: &mut egui::Ui, tooltip: &str) -> egui::Response {
     response
 }
 
-/// 齿轮（最初版本，#34 定稿）：圆环 + 8 颗圆齿 + 中心点。多轮预览比选后，用户
-/// 最终回到最初款式。色值只能来自语义色板槽（ADR-0010）。
+/// 齿轮（#34 定稿）：圆环 + 8 颗圆齿 + 中心点。色值只能来自语义色板槽（ADR-0010）。
 fn paint_gear(painter: &egui::Painter, center: egui::Pos2, color: egui::Color32) {
     let ring_r = 6.5;
     let ring_w = 2.0;
@@ -213,7 +212,6 @@ fn github_link_button(
     if ui.is_rect_visible(rect) {
         let hovered = response.hovered();
         paint_button_chrome(ui, rect, hovered, palette);
-        // 内容组（图标 + 文字）整体居中于按钮。
         let group_w = icon_w + text_w;
         let left = rect.left() + (rect.width() - group_w) / 2.0;
         if let Some(tex) = mark {
@@ -309,23 +307,19 @@ fn status_bar_items(
     strings: &Strings,
 ) -> Vec<(String, egui::Color32)> {
     let mut items = Vec::new();
-    // 1) Steam 运行状态（恒显示；与操作结果区分，不互相覆盖）。
     if steam_running {
         items.push((strings.status_steam_running.to_string(), theme::SUCCESS));
     } else {
         items.push((strings.status_steam_stopped.to_string(), theme::WEAK));
     }
-    // 2) 交互类忙碌（Checking 由卡片按钮旁内联呈现，此处只画其余阶段）。
     if let Some(kind) = busy
         && kind != BusyKind::Checking
     {
         items.push((strings.busy_label(kind).to_string(), theme::ACCENT));
     }
-    // 3) 最近操作结果（UpdateChecked 由卡片按钮旁内联呈现）。
     if let Some(n) = notice
         && !matches!(n, Notice::UpdateChecked)
     {
-        // 启动/重启成功仅在 Steam 运行中渲染（见函数 doc）。
         let launch_success_needs_running = matches!(
             n,
             Notice::WorkflowDone(action, Ok(()))
@@ -430,8 +424,7 @@ enum Notice {
     Precheck(workflow::Precheck),
 }
 
-/// 设置对话框页签。#30 落地 General；#31 追加 Steam；#34 重组为 通用/关于/Steam
-/// （关于 = 应用更新 + 仓库信息 + 设置向导，取代原「更新」页签）。
+/// 设置对话框页签：通用 / 关于 / Steam。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum SettingsTab {
     General,
@@ -568,7 +561,7 @@ pub struct App {
 
     /// 设置对话框是否打开。
     settings_open: bool,
-    /// 设置对话框当前页签（#30 General + #31 Steam）。
+    /// 设置对话框当前页签。
     settings_tab: SettingsTab,
     /// Settings — Steam 页签路径编辑状态（缓冲 + 内联错误；打开对话框时播种）。
     settings_steam: SteamPathEditor,
@@ -645,7 +638,6 @@ struct PathEditRow {
 
 fn path_edit_row(ui: &mut egui::Ui, strings: Strings, buffer: &mut String) -> PathEditRow {
     let mut row = PathEditRow::default();
-    // 输入行占满可用宽（表单惯例：字段左对齐、撑满可用宽）。
     ui.horizontal(|ui| {
         let edit_width = (ui.available_width() - 92.0).max(120.0);
         let resp = ui.add_sized(
@@ -780,8 +772,6 @@ fn wizard_steps_ui(
 
     ui.add_space(24.0);
     let card_w = WIZARD_CARD_WIDTH + card_frame().total_margin().sum().x;
-    // 父级居中布局负责把 card_w 宽的子区水平居中（placer 对齐用的是父布局，传参的
-    // layout 只作用于子区内容）；子区内再 top_down(Center)，使卡片内元素按行居中。
     ui.vertical_centered(|ui| {
         ui.allocate_ui_with_layout(
             egui::vec2(card_w, ui.available_height()),
@@ -789,7 +779,6 @@ fn wizard_steps_ui(
             |ui| {
                 let resp = card_frame().show(ui, |ui| {
                     ui.set_width(WIZARD_CARD_WIDTH);
-                    // 标题、步骤指示、提示、单选按钮均按行居中。
                     ui.label(
                         egui::RichText::new(strings.wizard_title)
                             .size(16.0)
@@ -815,7 +804,6 @@ fn wizard_steps_ui(
                                 egui::RichText::new(strings.wizard_language_prompt).size(13.0),
                             );
                             ui.add_space(12.0);
-                            // 下拉选择（与设置通用页签共用同一选项表与控件，#34）；
                             // 选中即本地化后续步骤文案，但不推进——点「下一步」才进步骤 2。
                             let options = strings.language_options();
                             if let Some(lang) =
@@ -841,7 +829,7 @@ fn wizard_steps_ui(
                             ui.add_space(12.0);
                             let mut buf = view.steam_path.clone();
                             // 文本编辑或浏览选定都喂 PathEdited（缓冲已就地更新）；失焦
-                            // 向导不消费——推进只由「下一步」按钮的 PathSubmitted 触发（行为与抽取前一致）。
+                            // 向导不消费——推进只由「下一步」按钮的 PathSubmitted 触发。
                             let row = path_edit_row(ui, strings, &mut buf);
                             if row.changed {
                                 event = Some(wizard::Event::PathEdited(buf.clone()));
@@ -936,11 +924,8 @@ fn wizard_steps_ui(
 /// Some(true)=显示、Some(false)=隐藏、None=不变。
 fn auto_tray_policy(event: SteamEvent, window_visible: bool) -> Option<bool> {
     match (event, window_visible) {
-        // 启动 → 隐藏。
         (SteamEvent::Started, true) => Some(false),
-        // 退出 → 弹出。
         (SteamEvent::Stopped, false) => Some(true),
-        // 其余：状态与显隐一致，不变。
         _ => None,
     }
 }
@@ -951,8 +936,7 @@ impl App {
         install_theme(&cc.egui_ctx);
         let (tx, rx) = mpsc::channel();
         // 启动即恢复应用配置（语言偏好 + Steam 路径，见 ADR-0012）：缺失文件 =
-        // 未配置（默认值）；损坏/版本不符 = 类型化错误，降级默认值继续（不 panic、
-        // 不崩溃，错误仅记日志——wizard 落地后再把错误显式呈现到 UI）。
+        // 未配置（默认值）；损坏/版本不符 = 类型化错误，降级默认值继续（不 panic、不崩溃）。
         let config = match config::load(&config::config_path()) {
             Ok(cfg) => cfg,
             Err(e) => {
@@ -961,10 +945,8 @@ impl App {
             }
         };
         let lang_pref = config.language;
-        // auto 跟随系统检测，zh/en 固定（三态解析在 config::Language::effective）。
         let lang = lang_pref.effective();
         let strings = Strings::new(lang);
-        // 窗口标题随语言（zh: OpenSteamTool 一键管理工具 / en: OpenSteamTool Manager）。
         cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Title(
             strings.window_title.to_owned(),
         ));
@@ -1036,7 +1018,6 @@ impl App {
             compat_scroll_pending: false,
             github_mark: load_github_mark(&cc.egui_ctx),
         };
-        // 初始同步托盘「重启 Steam」可用性（跟随初始 Steam 路径有效性）。
         app.sync_tray_restart_enabled();
         // 启动即喂首次路径：产出首次快速体检效果（初始 checking 骨架态，零白屏）。
         app.on_compat_event(
@@ -1156,8 +1137,6 @@ impl App {
                         self.refresh_status();
                     }
                     self.steam_running = self.steam_monitor.rescan();
-                    // 启动/重启类成功后 Steam 已运行 → 直接隐藏到托盘（不依赖边沿检测）；
-                    // 仅退出并卸载（ExitAndUninstall）Steam 未运行 → 保持显示。
                     self.hide_if_steam_running();
                 }
                 Msg::Compat { epoch, report } => {
@@ -1299,11 +1278,9 @@ impl App {
             return;
         }
         self.app_update_checking = true;
-        self.app_update = None; // 覆盖旧结果，回到「检查中」。
+        self.app_update = None;
         self.spawn(ctx, || Msg::AppUpdateChecked(updater::check_app_update()));
     }
-
-    // ---------- 首次运行向导（替代主界面，同一窗口） ----------
 
     /// 向导一帧：渲染当前步骤、收集用户意图、推进状态机并执行效果。
     fn wizard_ui(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
@@ -1355,10 +1332,8 @@ impl App {
         }
     }
 
-    // ---------- 设置对话框（General 页签；Steam 页签见 #31） ----------
-
     /// 打开设置：置位、切到指定页签，并以当前工作路径播种 Steam 页签的编辑缓冲（重跑即编辑）。
-    /// 顶栏入口传会话内记忆的页签（历史行为「会话内记忆上次页签」）；主页面健康警示显式切 Steam。
+    /// 顶栏入口记住上次页签；主页面健康警示显式切 Steam。
     fn open_settings(&mut self, tab: SettingsTab) {
         self.settings_open = true;
         self.settings_tab = tab;
@@ -1378,7 +1353,6 @@ impl App {
             ui.set_width(SETTINGS_DIALOG_WIDTH);
             ui.heading(self.strings.settings_title);
             ui.add_space(8.0);
-            // 页签行（#34 定稿：通用 / Steam / 关于）。
             ui.horizontal(|ui| {
                 for (tab, label) in [
                     (SettingsTab::General, self.strings.settings_tab_general),
@@ -1449,7 +1423,6 @@ impl App {
     /// （即改即存，与托盘菜单双向同步）→ 重新运行向导（低频操作，Neutral 样式）。
     /// 语言选项与向导步骤 1 共用同一份选项表（`Strings::language_options`），新增语言只改一处。
     fn settings_general(&mut self, ui: &mut egui::Ui) {
-        // ---- 语言（下拉；选中即应用并持久化，无重启） ----
         card_title(ui, self.strings.settings_language_title);
         ui.add_space(8.0);
         let options = self.strings.language_options();
@@ -1461,7 +1434,6 @@ impl App {
             self.persist_config();
         }
 
-        // ---- 系统托盘（勾选即改即存；与托盘菜单勾选同一事实源双向同步，见 #37） ----
         ui.add_space(12.0);
         card_title(ui, self.strings.settings_tray_title);
         ui.add_space(8.0);
@@ -1477,7 +1449,6 @@ impl App {
     /// 关于页签（#34 修订）：应用更新（软件版本 + 应用更新检查）→ 项目主页
     /// （GitHub mark + 链接）→ 设置向导（重新运行）。补丁更新入口已回主页面（#34）。
     fn settings_about(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        // ---- 应用更新（软件版本 + 应用更新检查；只查询并打开下载页，不下载/自替换） ----
         card_title(ui, self.strings.settings_app_update_title);
         ui.add_space(8.0);
         // 软件版本：crate 版本（构建时固化的单一来源）。
@@ -1491,7 +1462,6 @@ impl App {
             .color(theme::SUB),
         );
         ui.add_space(8.0);
-        // 应用更新检查：只查询并打开下载页，不做任何下载/自替换。
         // 结果/检查中文案内联于按钮右侧（#34 复看定稿：不再换行置底）。
         let mut do_app_check = false;
         ui.horizontal(|ui| {
@@ -1557,7 +1527,6 @@ impl App {
         }
         ui.add_space(12.0);
 
-        // ---- 项目主页（GitHub 链接按钮；mark 在按钮内部，#34 定稿） ----
         card_title(ui, self.strings.settings_github_title);
         ui.add_space(8.0);
         if github_link_button(
@@ -1572,7 +1541,6 @@ impl App {
         }
         ui.add_space(12.0);
 
-        // ---- 设置向导（重新运行；低频操作不用主色） ----
         card_title(ui, self.strings.settings_wizard_title);
         ui.add_space(8.0);
         ui.label(
@@ -1594,8 +1562,8 @@ impl App {
         }
     }
 
-    /// Settings — Steam 页签（#31）：Steam 路径编辑（文本 + 浏览；失焦/回车校验提交），
-    /// 以及兼容性小节（#32 从主页面迁入：徽章六态 / 自动与手动预热 / 详情行为不变）。
+    /// Settings — Steam 页签：Steam 路径编辑（文本 + 浏览；失焦/回车校验提交），
+    /// 以及兼容性小节（徽章六态 / 自动与手动预热 / 详情）。
     /// 路径编辑与工作路径分离：非法输入只显示内联错误，永不落盘、不污染工作路径。
     fn settings_steam(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         card_title(ui, self.strings.settings_steam_title);
@@ -1621,7 +1589,6 @@ impl App {
                     .color(theme::DANGER),
             );
         }
-        // 兼容性小节：#32 从主页面迁入（行为与健康度六态不变）。
         self.compat_section(ui);
     }
 
@@ -1653,8 +1620,6 @@ impl App {
             dll::dll_dir(),
         ));
     }
-    // ---------- UI ----------
-
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         // 标题按固定行高手绘 LEFT_CENTER 锚点，与右侧按钮垂直同轴（勿回退 with_layout，见 ADR-0010）。
         ui.horizontal(|ui| {
@@ -1670,8 +1635,6 @@ impl App {
                 theme::INK,
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // #34：语言切换入口移除（改语言唯一入口 = 设置通用页签 / 向导弹窗），
-                // 顶栏只剩齿轮设置入口（图标按钮 + tooltip）。
                 if gear_button(ui, self.strings.settings_gear_tooltip).clicked() {
                     self.open_settings(self.settings_tab);
                 }
@@ -1773,11 +1736,9 @@ impl App {
             );
         });
         ui.add_space(8.0);
-        // 徽章行：徽章在左，右侧操作（详细信息/预热）贴最右、与徽章同排（#34 复看
-        // 定稿：状态说明收进详细信息，不再占独立说明行）。
+        // 状态说明收进详细信息（#34 复看定稿），不再占独立说明行。
         ui.horizontal(|ui| {
             self.compat_badge(ui, v.summary);
-            // 右侧操作区：right_to_left 首项（详细信息）贴最右，预热按钮在其左侧。
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if !v.checking
                     && styled_button(
@@ -1814,7 +1775,6 @@ impl App {
                 }
             });
         });
-        // 展开明细：置于徽章行正下方（点击「详细信息」即展开，无需滚动即可见）。
         if let Some(report) = &v.detail_report {
             self.compat_details(ui, report, v.summary);
         }
@@ -1974,7 +1934,6 @@ impl App {
             card_title(ui, self.strings.card2_title);
             ui.add_space(10.0);
 
-            // 部署状态：16px bold 主行（#34 致密化：状态一眼可读）。
             let (text, color) = match self.status {
                 DeployStatus::InvalidPath => (self.strings.status_invalid, theme::WEAK),
                 DeployStatus::Deployed => (self.strings.status_deployed, theme::SUCCESS),
@@ -2018,7 +1977,6 @@ impl App {
                 {
                     do_check = true;
                 }
-                // 检查中 / 结果内联于按钮右侧（SUCCESS=已是最新/发现新补丁，DANGER=失败）。
                 if checking {
                     ui.label(
                         egui::RichText::new(self.strings.checking)
@@ -2051,11 +2009,8 @@ impl App {
         ui.horizontal(|ui| {
             let gap = 12.0;
             let spacing = ui.spacing().item_spacing.x;
-            // 宽度公式必须扣除 egui 自动插入的 item_spacing 与手动 gap（见 row_button_width），
-            // 否则按钮行实际占宽溢出，把下方依赖 available_width 撑满的内容顶到窗口右缘。
             match self.status {
                 DeployStatus::Deployed if self.steam_running => {
-                    // 「退出 Steam 并卸载补丁」（唯一警戒）/「重启 Steam」/「卸载补丁并重启 Steam」。
                     let size = egui::vec2(
                         row_button_width(ui.available_width(), gap, spacing, 3),
                         44.0,
@@ -2097,7 +2052,6 @@ impl App {
                     }
                 }
                 DeployStatus::Deployed => {
-                    // Steam 已退出 → 「启动 Steam」/「卸载补丁」/「卸载补丁并重启 Steam」。
                     // 按钮写「启动」而非「正常启动」——带补丁启动不是正常启动（见 ADR-0011）。
                     let size = egui::vec2(
                         row_button_width(ui.available_width(), gap, spacing, 3),
@@ -2170,7 +2124,6 @@ impl App {
                     }
                 }
                 DeployStatus::InvalidPath => {
-                    // 无有效路径时禁用操作按钮。
                     let size = egui::vec2(
                         row_button_width(ui.available_width(), gap, spacing, 2),
                         44.0,
@@ -2266,10 +2219,8 @@ impl eframe::App for App {
             self.wizard_event(ctx, wizard::Event::Closed);
         }
 
-        // 处理托盘事件（左键/菜单），可能改变窗口显隐。
         self.handle_tray_events();
 
-        // 定时监视 Steam 运行状态（边沿事件 → 自动隐身策略）。
         if let Some(event) = self.steam_monitor.tick() {
             self.steam_running = event == SteamEvent::Started;
             if let Some(visible) = auto_tray_policy(event, self.window_visible) {
@@ -2285,7 +2236,6 @@ impl eframe::App for App {
         };
         ctx.request_repaint_after(repaint_interval);
 
-        // 最小化时自动隐藏到托盘（勾选项开启时）。
         let minimized = ctx.input(|i| i.viewport().minimized).unwrap_or(false);
         if minimized && !self.was_minimized && self.minimize_to_tray {
             // 先取消最小化再隐藏，避免最小化状态残留。
@@ -2295,14 +2245,11 @@ impl eframe::App for App {
         }
         self.was_minimized = minimized;
 
-        // 后台线程消息处理（忙碌/部署/启动等状态更新）。
         self.handle_messages();
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        // 非渲染逻辑（托盘 / Steam / 最小化 / 消息）已迁至 App::logic：
-        // 窗口最小化或隐藏时 eframe 不调用 ui()，只调用 logic()。
 
         // eframe 0.36：root Ui 无背景色，须用 CentralPanel 填充整个窗口并绘制背景。
         let mut content_h = 0.0f32;
@@ -2329,7 +2276,6 @@ impl eframe::App for App {
             )));
         }
 
-        // 「关闭 Steam 并继续」确认弹窗。
         if let Some(action) = self.confirm {
             let mut confirmed = false;
             let mut cancelled = false;
@@ -2372,7 +2318,6 @@ impl eframe::App for App {
             }
         }
 
-        // 设置对话框（PR-1：TOML 配置编辑器）。
         self.settings_dialog(&ctx);
     }
 }
@@ -2496,7 +2441,6 @@ mod tests {
             ] {
                 assert_eq!(health_warning(&s, summary), expect, "{lang:?} {summary:?}");
             }
-            // 警示文案含「Steam」指向（整行点击跳 Settings — Steam 页签）。
             assert!(s.main_warning_pending.contains("Steam"), "{lang:?}");
             assert!(s.main_warning_missing.contains("Steam"), "{lang:?}");
         }
@@ -2587,7 +2531,6 @@ mod tests {
                 .collect()
         };
 
-        // 报告场景：Steam 已退出，残留的启动成功提示不得与「Steam 未运行」并排。
         let launched = Notice::WorkflowDone(workflow::Action::Launch, Ok(()));
         let stopped = texts(false, &launched);
         assert!(stopped.iter().any(|t| t == "Steam 未运行"));
@@ -2595,16 +2538,13 @@ mod tests {
             !stopped.iter().any(|t| t == "Steam 已启动"),
             "Steam 退出后不得再显示「Steam 已启动」：{stopped:?}"
         );
-        // 运行中则正常显示。
         let running = texts(true, &launched);
         assert!(running.iter().any(|t| t == "Steam 已启动"));
 
-        // 同族：重启成功同样受此约束。
         let restarted = Notice::WorkflowDone(workflow::Action::Restart, Ok(()));
         assert!(!texts(false, &restarted).iter().any(|t| t == "Steam 已重启"));
         assert!(texts(true, &restarted).iter().any(|t| t == "Steam 已重启"));
 
-        // 非启动类成功提示与 Steam 状态无关（卸载/应用补丁在 Steam 退出后仍成立）。
         let uninstalled = Notice::WorkflowDone(workflow::Action::ExitAndUninstall, Ok(()));
         assert!(texts(false, &uninstalled).iter().any(|t| t == "已卸载补丁"));
         let applied = Notice::WorkflowDone(workflow::Action::ApplyAndLaunch, Ok(()));
@@ -2618,14 +2558,12 @@ mod tests {
         let gap = 12.0;
         for available in [500.0, 580.0, 620.0, 800.0, 1000.0] {
             for item_spacing in [6.0, 8.0, 10.0, 12.0] {
-                // 双按钮行（未部署 / 已应用未运行 / 路径无效）。
                 let w = row_button_width(available, gap, item_spacing, 2);
                 let total = w * 2.0 + gap + item_spacing;
                 assert!(
                     (total - available).abs() < 0.01,
                     "n=2 available={available} gap={gap} spacing={item_spacing} -> w={w}, total={total} 应等于可用宽度"
                 );
-                // 三按钮行（已应用且 Steam 运行中）。
                 let w3 = row_button_width(available, gap, item_spacing, 3);
                 let total3 = w3 * 3.0 + 2.0 * (gap + item_spacing);
                 assert!(
@@ -2686,9 +2624,7 @@ mod tests {
         });
         full.textures_delta.clear();
         let (short, long, short_en) = out.unwrap();
-        // 短中文文案：保持固定宽度。
         assert_eq!(short, 96.0, "检查更新 在 96px 内放下即不撑宽");
-        // 英文文案超宽时按钮自适应撑宽，避免字符被裁（"Check Update" 亦曾吃满 96px）。
         assert!(
             short_en > 96.0,
             "Check Update 超出 96px 时应撑宽按钮，实际 {short_en}px"
@@ -2707,30 +2643,24 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ost_steam_tab_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
 
-        // 空缓冲 = 未设置：设置语义下是合法终态（ADR-0012），不报错；
-        // 现值也为空 → Unchanged（不重复落盘）。
         let mut e = SteamPathEditor::new("");
         assert_eq!(e.submit(""), SteamPathCommit::Unchanged);
         assert!(!e.invalid, "空串不应触发内联错误");
-        // 现值非空而缓冲为空（用户清空）→ 提交未设置（落空串，等同主页面提交语义）。
         assert_eq!(
             e.submit("C:/Steam"),
             SteamPathCommit::Changed(String::new())
         );
         assert!(!e.invalid);
 
-        // 非空且非目录 → 非法：不产出提交值、置内联错误。
         e.buffer = "Z:/definitely/not/a/real/dir_7f3a".into();
         assert_eq!(e.submit("C:/Steam"), SteamPathCommit::Invalid);
         assert!(e.invalid, "非法提交应置内联错误");
 
-        // 有效目录 → 产出 trim 后路径，错误清除。
         let p = dir.display().to_string();
         e.buffer = format!("  {p}  ");
         assert_eq!(e.submit("C:/Steam"), SteamPathCommit::Changed(p.clone()));
         assert!(!e.invalid, "有效提交应清除内联错误");
 
-        // 与现值相同 → Unchanged（跳过落盘/刷新/喂流程；错误态已清）。
         assert_eq!(e.submit(&p), SteamPathCommit::Unchanged);
         assert!(!e.invalid);
 
@@ -2770,17 +2700,14 @@ mod tests {
                 ui.set_width(SETTINGS_DIALOG_WIDTH);
                 for lang in [Lang::Zh, Lang::En] {
                     let s = Strings::new(lang);
-                    // 标题行（竖条标题）。
                     ui.horizontal(|ui| {
                         ui.allocate_exact_size(egui::vec2(3.0, 13.0), egui::Sense::hover());
                         ui.add_space(8.0);
                         ui.label(egui::RichText::new(s.compat_title).size(13.5).strong());
                     });
                     ui.add_space(8.0);
-                    // 徽章行：徽章 + 右侧操作（详细信息 + 预热），与 compat_section 同构。
                     ui.horizontal(|ui| {
                         let content_right = ui.cursor().right();
-                        // 徽章（Online 文案为最宽）。
                         let badge = egui::Frame::new()
                             .corner_radius(egui::CornerRadius::same(12))
                             .inner_margin(egui::Margin::symmetric(10, 3))
@@ -2798,7 +2725,6 @@ mod tests {
                                 badge.right()
                             ));
                         }
-                        // 右侧动作块起点（徽章之后）。
                         let block_left = ui.cursor().left();
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let details = styled_button(
@@ -2822,7 +2748,6 @@ mod tests {
                                     precache.rect.left()
                                 ));
                             }
-                            // 右块整体不越出内容右边界。
                             if details.rect.right() > content_right + 0.5 {
                                 violations.push(format!(
                                     "{lang:?} 详细信息右缘 {} 超过内容右界 {content_right}",
@@ -2842,7 +2767,7 @@ mod tests {
         );
     }
 
-    /// 向导布局回归：窄卡片在窗口内水平居中（此前整宽贴左，视觉失衡）；
+    /// 向导布局回归：窄卡片在窗口内水平居中；
     /// 卡片宽度 = 内容宽 + 边框内外边距（含描边），远小于整窗宽。
     #[test]
     fn wizard_card_is_horizontally_centered() {
@@ -2870,13 +2795,11 @@ mod tests {
         });
         full.textures_delta.clear();
         let rect = card.expect("向导卡片应有矩形");
-        // 窗口 640 宽（中央面板边距对称）：卡片中心应与窗口中心重合。
         assert!(
             (rect.center().x - 320.0).abs() < 0.5,
             "卡片应水平居中，center.x={}，期望 320",
             rect.center().x
         );
-        // 窄卡片：宽度为内容宽 + 边框内外边距，不铺满整窗。
         let card_w = WIZARD_CARD_WIDTH + card_frame().total_margin().sum().x;
         assert!(
             (rect.width() - card_w).abs() < 1.0,
@@ -2953,8 +2876,6 @@ mod tests {
         }
     }
 
-    // ==================== #32 回归：自适应窗口 vs 设置对话框 ====================
-
     /// 复刻主页面精简后（#32）的首帧内容：顶栏 + 部署状态卡片 + 操作按钮行（通知栏空）。
     /// 返回与 `App::ui` 同口径的内容底缘（`ui.cursor().top()`）。
     fn slim_main_content_height(ctx: &egui::Context, lang: Lang) -> f32 {
@@ -2969,7 +2890,6 @@ mod tests {
         let mut full = ctx.run_ui(raw, |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
                 let s = Strings::new(lang);
-                // top_bar 复刻。
                 ui.horizontal(|ui| {
                     let h2 = 28.0;
                     let font = egui::FontId::proportional(16.0);
@@ -2984,13 +2904,10 @@ mod tests {
                         theme::INK,
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        // #34：顶栏只剩齿轮设置入口（语言切换已移除）。
                         let _ = gear_button(ui, s.settings_gear_tooltip);
                     });
                 });
                 ui.add_space(6.0);
-                // card2 复刻（部署状态主行 + 补丁更新按钮，#34 方案 B；Steam 状态已
-                // 移至底部状态栏）。
                 card_frame().show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     card_title(ui, s.card2_title);
@@ -3011,8 +2928,6 @@ mod tests {
                     );
                 });
                 ui.add_space(10.0);
-                // 健康警示：正常态（Ready）不渲染，跳过。
-                // action_area 复刻（NotDeployed 两按钮；dlls 就绪 → 无引导行）。
                 ui.horizontal(|ui| {
                     let gap = 12.0;
                     let spacing = ui.spacing().item_spacing.x;
@@ -3027,7 +2942,6 @@ mod tests {
                         styled_button(ui, s.btn_launch_normal, ButtonStyle::Neutral, size, true);
                 });
                 ui.add_space(10.0);
-                // status_bar 复刻（Steam 未运行项；其余项空）。
                 ui.horizontal(|ui| {
                     status_item(ui, s.status_steam_stopped, theme::WEAK);
                 });
@@ -3131,7 +3045,6 @@ mod tests {
         let ctx = egui::Context::default();
         install_theme(&ctx);
         for lang in [Lang::Zh, Lang::En] {
-            // 内容最矮的现实形态（NotDeployed + dlls 就绪 + 无健康警示 + 无通知栏）。
             let content_h = slim_main_content_height(&ctx, lang);
             let inner_h = autosize_inner_height(content_h);
             let (top, _, footer) = settings_dialog_footer_bottom(lang, inner_h);
@@ -3203,7 +3116,6 @@ mod tests {
                                 "{lang:?} 页签右缘 {last_tab_right} 超过可用宽 {avail_right}"
                             ));
                         }
-                        // 页签行最右：GitHub 入口已随 #34 修订移入关于页签，此行不再放。
                     });
                 }
             });

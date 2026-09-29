@@ -204,9 +204,7 @@ mod tests {
     fn derived_after_local_update_becomes_up_to_date() {
         let mut flow = UpdateFlow::new();
         flow.check_done(Ok(online("1.4.8")));
-        // 下载前：可下载。
         assert!(flow.derived(Some("1.4.7")).download.is_some());
-        // 下载成功后 local 重读为线上版本：重派生落 UpToDate、下载消失。
         let d = flow.derived(Some("1.4.8"));
         assert!(matches!(d.notice, Some(UpdateNotice::UpToDate)));
         assert!(d.download.is_none());

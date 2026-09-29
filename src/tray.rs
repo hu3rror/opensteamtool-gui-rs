@@ -44,7 +44,6 @@ impl Tray {
         let menu = Menu::new();
         menu.append(&show_item).ok()?;
         menu.append(&minimize_item).ok()?;
-        // 顺序：显示 / 最小化勾选 / 重启 Steam / 退出。
         menu.append(&restart_item).ok()?;
         menu.append(&quit_item).ok()?;
 

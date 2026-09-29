@@ -112,7 +112,6 @@ pub fn plan(
         return Err(Precheck::MissingSteamExe);
     }
 
-    // 判定表。
     let mut ops = Vec::new();
     if kill_first {
         ops.push(Op::CloseSteam);

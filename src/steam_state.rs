@@ -76,7 +76,7 @@ impl SteamState {
             let mut sys = self.sys.lock().unwrap();
             refresh(&mut sys);
             if !any_group_member(&sys, &dir) {
-                return Ok(()); // 本来就没在运行
+                return Ok(());
             }
             let pids: Vec<sysinfo::Pid> = sys
                 .processes()
@@ -153,7 +153,7 @@ fn is_group_member(
             let dir = steam_dir.to_string_lossy().to_lowercase();
             let dir = dir.trim_end_matches('\\');
             if is_drive_root(dir) {
-                return false; // 盘符根目录（如 c:）前缀过宽，会误伤该盘所有进程
+                return false;
             }
             let exe = path.to_string_lossy().to_lowercase();
             exe == dir || exe.starts_with(&format!("{dir}\\"))

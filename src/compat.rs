@@ -3,8 +3,7 @@
 //! 上游 OpenSteamTool 按通道（`{channel}` = 上游仓库分支名 `pattern`/`ipc`）从
 //! `OpenSteam001/steam-monitor` 拉取匹配的 TOML（特征码 / IPC 规约），并按
 //! `<Steam>/opensteamtool/{channel}/{component}/<sha256>.toml` 落盘缓存。
-//! 本模块实现本地部分（类型、哈希、路径映射）与远程探针链路（镜像链 HEAD 判定）；
-//! 缓存预热下载（T4）与 UI 集成（T5）在后续增量中实现。
+//! 本模块实现本地部分（类型、哈希、路径映射）与远程探针链路（镜像链 HEAD 判定）。
 
 use std::fs::{self, File};
 use std::io::{self, Read};
