@@ -221,13 +221,13 @@ fn github_link_button(
                 egui::pos2(left, rect.center().y - 8.0),
                 egui::vec2(16.0, 16.0),
             );
-            // 内嵌 mark 为官方浅色版（白底可见性差）：用 INK 着色使浅色像素乘成墨色，
-            // 在白色按钮上呈现深色 Octocat（评审修复；theme::WHITE 在白底上不可见）。
+            // mark 已抠白为透明背景的深色 Octocat（见 load_github_mark）：WHITE 恒等
+            // tint，不染色也不产生色块；白按钮上呈现黑色 Octocat。
             ui.painter().image(
                 tex.id(),
                 icon_rect,
                 egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                theme::INK,
+                theme::WHITE,
             );
         }
         ui.painter().text(
@@ -247,7 +247,15 @@ const GITHUB_MARK_PNG: &[u8] = include_bytes!("../assets/github-mark.png");
 
 /// 解码内嵌 GitHub mark 为纹理；失败返回 None（渲染层退回纯文字入口，不崩）。
 fn load_github_mark(ctx: &egui::Context) -> Option<egui::TextureHandle> {
-    let img = image::load_from_memory(GITHUB_MARK_PNG).ok()?.to_rgba8();
+    let mut img = image::load_from_memory(GITHUB_MARK_PNG).ok()?.to_rgba8();
+    // 内嵌资源是「白底 + 深色 Octocat」：先抠除近白背景（alpha 归 0），留下透明背景
+    // 的深色 mark——否则任何 tint 都会把白底染成色块（此前 INK tint 把白底乘成黑
+    // 「黑框」；WHITE tint 则白底融入白按钮不可见，均因未抠底）。
+    for p in img.pixels_mut() {
+        if p[0] > 240 && p[1] > 240 && p[2] > 240 {
+            p[3] = 0;
+        }
+    }
     let (w, h) = img.dimensions();
     let color = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &img);
     Some(ctx.load_texture("github-mark", color, egui::TextureOptions::LINEAR))
