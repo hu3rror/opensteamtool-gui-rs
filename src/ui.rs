@@ -294,6 +294,51 @@ fn log_warn(msg: impl std::fmt::Display) {
     eprintln!("[opensteamtool-manager] {msg}");
 }
 
+/// 状态栏条目决策（纯函数，`status_bar` 渲染用）：Steam 运行状态恒显示 +
+/// 交互类忙碌 + 最近操作结果，多条并排、各自独立成项。色点语义只走既有语义槽。
+/// 渲染侧只需逐条调用 `status_item`。
+///
+/// 修订（用户报告歧义：不装补丁直接启动再退出后状态栏并排矛盾）：启动/重启
+/// 成功提示（「Steam 已启动 / 已重启」）只在 Steam 运行中渲染——Steam 退出后该
+/// 提示是对「最近操作」的过期描述，再与恒显的「Steam 未运行」并排即成矛盾；
+/// 卸载/应用补丁类成功与运行态无关，不受影响。
+fn status_bar_items(
+    steam_running: bool,
+    busy: Option<BusyKind>,
+    notice: Option<&Notice>,
+    strings: &Strings,
+) -> Vec<(String, egui::Color32)> {
+    let mut items = Vec::new();
+    // 1) Steam 运行状态（恒显示；与操作结果区分，不互相覆盖）。
+    if steam_running {
+        items.push((strings.status_steam_running.to_string(), theme::SUCCESS));
+    } else {
+        items.push((strings.status_steam_stopped.to_string(), theme::WEAK));
+    }
+    // 2) 交互类忙碌（Checking 由卡片按钮旁内联呈现，此处只画其余阶段）。
+    if let Some(kind) = busy
+        && kind != BusyKind::Checking
+    {
+        items.push((strings.busy_label(kind).to_string(), theme::ACCENT));
+    }
+    // 3) 最近操作结果（UpdateChecked 由卡片按钮旁内联呈现）。
+    if let Some(n) = notice
+        && !matches!(n, Notice::UpdateChecked)
+    {
+        // 启动/重启成功仅在 Steam 运行中渲染（见函数 doc）。
+        let launch_success_needs_running = matches!(
+            n,
+            Notice::WorkflowDone(action, Ok(()))
+                if matches!(action, Action::Launch | Action::Restart)
+        );
+        if !launch_success_needs_running || steam_running {
+            let (ok, text) = render_notice(strings, n);
+            items.push((text, if ok { theme::SUCCESS } else { theme::DANGER }));
+        }
+    }
+    items
+}
+
 /// 渲染最近一次结果提示为当前语言文案。
 /// 纯函数（不依赖 App）：切换语言后无需重建 notice，重渲染即得新语言。
 /// 检查更新结果的分类来自「更新流程」派生（`status_bar` 对 UpdateChecked 单独分流），此处不处理。
@@ -2147,25 +2192,15 @@ impl App {
     /// 各自独立成项、互不覆盖。色点语义只走既有语义槽：SUCCESS=运行/成功；WEAK=未运行；
     /// ACCENT=忙碌；DANGER=失败。
     fn status_bar(&mut self, ui: &mut egui::Ui) {
+        let items = status_bar_items(
+            self.steam_running,
+            self.gate.current(),
+            self.notice.as_ref(),
+            &self.strings,
+        );
         ui.horizontal(|ui| {
-            // 1) Steam 运行状态（恒显示；与操作结果区分，不互相覆盖）。
-            if self.steam_running {
-                status_item(ui, self.strings.status_steam_running, theme::SUCCESS);
-            } else {
-                status_item(ui, self.strings.status_steam_stopped, theme::WEAK);
-            }
-            // 2) 交互类忙碌（Checking 由卡片按钮旁内联呈现，此处只画其余阶段）。
-            if let Some(kind) = self.gate.current()
-                && kind != BusyKind::Checking
-            {
-                status_item(ui, self.strings.busy_label(kind), theme::ACCENT);
-            }
-            // 3) 最近操作结果（UpdateChecked 由卡片按钮旁内联呈现）。
-            if let Some(n) = &self.notice
-                && !matches!(n, Notice::UpdateChecked)
-            {
-                let (ok, text) = render_notice(&self.strings, n);
-                status_item(ui, &text, if ok { theme::SUCCESS } else { theme::DANGER });
+            for (text, color) in items {
+                status_item(ui, &text, color);
             }
         });
     }
@@ -2509,6 +2544,44 @@ mod tests {
                 (true, s.ok_downloaded.to_string())
             );
         }
+    }
+
+    /// 状态栏歧义回归（用户报告：不装补丁 → 正常启动 → 退出 Steam 后，状态栏
+    /// 并排渲染「Steam 未运行」+「Steam 已启动」两个矛盾条目）——启动/重启成功
+    /// 提示只在 Steam 运行中渲染；其余成功提示（已卸载补丁/补丁已应用）不受
+    /// Steam 状态影响。
+    #[test]
+    fn status_bar_drops_launch_success_when_steam_stopped() {
+        let zh = Strings::new(Lang::Zh);
+        let texts = |running: bool, n: &Notice| -> Vec<String> {
+            status_bar_items(running, None, Some(n), &zh)
+                .iter()
+                .map(|(t, _)| t.clone())
+                .collect()
+        };
+
+        // 报告场景：Steam 已退出，残留的启动成功提示不得与「Steam 未运行」并排。
+        let launched = Notice::WorkflowDone(workflow::Action::Launch, Ok(()));
+        let stopped = texts(false, &launched);
+        assert!(stopped.iter().any(|t| t == "Steam 未运行"));
+        assert!(
+            !stopped.iter().any(|t| t == "Steam 已启动"),
+            "Steam 退出后不得再显示「Steam 已启动」：{stopped:?}"
+        );
+        // 运行中则正常显示。
+        let running = texts(true, &launched);
+        assert!(running.iter().any(|t| t == "Steam 已启动"));
+
+        // 同族：重启成功同样受此约束。
+        let restarted = Notice::WorkflowDone(workflow::Action::Restart, Ok(()));
+        assert!(!texts(false, &restarted).iter().any(|t| t == "Steam 已重启"));
+        assert!(texts(true, &restarted).iter().any(|t| t == "Steam 已重启"));
+
+        // 非启动类成功提示与 Steam 状态无关（卸载/应用补丁在 Steam 退出后仍成立）。
+        let uninstalled = Notice::WorkflowDone(workflow::Action::ExitAndUninstall, Ok(()));
+        assert!(texts(false, &uninstalled).iter().any(|t| t == "已卸载补丁"));
+        let applied = Notice::WorkflowDone(workflow::Action::ApplyAndLaunch, Ok(()));
+        assert!(texts(false, &applied).iter().any(|t| t == "补丁已应用"));
     }
 
     /// 布局回归：等宽按钮 + (n-1) 个手动 gap + (n-1) 个自动 item_spacing 必须恰好
