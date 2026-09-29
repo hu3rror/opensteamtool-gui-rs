@@ -46,8 +46,11 @@ pub enum DownloadState {
 /// 向导事件（App 喂入）。
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
-    /// 步骤 1 选定语言：立即本地化后续步骤并推进到步骤 2。
+    /// 步骤 1 选定语言：立即本地化后续步骤，但**不推进**（#34 修订：选完语言
+    /// 需点「下一步」才进步骤 2，下拉选择不再直达）。
     LanguageChosen(Language),
+    /// 步骤 1 点「下一步」：推进到步骤 2。
+    LanguageSubmitted,
     /// 步骤 2 路径文本变更（编辑缓冲，不校验）。
     PathEdited(String),
     /// 步骤 2 提交路径：有效则推进到步骤 3；无效则停留。
@@ -120,7 +123,12 @@ impl Wizard {
         }
         let effects = match event {
             Event::LanguageChosen(language) if self.step == Step::Language => {
+                // 只应用语言（立即本地化后续步骤文案），不推进——由
+                // LanguageSubmitted（下一步按钮）显式推进（#34）。
                 self.language = language;
+                Vec::new()
+            }
+            Event::LanguageSubmitted if self.step == Step::Language => {
                 self.step = Step::SteamPath;
                 Vec::new()
             }
@@ -300,10 +308,18 @@ mod tests {
         let mut w = Wizard::new(Language::Auto, String::new(), tmp_dir("progress_dlls"));
 
         let (v, fx) = w.step(Event::LanguageChosen(Language::Zh));
-        assert_eq!(v.step, Step::SteamPath);
-        assert_eq!(v.language, Language::Zh, "步骤 1 选择立即生效");
+        assert_eq!(v.step, Step::Language, "选语言后不推进，等「下一步」");
+        assert_eq!(
+            v.language,
+            Language::Zh,
+            "步骤 1 选择立即生效（本地化后续文案）"
+        );
         assert!(fx.is_empty());
         assert!(!w.finished());
+
+        let (v, fx) = w.step(Event::LanguageSubmitted);
+        assert_eq!(v.step, Step::SteamPath, "点「下一步」才推进");
+        assert!(fx.is_empty());
 
         let (v, fx) = w.step(Event::PathEdited(steam.display().to_string()));
         assert_eq!(v.step, Step::SteamPath);
@@ -342,6 +358,7 @@ mod tests {
         let steam = tmp_dir("invalid_submit");
         let mut w = Wizard::new(Language::En, String::new(), tmp_dir("invalid_submit_dlls"));
         w.step(Event::LanguageChosen(Language::En));
+        w.step(Event::LanguageSubmitted);
 
         let (v, fx) = w.step(Event::PathEdited("Z:/nope_98765".into()));
         assert!(!v.path_valid);
@@ -477,6 +494,24 @@ mod tests {
         assert_eq!(v.language, Language::Zh, "终局后语言不再被改写");
     }
 
+    /// 步骤 1 可反复改语言而不推进；多次「下一步」不会重复推进（后续步骤事件才推进）。
+    #[test]
+    fn language_choice_can_change_without_advancing() {
+        let mut w = Wizard::new(Language::Auto, String::new(), tmp_dir("lang_change_dlls"));
+        let (v, _) = w.step(Event::LanguageChosen(Language::En));
+        assert_eq!(v.step, Step::Language, "改语言不推进");
+        assert_eq!(v.language, Language::En);
+        let (v, _) = w.step(Event::LanguageChosen(Language::Zh));
+        assert_eq!(v.step, Step::Language, "再次改语言仍不推进");
+        assert_eq!(v.language, Language::Zh);
+        // 步骤 2 才接受的路径事件在步骤 1 被忽略，不推进。
+        let (v, fx) = w.step(Event::PathEdited("C:/x".into()));
+        assert_eq!(v.step, Step::Language);
+        assert!(fx.is_empty());
+        let (v, _) = w.step(Event::LanguageSubmitted);
+        assert_eq!(v.step, Step::SteamPath);
+    }
+
     /// 运行中重复请求不重复产出下载效果（去重）。
     #[test]
     fn download_request_dedupes_while_running() {
@@ -493,6 +528,7 @@ mod tests {
         let steam = tmp_dir("idle");
         let mut w = Wizard::new(Language::En, String::new(), tmp_dir("idle_dlls"));
         w.step(Event::LanguageChosen(Language::En));
+        w.step(Event::LanguageSubmitted);
         w.step(Event::PathEdited(steam.display().to_string()));
         w.step(Event::PathSubmitted);
 
@@ -517,6 +553,7 @@ mod tests {
         std::fs::create_dir_all(&dlls).unwrap();
         let mut w = Wizard::new(language, String::new(), dlls);
         w.step(Event::LanguageChosen(language));
+        w.step(Event::LanguageSubmitted);
         w.step(Event::PathEdited(steam.display().to_string()));
         w.step(Event::PathSubmitted);
         w.step(Event::DownloadRequested);
@@ -537,6 +574,7 @@ mod tests {
 
         let mut w = Wizard::new(Language::Zh, steam.display().to_string(), dlls.clone());
         w.step(Event::LanguageChosen(Language::Zh));
+        w.step(Event::LanguageSubmitted);
         w.step(Event::PathEdited(steam.display().to_string()));
         let (v, fx) = w.step(Event::PathSubmitted);
         assert_eq!(v.step, Step::Download);
@@ -583,6 +621,7 @@ mod tests {
         for dlls in [&missing, &empty, &partial, &version_only] {
             let mut w = Wizard::new(Language::En, steam.display().to_string(), dlls.clone());
             w.step(Event::LanguageChosen(Language::En));
+            w.step(Event::LanguageSubmitted);
             w.step(Event::PathEdited(steam.display().to_string()));
             let (v, _) = w.step(Event::PathSubmitted);
             assert_eq!(v.step, Step::Download);

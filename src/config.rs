@@ -55,19 +55,6 @@ impl Language {
             Language::En => Lang::En,
         }
     }
-
-    /// 顶栏切换的目标偏好：`zh`↔`en` 互切；`auto` 时切到当前生效语言的另一侧
-    /// （「跟随系统」不可从顶栏选回——三态选择是 Settings — General 的选项，见 #26）。
-    pub fn toggled(self, effective: Lang) -> Self {
-        match self {
-            Language::Auto => match effective {
-                Lang::Zh => Language::En,
-                Lang::En => Language::Zh,
-            },
-            Language::Zh => Language::En,
-            Language::En => Language::Zh,
-        }
-    }
 }
 
 /// 配置读取错误（类型化；调用方决定降级策略，启动路径一律降级默认值、不 panic）。
@@ -327,14 +314,5 @@ mod tests {
         assert_eq!(Language::Zh.effective(), Lang::Zh);
         assert_eq!(Language::En.effective(), Lang::En);
         assert_eq!(Language::Auto.effective(), detect_system_lang());
-    }
-
-    /// 顶栏切换表：zh↔en 互切；auto 切到当前生效语言的另一侧。
-    #[test]
-    fn language_toggled_table() {
-        assert_eq!(Language::Zh.toggled(Lang::Zh), Language::En);
-        assert_eq!(Language::En.toggled(Lang::En), Language::Zh);
-        assert_eq!(Language::Auto.toggled(Lang::Zh), Language::En);
-        assert_eq!(Language::Auto.toggled(Lang::En), Language::Zh);
     }
 }

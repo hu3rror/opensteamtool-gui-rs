@@ -2,22 +2,13 @@
 
 use crate::busy::BusyKind;
 use crate::compat::CompatError;
+use crate::config::Language;
 use crate::updater::UpdateError;
 use crate::workflow::{Action, Op, Precheck, WorkflowError};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Lang {
     Zh,
     En,
-}
-
-impl Lang {
-    /// 手动切换按钮上的文案：中文界面显示 "EN"，英文界面显示 "中文"。
-    pub fn toggle_label(self) -> &'static str {
-        match self {
-            Lang::Zh => "EN",
-            Lang::En => "中文",
-        }
-    }
 }
 
 /// 检测系统语言：`GetUserDefaultUILanguage` 返回 0x0804/0x1004（简体中文）→ 中文，否则英文。
@@ -53,8 +44,8 @@ pub struct Strings {
     /// 「重启 Steam」（已应用且 Steam 运行中时显示；纯 Steam 操作，无补丁）。
     pub btn_restart_steam: &'static str,
     /// 补丁未下载引导（操作区下方弱化提示；未部署且 dlls/ 缺文件时显示）。
-    /// ADR-0011 修订（#32）：主页面不再有检查更新/下载入口，引导指向 Settings — General 的
-    /// 「补丁更新检查」（先检查 → 再下载并解压），不自动联网检查。
+    /// ADR-0011 修订（#32 → #34 修订）：主页面补丁更新按钮已迁回主页面，引导指向
+    /// 操作区上方的「检查补丁更新」按钮（先检查 → 再下载并解压），不自动联网检查。
     pub hint_download_patch: &'static str,
     /// 主页面健康风险警示（#32）：上游尚未适配此版本（点击跳 Settings — Steam）。
     pub main_warning_pending: &'static str,
@@ -97,7 +88,6 @@ pub struct Strings {
     pub tray_minimize: &'static str,
     /// 托盘菜单「重启 Steam」入口。
     pub tray_restart: &'static str,
-    pub btn_settings: &'static str,
     pub settings_title: &'static str,
     pub btn_close: &'static str,
     /// Steam 核心兼容性（issue #23 §7.8）。
@@ -121,20 +111,22 @@ pub struct Strings {
     pub compat_tip_missing: &'static str,
     pub compat_tip_network: &'static str,
     pub compat_row_dll: &'static str,
-    /// 设置对话框页签（#30 落地 General；#31 追加 Steam）。
+    /// 设置对话框页签（#30 落地 General；#31 追加 Steam；#34 重组为 通用/关于/Steam）。
     pub settings_tab_general: &'static str,
+    /// 设置对话框页签「关于」（#34 修订：应用更新 + 仓库信息 + 设置向导，取代原「更新」页签）。
+    pub settings_tab_about: &'static str,
     /// 设置对话框页签「Steam」（#31；Steam 路径编辑 + 兼容性小节）。
     pub settings_tab_steam: &'static str,
     /// Settings — Steam 路径小节标题（#31）。
     pub settings_steam_title: &'static str,
     /// Settings — Steam 手输路径失焦/回车校验失败的内联错误（#31；非法输入不落盘）。
     pub settings_steam_path_invalid: &'static str,
-    /// Settings — General 语言小节标题。
+    /// Settings — 通用 页签语言小节标题。
     pub settings_language_title: &'static str,
-    /// Settings — General 关于小节标题。
-    pub settings_about_title: &'static str,
-    /// 关于区软件版本行前缀（实际版本号由 crate 版本拼接）。
+    /// 更新页签软件版本行前缀（实际版本号由 crate 版本拼接）。
     pub settings_version_label: &'static str,
+    /// Settings — 关于 页签应用更新小节标题（软件版本 + 应用更新检查）。
+    pub settings_app_update_title: &'static str,
     pub settings_btn_app_update_check: &'static str,
     pub settings_app_update_checking: &'static str,
     /// App 更新检查「已是最新」。
@@ -142,17 +134,25 @@ pub struct Strings {
     /// App 更新检查「发现新版本」前缀（后接版本号，如 v0.6.3）。
     pub settings_app_update_new_version: &'static str,
     pub settings_btn_open_download_page: &'static str,
-    /// Settings — General 补丁更新小节标题。
-    pub settings_patch_title: &'static str,
     pub settings_btn_patch_update_check: &'static str,
     /// 补丁检查结果文案（永不出现补丁版本号，见 #30）。
     pub settings_patch_up_to_date: &'static str,
     pub settings_patch_new_version: &'static str,
-    /// Settings — General 重新运行向导小节标题。
+    /// Settings — 通用 页签重新运行向导小节标题。
     pub settings_wizard_title: &'static str,
     pub settings_btn_rerun_wizard: &'static str,
     /// 重新运行向导提示（以当前配置为初值）。
     pub settings_rerun_wizard_hint: &'static str,
+    /// 主页面部署状态卡片辅助行：Steam 正在运行。
+    pub status_steam_running: &'static str,
+    /// 主页面部署状态卡片辅助行：Steam 未运行。
+    pub status_steam_stopped: &'static str,
+    /// 顶栏设置齿轮按钮的悬停提示（图标按钮，可发现性靠 tooltip）。
+    pub settings_gear_tooltip: &'static str,
+    /// 设置对话框页签行右侧 GitHub 入口的项目名文字（点击打开仓库页）。
+    pub settings_github_label: &'static str,
+    /// 关于页签 GitHub 小节标题（仓库链接入口）。
+    pub settings_github_title: &'static str,
     /// 首次运行向导（wizard 模块渲染）。
     pub wizard_title: &'static str,
     /// 步骤指示（`{n}` 由 UI 替换为 1/2/3）。
@@ -238,6 +238,16 @@ impl Strings {
         }
     }
 
+    /// 语言选项表（跟随系统 / 简体中文 / English）：设置对话框通用页签与向导步骤 1
+    /// 的唯一下拉数据源——新增语言只在此追加一行（#34）。
+    pub fn language_options(&self) -> [(Language, &'static str); 3] {
+        [
+            (Language::Auto, self.wizard_language_auto),
+            (Language::Zh, self.wizard_language_zh),
+            (Language::En, self.wizard_language_en),
+        ]
+    }
+
     pub fn new(lang: Lang) -> Self {
         match lang {
             Lang::Zh => Self::zh(),
@@ -261,7 +271,7 @@ impl Strings {
             btn_exit_and_uninstall: "◀ 退出 Steam 并卸载补丁",
             btn_uninstall_and_restart: "◀ 卸载补丁并重启 Steam",
             btn_restart_steam: "↻ 重启 Steam",
-            hint_download_patch: "补丁未下载：请前往 设置 → 通用 → 补丁更新检查，检查后再下载并解压新版本",
+            hint_download_patch: "补丁未下载：请点击上方「检查补丁更新」下载新版本",
             main_warning_pending: "⚠ Steam 核心兼容性异常：上游尚未适配此版本（点击前往 设置 → Steam）",
             main_warning_missing: "⚠ 未找到核心 DLL（steamclient64.dll / steamui.dll）——点击前往 设置 → Steam",
             btn_download_and_extract: "下载并解压新版本",
@@ -297,28 +307,32 @@ impl Strings {
             btn_uninstall: "卸载补丁",
             tray_minimize: "最小化时自动隐藏到托盘",
             tray_restart: "重启 Steam",
-            btn_settings: "设置",
             settings_title: "设置",
             btn_close: "关闭",
             settings_tab_general: "通用",
+            settings_tab_about: "关于",
             settings_tab_steam: "Steam",
             settings_steam_title: "Steam 路径",
             settings_steam_path_invalid: "路径无效：请输入有效的 Steam 安装目录",
             settings_language_title: "语言",
-            settings_about_title: "关于",
             settings_version_label: "软件版本",
+            settings_app_update_title: "应用更新",
             settings_btn_app_update_check: "检查应用更新",
             settings_app_update_checking: "正在检查应用更新...",
             settings_app_update_up_to_date: "已是最新版本",
             settings_app_update_new_version: "发现新版本 ",
             settings_btn_open_download_page: "打开下载页",
-            settings_patch_title: "补丁更新",
             settings_btn_patch_update_check: "检查补丁更新",
             settings_patch_up_to_date: "补丁已是最新",
             settings_patch_new_version: "发现新补丁",
             settings_wizard_title: "设置向导",
             settings_btn_rerun_wizard: "重新运行向导",
             settings_rerun_wizard_hint: "以当前语言与 Steam 路径为初值重新运行设置向导。",
+            status_steam_running: "Steam 正在运行",
+            status_steam_stopped: "Steam 未运行",
+            settings_gear_tooltip: "设置",
+            settings_github_label: "opensteamtool-gui-rs",
+            settings_github_title: "项目主页",
             compat_title: "Steam 核心兼容性",
             compat_checking: "正在检查兼容性...",
             compat_status_ready: "完美兼容 (已缓存)",
@@ -342,8 +356,8 @@ impl Strings {
             wizard_title: "首次运行向导",
             wizard_step_of: "第 {n} / 3 步",
             wizard_language_prompt: "请选择界面语言：",
-            wizard_language_auto: "自动（跟随系统）",
-            wizard_language_zh: "中文",
+            wizard_language_auto: "跟随系统",
+            wizard_language_zh: "简体中文",
             wizard_language_en: "English",
             wizard_path_prompt: "请确认 Steam 安装路径：",
             wizard_path_invalid: "路径无效：请选择有效的 Steam 安装目录",
@@ -375,7 +389,7 @@ impl Strings {
             btn_exit_and_uninstall: "◀ Exit Steam & Uninstall Patch",
             btn_uninstall_and_restart: "◀ Uninstall Patch & Restart Steam",
             btn_restart_steam: "↻ Restart Steam",
-            hint_download_patch: "Patch not downloaded: go to Settings → General → Patch Update Check, then download & extract",
+            hint_download_patch: "Patch not downloaded: click 'Check Patch Update' above to download",
             main_warning_pending: "⚠ Steam core compatibility issue: this version is not yet supported upstream (click to open Settings → Steam)",
             main_warning_missing: "⚠ Core DLLs not found (steamclient64.dll / steamui.dll) — click to open Settings → Steam",
             btn_download_and_extract: "Download & Extract New Version",
@@ -411,28 +425,32 @@ impl Strings {
             btn_uninstall: "Remove Patch",
             tray_minimize: "Minimize to tray automatically",
             tray_restart: "Restart Steam",
-            btn_settings: "Settings",
             settings_title: "Settings",
             btn_close: "Close",
             settings_tab_general: "General",
+            settings_tab_about: "About",
             settings_tab_steam: "Steam",
             settings_steam_title: "Steam Path",
             settings_steam_path_invalid: "Invalid path: enter a valid Steam install folder",
             settings_language_title: "Language",
-            settings_about_title: "About",
             settings_version_label: "Version",
+            settings_app_update_title: "App Update",
             settings_btn_app_update_check: "Check App Update",
             settings_app_update_checking: "Checking for app update...",
             settings_app_update_up_to_date: "Up to date",
             settings_app_update_new_version: "New version available: ",
             settings_btn_open_download_page: "Open Download Page",
-            settings_patch_title: "Patch Update",
             settings_btn_patch_update_check: "Check Patch Update",
             settings_patch_up_to_date: "Patch up to date",
             settings_patch_new_version: "New patch available",
             settings_wizard_title: "Setup Wizard",
             settings_btn_rerun_wizard: "Re-run Wizard",
             settings_rerun_wizard_hint: "Re-runs setup with your current language and Steam path as starting values.",
+            status_steam_running: "Steam is running",
+            status_steam_stopped: "Steam is not running",
+            settings_gear_tooltip: "Settings",
+            settings_github_label: "opensteamtool-gui-rs",
+            settings_github_title: "Project Home",
             compat_title: "Steam Core Compatibility",
             compat_checking: "Checking compatibility...",
             compat_status_ready: "Fully Compatible",
@@ -457,7 +475,7 @@ impl Strings {
             wizard_step_of: "Step {n} of 3",
             wizard_language_prompt: "Choose your interface language:",
             wizard_language_auto: "Auto (follow system)",
-            wizard_language_zh: "中文",
+            wizard_language_zh: "简体中文",
             wizard_language_en: "English",
             wizard_path_prompt: "Confirm your Steam installation path:",
             wizard_path_invalid: "Invalid path: choose a valid Steam install folder",
@@ -477,6 +495,37 @@ impl Strings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 语言选项表（#34，设置通用页签与向导步骤 1 共用）：覆盖全部三个偏好各一次；
+    /// 简体中文标签定名（「中文」→「简体中文」）；双语结构一致。
+    #[test]
+    fn language_options_cover_all_variants() {
+        for lang in [Lang::Zh, Lang::En] {
+            let s = Strings::new(lang);
+            let opts = s.language_options();
+            for v in [Language::Auto, Language::Zh, Language::En] {
+                assert_eq!(
+                    opts.iter().filter(|(l, _)| *l == v).count(),
+                    1,
+                    "{lang:?} 选项表应恰好含 {v:?} 一次"
+                );
+            }
+            assert!(!opts[0].1.is_empty(), "{lang:?} 跟随系统标签不应为空");
+            assert_eq!(opts[1].1, "简体中文", "{lang:?} 中文标签应定名简体中文");
+            assert_eq!(opts[2].1, "English");
+        }
+    }
+
+    /// 补丁未下载引导指向主页面补丁更新按钮（#34 修订后入口在主页面）。
+    #[test]
+    fn patch_hint_points_to_main_button() {
+        let zh = Strings::new(Lang::Zh);
+        let en = Strings::new(Lang::En);
+        assert!(zh.hint_download_patch.contains("检查补丁更新"));
+        assert!(!zh.hint_download_patch.contains("通用"));
+        assert!(en.hint_download_patch.contains("Check Patch Update"));
+        assert!(!en.hint_download_patch.contains("General"));
+    }
 
     /// CompatError → 双语文案：Network 复用 err_network、Io 用 err_compat_io（与 UpdateError 同等待遇）。
     #[test]

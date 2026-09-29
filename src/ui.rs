@@ -62,6 +62,10 @@ fn install_theme(ctx: &egui::Context) {
     visuals.window_fill = theme::CARD;
     visuals.faint_bg_color = theme::PANEL;
     visuals.extreme_bg_color = theme::PANEL; // TextEdit 底色（旧 FILL_SECONDARY 并入 panel 槽）
+    // ComboBox 按钮底色走 widgets.*.weak_bg_fill（egui 默认偏灰）：统一为 CARD，
+    // 与 styled_button 的 Neutral 底一致（#34 定稿：语言下拉与其他按钮同色）。
+    visuals.widgets.inactive.weak_bg_fill = theme::CARD;
+    visuals.widgets.open.weak_bg_fill = theme::CARD;
     visuals.override_text_color = Some(theme::INK);
     let radius = egui::CornerRadius::same(8);
     for w in [
@@ -108,6 +112,7 @@ fn text_width(ui: &egui::Ui, text: &str, font: &egui::FontId, color: egui::Color
 
 /// 语义色板按钮：手动绘制底/描边/文字，hover 换色（底色由 palette 派生）。
 /// `enabled=false` 时文字弱化为 muted 且不响应点击。
+/// 字号随高度派生（#34 致密化）：主页面操作按钮（44px 高）用 14px，其余按钮 13px。
 fn styled_button(
     ui: &mut egui::Ui,
     text: &str,
@@ -115,10 +120,11 @@ fn styled_button(
     size: egui::Vec2,
     enabled: bool,
 ) -> egui::Response {
+    let font_size = if size.y >= 40.0 { 14.0 } else { 13.0 };
     let palette = style.palette();
     // 长文案（如英文 "Download & Extract New Version"）超出固定宽度时会被绘制在
     // 按钮边界外截断；按文本宽度自适应，最小仍为调用方指定的 size。
-    let font_id = egui::FontId::proportional(13.0);
+    let font_id = egui::FontId::proportional(font_size);
     let text_w = text_width(ui, text, &font_id, palette.fg);
     let size = egui::vec2(size.x.max(text_w + 28.0), size.y);
     let sense = if enabled {
@@ -148,11 +154,119 @@ fn styled_button(
             rect.center(),
             egui::Align2::CENTER_CENTER,
             text,
-            egui::FontId::proportional(13.0),
+            egui::FontId::proportional(font_size),
             color,
         );
     }
     response
+}
+
+/// 顶栏设置入口：程序化绘制的齿轮图标按钮（#34）——字体无关，不依赖任何系统的
+/// 字形覆盖（⚙ 在无 CJK 字体的英文系统上会变豆腐块）。配色取自 Neutral 按钮样式
+/// （ADR-0010）；悬停 tooltip 保留文字名，保住可发现性。
+fn gear_button(ui: &mut egui::Ui, tooltip: &str) -> egui::Response {
+    let palette = ButtonStyle::Neutral.palette();
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::click());
+    let response = response.on_hover_text(tooltip);
+    if ui.is_rect_visible(rect) {
+        let hovered = response.hovered();
+        let fill = if hovered { palette.hover } else { palette.bg };
+        let stroke = palette
+            .border
+            .map_or(egui::Stroke::NONE, |c| egui::Stroke::new(1.0, c));
+        ui.painter().rect(
+            rect,
+            egui::CornerRadius::same(8),
+            fill,
+            stroke,
+            egui::StrokeKind::Inside,
+        );
+        let color = if hovered { theme::ACCENT } else { palette.fg };
+        paint_gear(ui.painter(), rect.center(), color);
+    }
+    response
+}
+
+/// 齿轮（最初版本，#34 定稿）：圆环 + 8 颗圆齿 + 中心点。多轮预览比选后，用户
+/// 最终回到最初款式。色值只能来自语义色板槽（ADR-0010）。
+fn paint_gear(painter: &egui::Painter, center: egui::Pos2, color: egui::Color32) {
+    let ring_r = 6.5;
+    let ring_w = 2.0;
+    let tooth_r = 1.7;
+    painter.circle_stroke(center, ring_r, egui::Stroke::new(ring_w, color));
+    let tooth_center_r = ring_r + ring_w / 2.0 + tooth_r * 0.7;
+    for i in 0..8 {
+        let a = i as f32 * std::f32::consts::FRAC_PI_4;
+        let p = center + egui::vec2(a.cos() * tooth_center_r, a.sin() * tooth_center_r);
+        painter.circle_filled(p, tooth_r, color);
+    }
+    painter.circle_filled(center, 1.6, color);
+}
+
+/// 关于页项目主页链接按钮（#34 定稿）：GitHub mark 绘制在按钮内部左侧 + 项目名，
+/// 整钮可点（悬停显示完整 URL）。底色同 Neutral 按钮（CARD 底 + ENTRY 描边）。
+fn github_link_button(
+    ui: &mut egui::Ui,
+    mark: Option<&egui::TextureHandle>,
+    label: &str,
+    tooltip: &str,
+) -> egui::Response {
+    let palette = ButtonStyle::Neutral.palette();
+    let font_id = egui::FontId::proportional(13.0);
+    let text_w = text_width(ui, label, &font_id, palette.fg);
+    let icon_w = if mark.is_some() { 16.0 + 8.0 } else { 0.0 };
+    let size = egui::vec2((text_w + 28.0 + icon_w).max(200.0), 32.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let response = response.on_hover_text(tooltip);
+    if ui.is_rect_visible(rect) {
+        let hovered = response.hovered();
+        let fill = if hovered { palette.hover } else { palette.bg };
+        let stroke = palette
+            .border
+            .map_or(egui::Stroke::NONE, |c| egui::Stroke::new(1.0, c));
+        ui.painter().rect(
+            rect,
+            egui::CornerRadius::same(8),
+            fill,
+            stroke,
+            egui::StrokeKind::Inside,
+        );
+        // 内容组（图标 + 文字）整体居中于按钮。
+        let group_w = icon_w + text_w;
+        let left = rect.left() + (rect.width() - group_w) / 2.0;
+        if let Some(tex) = mark {
+            let icon_rect = egui::Rect::from_min_size(
+                egui::pos2(left, rect.center().y - 8.0),
+                egui::vec2(16.0, 16.0),
+            );
+            ui.painter().image(
+                tex.id(),
+                icon_rect,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                theme::WHITE,
+            );
+        }
+        ui.painter().text(
+            egui::pos2(left + icon_w, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            label,
+            font_id,
+            palette.fg,
+        );
+    }
+    response
+}
+
+/// 内嵌的 GitHub 单色 mark（官方 logo 资源缩至 64px；点击入口跳仓库页，符合 GitHub
+/// logo 使用政策的「链接到项目」场景）。
+const GITHUB_MARK_PNG: &[u8] = include_bytes!("../assets/github-mark.png");
+
+/// 解码内嵌 GitHub mark 为纹理；失败返回 None（渲染层退回纯文字入口，不崩）。
+fn load_github_mark(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    let img = image::load_from_memory(GITHUB_MARK_PNG).ok()?.to_rgba8();
+    let (w, h) = img.dimensions();
+    let color = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &img);
+    Some(ctx.load_texture("github-mark", color, egui::TextureOptions::LINEAR))
 }
 
 /// 卡片标题：3px accent 色 bar + 标题。
@@ -170,6 +284,15 @@ fn card_title(ui: &mut egui::Ui, text: &str) {
     });
 }
 
+/// 底部状态栏条目：色点 + 同色文案（颜色语义见 status_bar；条目间自带间距）。
+fn status_item(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(7.0, 7.0), egui::Sense::hover());
+    ui.painter().circle_filled(rect.center(), 3.5, color);
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new(text).size(12.5).color(color));
+    ui.add_space(10.0);
+}
+
 /// 状态行：纯文字 + 颜色（无圆点徽章）。
 fn status_line(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
     ui.label(egui::RichText::new(text).size(13.0).strong().color(color));
@@ -181,7 +304,7 @@ fn log_warn(msg: impl std::fmt::Display) {
 
 /// 渲染最近一次结果提示为当前语言文案。
 /// 纯函数（不依赖 App）：切换语言后无需重建 notice，重渲染即得新语言。
-/// 检查更新结果的分类来自「更新流程」派生（`notice_text` 的 UpdateChecked 分支），此处不处理。
+/// 检查更新结果的分类来自「更新流程」派生（`status_bar` 对 UpdateChecked 单独分流），此处不处理。
 fn render_notice(s: &Strings, notice: &Notice) -> (bool, String) {
     match notice {
         Notice::Downloaded(Ok(())) => (true, s.ok_downloaded.to_string()),
@@ -190,8 +313,8 @@ fn render_notice(s: &Strings, notice: &Notice) -> (bool, String) {
         Notice::WorkflowDone(_, Err(e)) => (false, s.workflow_error_text(e)),
         Notice::Precheck(p) => (false, s.precheck_text(p)),
         Notice::UpdateChecked => {
-            // 防御分支：正常路径该变体经 notice_text 分流，不直达此处；直达则记日志并降级为中性空提示。
-            log_warn("render_notice 收到 Notice::UpdateChecked（应经 notice_text 分流）");
+            // 防御分支：正常路径该变体经 status_bar 分流（update_flow 派生），不直达此处；直达则记日志并降级为中性空提示。
+            log_warn("render_notice 收到 Notice::UpdateChecked（应经 status_bar 分流）");
             (true, String::new())
         }
     }
@@ -253,12 +376,12 @@ enum Msg {
     },
     /// 首次运行向导的「检查更新 → 下载并解压」完成。
     WizardDownload(Result<(), UpdateError>),
-    /// 应用更新检查完成（Settings — General About 区；只读查询，不进忙碌门禁）。
+    /// 应用更新检查完成（Settings — 更新页签；只读查询，不进忙碌门禁）。
     AppUpdateChecked(Result<updater::AppUpdateCheckResult, UpdateError>),
 }
 
 /// 最近一次结果提示的结构化数据。
-/// 渲染时（`notice_bar`）才按当前语言生成文案，切换语言无需重建。
+/// 渲染时（`status_bar`）才按当前语言生成文案，切换语言无需重建。
 enum Notice {
     /// 检查更新完成标记（无 payload）：结果文案由「更新流程」派生（单一事实源）。
     UpdateChecked,
@@ -270,10 +393,12 @@ enum Notice {
     Precheck(workflow::Precheck),
 }
 
-/// 设置对话框页签。#30 落地 General；#31 追加 Steam（Steam 路径编辑 + 兼容性小节）。
+/// 设置对话框页签。#30 落地 General；#31 追加 Steam；#34 重组为 通用/关于/Steam
+/// （关于 = 应用更新 + 仓库信息 + 设置向导，取代原「更新」页签）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum SettingsTab {
     General,
+    About,
     Steam,
 }
 
@@ -409,7 +534,7 @@ pub struct App {
     settings_tab: SettingsTab,
     /// Settings — Steam 页签路径编辑状态（缓冲 + 内联错误；打开对话框时播种）。
     settings_steam: SteamPathEditor,
-    /// 应用更新检查结果（Settings — General About 区；None = 尚未检查）。
+    /// 应用更新检查结果（Settings — 更新页签；None = 尚未检查）。
     /// 检查中由 `app_update_checking` 表达（发起时覆盖旧结果）。
     app_update: Option<Result<updater::AppUpdateCheckResult, UpdateError>>,
     /// 应用更新检查是否在途（自管忙碌：只读查询不进 Busy Gate，按钮在途自禁用）。
@@ -420,6 +545,11 @@ pub struct App {
     flow: CompatFlow,
     /// 兼容性明细展开开关（纯 UI 状态，不属于流程）。
     compat_details_open: bool,
+    /// 明细刚展开当帧需要滚动到可见（#34 复看：点击「详细信息」即滚到明细，
+    /// 无需手动滚动；仅置位一帧，避免与用户滚动打架）。
+    compat_scroll_pending: bool,
+    /// 设置对话框页签行右侧 GitHub 入口的 mark 纹理（None = 解码失败，退纯文字）。
+    github_mark: Option<egui::TextureHandle>,
 }
 
 /// 读取系统中文字体数据（微软雅黑/黑体/宋体，首个可读的生效），无则 None。
@@ -509,6 +639,34 @@ fn path_edit_row(ui: &mut egui::Ui, strings: Strings, buffer: &mut String) -> Pa
         }
     });
     row
+}
+
+/// 语言下拉（设置通用页签与向导步骤 1 共用，#34）：同一选项表 + 同构控件，
+/// 未来加语言只改 `Strings::language_options` 一处。返回本次选中（None = 未改动）。
+fn language_combo(
+    ui: &mut egui::Ui,
+    options: [(Language, &'static str); 3],
+    selected: Language,
+    width: f32,
+    salt: &'static str,
+) -> Option<Language> {
+    let current = options
+        .iter()
+        .find(|(lang, _)| *lang == selected)
+        .map(|(_, label)| *label)
+        .unwrap_or_default();
+    let mut chosen = None;
+    egui::ComboBox::from_id_salt(salt)
+        .selected_text(current)
+        .width(width)
+        .show_ui(ui, |ui| {
+            for (lang, label) in options {
+                if ui.selectable_label(selected == lang, label).clicked() {
+                    chosen = Some(lang);
+                }
+            }
+        });
+    chosen
 }
 
 /// 首次运行向导的下载动作：检查线上版本后下载解压到 `dlls/`（向导只需一个成败结果）。
@@ -619,24 +777,25 @@ fn wizard_steps_ui(
                                 egui::RichText::new(strings.wizard_language_prompt).size(13.0),
                             );
                             ui.add_space(12.0);
-                            // 选定即推进到步骤 2（该选择立即局部化后续步骤）。
-                            for (lang, label) in [
-                                (Language::Auto, strings.wizard_language_auto),
-                                (Language::Zh, strings.wizard_language_zh),
-                                (Language::En, strings.wizard_language_en),
-                            ] {
-                                if styled_button(
-                                    ui,
-                                    label,
-                                    ButtonStyle::Neutral,
-                                    egui::vec2(240.0, 36.0),
-                                    true,
-                                )
-                                .clicked()
-                                {
-                                    event = Some(wizard::Event::LanguageChosen(lang));
-                                }
-                                ui.add_space(8.0);
+                            // 下拉选择（与设置通用页签共用同一选项表与控件，#34）；
+                            // 选中即本地化后续步骤文案，但不推进——点「下一步」才进步骤 2。
+                            let options = strings.language_options();
+                            if let Some(lang) =
+                                language_combo(ui, options, view.language, 240.0, "wizard_language")
+                            {
+                                event = Some(wizard::Event::LanguageChosen(lang));
+                            }
+                            ui.add_space(14.0);
+                            if styled_button(
+                                ui,
+                                strings.wizard_btn_next,
+                                ButtonStyle::Primary,
+                                egui::vec2(140.0, 34.0),
+                                true,
+                            )
+                            .clicked()
+                            {
+                                event = Some(wizard::Event::LanguageSubmitted);
                             }
                         }
                         WizardStep::SteamPath => {
@@ -834,6 +993,8 @@ impl App {
             wizard,
             flow,
             compat_details_open: false,
+            compat_scroll_pending: false,
+            github_mark: load_github_mark(&cc.egui_ctx),
         };
         // 初始同步托盘「重启 Steam」可用性（跟随初始 Steam 路径有效性）。
         app.sync_tray_restart_enabled();
@@ -1035,14 +1196,6 @@ impl App {
         });
     }
 
-    fn toggle_lang(&mut self) {
-        // 顶栏切换把「语言偏好」钉到另一侧（auto 时相对当前生效语言切换）；选择
-        // 持久化，重启后恢复（不再每次回到系统检测）。
-        self.set_language(self.lang_pref.toggled(self.lang));
-        self.config.language = self.lang_pref;
-        self.persist_config();
-    }
-
     /// 应用语言偏好：更新生效语言、文案、窗口标题（不落盘；持久化由调用方决定）。
     fn set_language(&mut self, pref: Language) {
         self.lang_pref = pref;
@@ -1081,7 +1234,7 @@ impl App {
 
     /// 应用更新检查：查询本仓库最新发布并与当前程序版本比较。只读查询，不进忙碌门禁
     /// （不互斥补丁/操作类后台任务）；检查中按钮自禁用防重复发起，结果仅呈现在
-    /// Settings — General 的 About 区。不下载、不自替换（明确非目标）。
+    /// Settings — 更新页签。不下载、不自替换（明确非目标）。
     fn check_app_update(&mut self, ctx: &egui::Context) {
         if self.app_update_checking {
             return;
@@ -1153,9 +1306,10 @@ impl App {
         self.settings_steam = SteamPathEditor::new(&self.steam_path);
     }
 
-    /// 设置对话框：页签骨架 + General / Steam 页签。全部控件即改即生效并持久化
+    /// 设置对话框：页签骨架 + 通用 / 关于 / Steam 页签。全部控件即改即生效并持久化
     /// （无 OK/Cancel）；补丁更新检查 / 下载并解压仍走忙碌门禁互斥。
     /// 布局：标题 + 页签行固定，中间内容区滚动（窗口高度有限，Modal 是 Area 不约束屏幕）。
+    /// GitHub 入口在关于页签内（#34 修订：不再占用页签行）。
     fn settings_dialog(&mut self, ctx: &egui::Context) {
         if !self.settings_open {
             return;
@@ -1165,11 +1319,12 @@ impl App {
             ui.set_width(SETTINGS_DIALOG_WIDTH);
             ui.heading(self.strings.settings_title);
             ui.add_space(8.0);
-            // 页签行（#30 General + #31 Steam）。
+            // 页签行（#34 定稿：通用 / Steam / 关于）。
             ui.horizontal(|ui| {
                 for (tab, label) in [
                     (SettingsTab::General, self.strings.settings_tab_general),
                     (SettingsTab::Steam, self.strings.settings_tab_steam),
+                    (SettingsTab::About, self.strings.settings_tab_about),
                 ] {
                     let style = if self.settings_tab == tab {
                         ButtonStyle::Primary
@@ -1200,7 +1355,8 @@ impl App {
                 .auto_shrink([false; 2])
                 .max_height(max_scroll_h)
                 .show(ui, |ui| match self.settings_tab {
-                    SettingsTab::General => self.settings_general(ui, ctx),
+                    SettingsTab::General => self.settings_general(ui),
+                    SettingsTab::About => self.settings_about(ui, ctx),
                     SettingsTab::Steam => self.settings_steam(ui, ctx),
                 });
             ui.add_space(12.0);
@@ -1230,48 +1386,28 @@ impl App {
         }
     }
 
-    /// General 页签：语言三态（即改即存）→ 关于（GitHub 链接 / 软件版本 / 应用更新
-    /// 检查）→ 补丁更新检查（单按钮；结果永不显示补丁版本号）→ 重新运行向导。
-    fn settings_general(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        // ---- 语言（三态，点击即应用并持久化，无重启） ----
+    /// 通用页签（#34 重组）：语言下拉（即改即存）→ 重新运行向导（低频操作，Neutral 样式）。
+    /// 语言选项与向导步骤 1 共用同一份选项表（`Strings::language_options`），新增语言只改一处。
+    fn settings_general(&mut self, ui: &mut egui::Ui) {
+        // ---- 语言（下拉；选中即应用并持久化，无重启） ----
         card_title(ui, self.strings.settings_language_title);
         ui.add_space(8.0);
-        let mut lang_changed = false;
-        ui.vertical(|ui| {
-            // 选项文案与向导步骤 1 复用同一组标签（wizard_language_*）。
-            for (lang, label) in [
-                (Language::Auto, self.strings.wizard_language_auto),
-                (Language::Zh, self.strings.wizard_language_zh),
-                (Language::En, self.strings.wizard_language_en),
-            ] {
-                if ui.radio_value(&mut self.lang_pref, lang, label).changed() {
-                    lang_changed = true;
-                }
-            }
-        });
-        if lang_changed {
-            self.set_language(self.lang_pref);
-            self.config.language = self.lang_pref;
+        let options = self.strings.language_options();
+        if let Some(lang) = language_combo(ui, options, self.lang_pref, 220.0, "settings_language")
+            && lang != self.lang_pref
+        {
+            self.set_language(lang);
+            self.config.language = lang;
             self.persist_config();
         }
-        ui.add_space(12.0);
+    }
 
-        // ---- 关于（GitHub 链接 / 软件版本 / 应用更新检查） ----
-        card_title(ui, self.strings.settings_about_title);
+    /// 关于页签（#34 修订）：应用更新（软件版本 + 应用更新检查）→ 项目主页
+    /// （GitHub mark + 链接）→ 设置向导（重新运行）。补丁更新入口已回主页面（#34）。
+    fn settings_about(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        // ---- 应用更新（软件版本 + 应用更新检查；只查询并打开下载页，不下载/自替换） ----
+        card_title(ui, self.strings.settings_app_update_title);
         ui.add_space(8.0);
-        // GitHub 项目链接：按钮式链接，点击在浏览器打开仓库页。
-        if styled_button(
-            ui,
-            updater::APP_REPO_PAGE,
-            ButtonStyle::Neutral,
-            egui::vec2(240.0, 28.0),
-            true,
-        )
-        .clicked()
-        {
-            updater::open_in_browser(updater::APP_REPO_PAGE);
-        }
-        ui.add_space(6.0);
         // 软件版本：crate 版本（构建时固化的单一来源）。
         ui.label(
             egui::RichText::new(format!(
@@ -1284,6 +1420,7 @@ impl App {
         );
         ui.add_space(8.0);
         // 应用更新检查：只查询并打开下载页，不做任何下载/自替换。
+        // 结果/检查中文案内联于按钮右侧（#34 复看定稿：不再换行置底）。
         let mut do_app_check = false;
         ui.horizontal(|ui| {
             if styled_button(
@@ -1297,22 +1434,15 @@ impl App {
             {
                 do_app_check = true;
             }
-        });
-        if do_app_check {
-            self.check_app_update(ctx);
-        }
-        match (&self.app_update, self.app_update_checking) {
-            (_, true) => {
-                ui.add_space(6.0);
-                ui.label(
-                    egui::RichText::new(self.strings.settings_app_update_checking)
-                        .size(12.5)
-                        .color(theme::WEAK),
-                );
-            }
-            (Some(Ok(r)), false) if r.newer => {
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
+            match (&self.app_update, self.app_update_checking) {
+                (_, true) => {
+                    ui.label(
+                        egui::RichText::new(self.strings.settings_app_update_checking)
+                            .size(12.5)
+                            .color(theme::WEAK),
+                    );
+                }
+                (Some(Ok(r)), false) if r.newer => {
                     ui.label(
                         egui::RichText::new(format!(
                             "{}{}",
@@ -1332,92 +1462,45 @@ impl App {
                     {
                         updater::open_in_browser(updater::APP_RELEASES_PAGE);
                     }
-                });
-            }
-            (Some(Ok(_)), false) => {
-                ui.add_space(6.0);
-                ui.label(
-                    egui::RichText::new(self.strings.settings_app_update_up_to_date)
-                        .size(12.5)
-                        .color(theme::INK),
-                );
-            }
-            (Some(Err(e)), false) => {
-                ui.add_space(6.0);
-                ui.label(
-                    egui::RichText::new(self.strings.update_error(e))
-                        .size(12.5)
-                        .color(theme::DANGER),
-                );
-            }
-            (None, false) => {}
-        }
-        ui.add_space(12.0);
-
-        // ---- 补丁更新检查（单按钮；忙碌门禁互斥；结果永不显示补丁版本号）。
-        card_title(ui, self.strings.settings_patch_title);
-        ui.add_space(8.0);
-        // 派生快照：先取结果文案与下载可用性（脱离借用后才可 &mut self 发起动作）。
-        let derived = self.update_flow.derived(self.local_known_version());
-        let patch_result = derived
-            .notice
-            .map(|n| render_patch_notice(&self.strings, &n));
-        let patch_info = derived.download.cloned();
-        let checking = self.gate.current() == Some(BusyKind::Checking);
-        let mut do_patch_check = false;
-        let mut do_patch_download: Option<OnlineInfo> = None;
-        ui.horizontal(|ui| {
-            if styled_button(
-                ui,
-                self.strings.settings_btn_patch_update_check,
-                ButtonStyle::Neutral,
-                egui::vec2(150.0, 28.0),
-                !self.gate.is_busy(),
-            )
-            .clicked()
-            {
-                do_patch_check = true;
+                }
+                (Some(Ok(_)), false) => {
+                    ui.label(
+                        egui::RichText::new(self.strings.settings_app_update_up_to_date)
+                            .size(12.5)
+                            .color(theme::INK),
+                    );
+                }
+                (Some(Err(e)), false) => {
+                    ui.label(
+                        egui::RichText::new(self.strings.update_error(e))
+                            .size(12.5)
+                            .color(theme::DANGER),
+                    );
+                }
+                (None, false) => {}
             }
         });
-        if checking {
-            ui.add_space(6.0);
-            ui.label(
-                egui::RichText::new(self.strings.checking)
-                    .size(12.5)
-                    .color(theme::WEAK),
-            );
-        } else if let Some((ok, text)) = patch_result {
-            ui.add_space(6.0);
-            ui.label(egui::RichText::new(text).size(12.5).color(if ok {
-                theme::INK
-            } else {
-                theme::DANGER
-            }));
-        }
-        // 下载并解压按钮：仅「新补丁可用或本地补丁文件缺失」（文件本位派生）时出现。
-        if patch_info.is_some() {
-            ui.add_space(8.0);
-            if styled_button(
-                ui,
-                self.strings.btn_download_and_extract,
-                ButtonStyle::Primary,
-                egui::vec2(180.0, 28.0),
-                !self.gate.is_busy(),
-            )
-            .clicked()
-            {
-                do_patch_download = patch_info.clone();
-            }
-        }
-        if do_patch_check {
-            self.check_update(ctx);
-        }
-        if let Some(info) = do_patch_download {
-            self.download_update(ctx, info);
+        if do_app_check {
+            self.check_app_update(ctx);
         }
         ui.add_space(12.0);
 
-        // ---- 重新运行向导（以当前配置为初值）。
+        // ---- 项目主页（GitHub 链接按钮；mark 在按钮内部，#34 定稿） ----
+        card_title(ui, self.strings.settings_github_title);
+        ui.add_space(8.0);
+        if github_link_button(
+            ui,
+            self.github_mark.as_ref(),
+            self.strings.settings_github_label,
+            updater::APP_REPO_PAGE,
+        )
+        .clicked()
+        {
+            updater::open_in_browser(updater::APP_REPO_PAGE);
+        }
+        ui.add_space(12.0);
+
+        // ---- 设置向导（重新运行；低频操作不用主色） ----
         card_title(ui, self.strings.settings_wizard_title);
         ui.add_space(8.0);
         ui.label(
@@ -1429,7 +1512,7 @@ impl App {
         if styled_button(
             ui,
             self.strings.settings_btn_rerun_wizard,
-            ButtonStyle::Primary,
+            ButtonStyle::Neutral,
             egui::vec2(160.0, 32.0),
             !self.gate.is_busy(),
         )
@@ -1515,27 +1598,9 @@ impl App {
                 theme::INK,
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // RTL 先放者靠右：语言切换最右，设置在其左（次序维持现状）。
-                if styled_button(
-                    ui,
-                    self.lang.toggle_label(),
-                    ButtonStyle::Neutral,
-                    egui::vec2(72.0, 28.0),
-                    true,
-                )
-                .clicked()
-                {
-                    self.toggle_lang();
-                }
-                if styled_button(
-                    ui,
-                    self.strings.btn_settings,
-                    ButtonStyle::Neutral,
-                    egui::vec2(72.0, 28.0),
-                    true,
-                )
-                .clicked()
-                {
+                // #34：语言切换入口移除（改语言唯一入口 = 设置通用页签 / 向导弹窗），
+                // 顶栏只剩齿轮设置入口（图标按钮 + tooltip）。
+                if gear_button(ui, self.strings.settings_gear_tooltip).clicked() {
                     self.open_settings(self.settings_tab);
                 }
             });
@@ -1620,30 +1685,41 @@ impl App {
     /// Settings — Steam 兼容性小节：第一行标题+状态徽章+操作靠右，第二行辅助说明弱化。
     fn compat_section(&mut self, ui: &mut egui::Ui) {
         ui.add_space(10.0);
-        // 无分隔线：竖条标题 + 徽章自成边界，直接衔接上方路径输入区。
+        // 无分隔线：竖条标题自成边界，直接衔接上方路径输入区。
 
         let v = CompatView::snapshot(self);
 
-        // 第一行：左侧（竖条标题 + 状态徽章）| 右侧操作（预热 + 详细信息，贴右边缘）。
+        // 标题：与其他卡片一致的蓝色竖条指示器（#34 定稿：徽章移到标题之下）。
         ui.horizontal(|ui| {
-            // 标题：与其他卡片一致的蓝色竖条指示器。
-            ui.horizontal(|ui| {
-                let (rect, _) = ui.allocate_exact_size(egui::vec2(3.0, 13.0), egui::Sense::hover());
-                ui.painter().rect_filled(rect, 0.0, theme::ACCENT);
-                ui.add_space(8.0);
-                ui.label(
-                    egui::RichText::new(self.strings.compat_title)
-                        .size(13.5)
-                        .strong(),
-                );
-            });
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(3.0, 13.0), egui::Sense::hover());
+            ui.painter().rect_filled(rect, 0.0, theme::ACCENT);
             ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new(self.strings.compat_title)
+                    .size(13.5)
+                    .strong(),
+            );
+        });
+        ui.add_space(8.0);
+        // 徽章行：徽章在左，右侧操作（详细信息/预热）贴最右、与徽章同排（#34 复看
+        // 定稿：状态说明收进详细信息，不再占独立说明行）。
+        ui.horizontal(|ui| {
             self.compat_badge(ui, v.summary);
-
             // 右侧操作区：right_to_left 首项（详细信息）贴最右，预热按钮在其左侧。
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if !v.checking && ui.button(self.strings.compat_btn_details).clicked() {
+                if !v.checking
+                    && styled_button(
+                        ui,
+                        self.strings.compat_btn_details,
+                        ButtonStyle::Neutral,
+                        egui::vec2(88.0, 26.0),
+                        true,
+                    )
+                    .clicked()
+                {
                     self.compat_details_open = !self.compat_details_open;
+                    // 展开时置位滚动请求（关闭时清掉，防残留）。
+                    self.compat_scroll_pending = self.compat_details_open;
                 }
                 if v.summary == CompatSummary::Online && !v.checking {
                     let label = if v.precaching {
@@ -1666,22 +1742,9 @@ impl App {
                 }
             });
         });
-
-        // 辅助说明：五态一句话（Checking 为瞬时态不显示），小字号弱灰 + 缩进对齐标题竖条。
-        if v.summary != CompatSummary::Checking {
-            let tip = match v.summary {
-                CompatSummary::Ready => self.strings.compat_tip_ready,
-                CompatSummary::Online => self.strings.compat_tip_online,
-                CompatSummary::Pending => self.strings.compat_tip_pending,
-                CompatSummary::Missing => self.strings.compat_tip_missing,
-                CompatSummary::Network => self.strings.compat_tip_network,
-                CompatSummary::Checking => "",
-            };
-            ui.horizontal(|ui| {
-                // 缩进对齐标题竖条（竖条 3px + 8px gap = 11px）。
-                ui.add_space(11.0);
-                ui.label(egui::RichText::new(tip).size(11.5).color(theme::WEAK));
-            });
+        // 展开明细：置于徽章行正下方（点击「详细信息」即展开，无需滚动即可见）。
+        if let Some(report) = &v.detail_report {
+            self.compat_details(ui, report, v.summary);
         }
         if let Some(text) = &v.precache_error {
             ui.label(egui::RichText::new(text).size(12.0).color(theme::DANGER));
@@ -1692,11 +1755,6 @@ impl App {
                     .size(12.0)
                     .color(theme::SUCCESS),
             );
-        }
-
-        // 详情明细（展开时）：快照阶段按需克隆的报告，展开期间每帧一次，热路径零拷贝。
-        if let Some(report) = &v.detail_report {
-            self.compat_details(ui, report);
         }
     }
 
@@ -1767,9 +1825,28 @@ impl App {
         }
     }
 
-    /// 明细行：DLL + 类型 + SHA-256 前 12 位 + 状态。
-    fn compat_details(&mut self, ui: &mut egui::Ui, report: &compat::OverallHealthReport) {
+    /// 明细（展开态，#34 复看定稿）：状态说明（原独立说明行收进此处）+ 逐 DLL 行
+    /// + 一键缓存签名。展开于徽章行正下方，无需滚动即可见。
+    fn compat_details(
+        &mut self,
+        ui: &mut egui::Ui,
+        report: &compat::OverallHealthReport,
+        summary: CompatSummary,
+    ) {
         ui.add_space(6.0);
+        // 状态说明：Checking 为瞬时态不显示。
+        if summary != CompatSummary::Checking {
+            let tip = match summary {
+                CompatSummary::Ready => self.strings.compat_tip_ready,
+                CompatSummary::Online => self.strings.compat_tip_online,
+                CompatSummary::Pending => self.strings.compat_tip_pending,
+                CompatSummary::Missing => self.strings.compat_tip_missing,
+                CompatSummary::Network => self.strings.compat_tip_network,
+                CompatSummary::Checking => "",
+            };
+            ui.label(egui::RichText::new(tip).size(11.5).color(theme::WEAK));
+            ui.add_space(6.0);
+        }
         for (probe, kind) in [
             (&report.steamclient_pattern, "Pattern"),
             (&report.steamui_pattern, "Pattern"),
@@ -1808,21 +1885,87 @@ impl App {
                 self.request_precache(&ctx);
             }
         }
+        // 展开当帧滚动到明细可见（#34 复看：点击「详细信息」即见 steamclient64.dll
+        // (IPC) 等明细行，无需手动滚动；仅一帧，随后交还滚动控制）。
+        if self.compat_scroll_pending {
+            self.compat_scroll_pending = false;
+            ui.scroll_to_cursor(Some(egui::Align::Center));
+        }
     }
 
-    fn card2(&mut self, ui: &mut egui::Ui) {
+    /// 部署状态卡片（#34 致密化 + 方案 B 定稿）：状态 16px bold + 补丁更新按钮。
+    /// 补丁检查/下载共用同一按钮位；检查中/结果文案内联于按钮右侧（不进底部状态栏）。
+    fn card2(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         card_frame().show(ui, |ui| {
             ui.set_width(ui.available_width()); // 卡片撑满窗口宽度
             card_title(ui, self.strings.card2_title);
             ui.add_space(10.0);
 
-            // 部署状态：纯文字 + 颜色（无圆点徽章）。
+            // 部署状态：16px bold 主行（#34 致密化：状态一眼可读）。
             let (text, color) = match self.status {
                 DeployStatus::InvalidPath => (self.strings.status_invalid, theme::WEAK),
                 DeployStatus::Deployed => (self.strings.status_deployed, theme::SUCCESS),
                 DeployStatus::NotDeployed => (self.strings.status_not_deployed, theme::WEAK),
             };
-            status_line(ui, text, color);
+            ui.label(egui::RichText::new(text).size(16.0).strong().color(color));
+            ui.add_space(10.0);
+
+            // 方案 B：补丁更新按钮（检查/下载两阶段共用同一按钮位）；检查中/结果文案
+            // 内联于按钮右侧（#34 复看定稿：与「关于」页应用更新检查同式，不进底部状态栏）。
+            // 可用性与文案由「更新流程」派生（ADR-0011 文件本位判据）；版本号永不渲染（ADR-0014）。
+            let derived = self.update_flow.derived(self.local_known_version());
+            let patch_result = derived
+                .notice
+                .map(|n| render_patch_notice(&self.strings, &n));
+            let patch_info = derived.download.cloned();
+            let checking = self.gate.current() == Some(BusyKind::Checking);
+            let mut do_check = false;
+            let mut do_download: Option<OnlineInfo> = None;
+            ui.horizontal(|ui| {
+                if let Some(info) = &patch_info {
+                    if styled_button(
+                        ui,
+                        self.strings.btn_download_and_extract,
+                        ButtonStyle::Primary,
+                        egui::vec2(180.0, 32.0),
+                        !self.gate.is_busy(),
+                    )
+                    .clicked()
+                    {
+                        do_download = Some(info.clone());
+                    }
+                } else if styled_button(
+                    ui,
+                    self.strings.settings_btn_patch_update_check,
+                    ButtonStyle::Neutral,
+                    egui::vec2(150.0, 32.0),
+                    !self.gate.is_busy(),
+                )
+                .clicked()
+                {
+                    do_check = true;
+                }
+                // 检查中 / 结果内联于按钮右侧（SUCCESS=已是最新/发现新补丁，DANGER=失败）。
+                if checking {
+                    ui.label(
+                        egui::RichText::new(self.strings.checking)
+                            .size(12.5)
+                            .color(theme::WEAK),
+                    );
+                } else if let Some((ok, text)) = patch_result {
+                    ui.label(egui::RichText::new(text).size(12.5).color(if ok {
+                        theme::SUCCESS
+                    } else {
+                        theme::DANGER
+                    }));
+                }
+            });
+            if do_check {
+                self.check_update(ctx);
+            }
+            if let Some(info) = do_download {
+                self.download_update(ctx, info);
+            }
         });
         ui.add_space(10.0);
     }
@@ -1842,7 +1985,7 @@ impl App {
                     // 「退出 Steam 并卸载补丁」（唯一警戒）/「重启 Steam」/「卸载补丁并重启 Steam」。
                     let size = egui::vec2(
                         row_button_width(ui.available_width(), gap, spacing, 3),
-                        36.0,
+                        44.0,
                     );
                     if styled_button(
                         ui,
@@ -1885,7 +2028,7 @@ impl App {
                     // 按钮写「启动」而非「正常启动」——带补丁启动不是正常启动（见 ADR-0011）。
                     let size = egui::vec2(
                         row_button_width(ui.available_width(), gap, spacing, 3),
-                        36.0,
+                        44.0,
                     );
                     if styled_button(
                         ui,
@@ -1926,7 +2069,7 @@ impl App {
                 DeployStatus::NotDeployed => {
                     let size = egui::vec2(
                         row_button_width(ui.available_width(), gap, spacing, 2),
-                        36.0,
+                        44.0,
                     );
                     if styled_button(
                         ui,
@@ -1957,7 +2100,7 @@ impl App {
                     // 无有效路径时禁用操作按钮。
                     let size = egui::vec2(
                         row_button_width(ui.available_width(), gap, spacing, 2),
-                        36.0,
+                        44.0,
                     );
                     styled_button(
                         ui,
@@ -1998,62 +2141,45 @@ impl App {
             .flatten()
     }
 
-    /// 最近一次结果提示 → 当前语言渲染（切换语言后无需重建 notice，逐帧取当前 strings）。
-    /// 检查更新（补丁更新检查）结果经 `render_patch_notice` 映射：永不渲染补丁版本号
-    /// （#30 验收；#32 后主页面不再有版本行，通知栏是唯一去向，口径与设置对话框一致）。
-    fn notice_text(&self) -> Option<(bool, String)> {
-        match &self.notice {
-            Some(Notice::UpdateChecked) => self
-                .update_flow
-                .derived(self.local_known_version())
-                .notice
-                .map(|n| render_patch_notice(&self.strings, &n)),
-            Some(n) => Some(render_notice(&self.strings, n)),
-            None => None,
-        }
-    }
-
-    fn notice_bar(&mut self, ui: &mut egui::Ui) {
-        // busy / 成功改中性文字；错误保留红色（kill-ai-slop：收敛语义三连）。
-        if let Some(kind) = self.gate.current() {
-            ui.horizontal(|ui| {
-                let (rect, _) = ui.allocate_exact_size(egui::vec2(7.0, 7.0), egui::Sense::hover());
-                ui.painter()
-                    .circle_filled(rect.center(), 3.5, theme::ACCENT);
-                ui.add_space(6.0);
-                ui.label(
-                    egui::RichText::new(self.strings.busy_label(kind))
-                        .size(12.5)
-                        .color(theme::WEAK),
-                );
-            });
-            return;
-        }
-        if let Some((ok, text)) = self.notice_text() {
-            let (color, dot_color) = if ok {
-                (theme::INK, theme::SUCCESS)
+    /// 底部状态显示栏（#34 复看定稿）：Steam 运行状态（恒显示）+ 交互类忙碌
+    /// （补丁检查的检查中由卡片按钮旁内联呈现，不在此处）+ 最近操作结果，多条并排、
+    /// 各自独立成项、互不覆盖。色点语义只走既有语义槽：SUCCESS=运行/成功；WEAK=未运行；
+    /// ACCENT=忙碌；DANGER=失败。
+    fn status_bar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            // 1) Steam 运行状态（恒显示；与操作结果区分，不互相覆盖）。
+            if self.steam_running {
+                status_item(ui, self.strings.status_steam_running, theme::SUCCESS);
             } else {
-                (theme::DANGER, theme::DANGER)
-            };
-            ui.horizontal(|ui| {
-                let (rect, _) = ui.allocate_exact_size(egui::vec2(7.0, 7.0), egui::Sense::hover());
-                ui.painter().circle_filled(rect.center(), 3.5, dot_color);
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new(text).size(12.5).color(color));
-            });
-        }
+                status_item(ui, self.strings.status_steam_stopped, theme::WEAK);
+            }
+            // 2) 交互类忙碌（Checking 由卡片按钮旁内联呈现，此处只画其余阶段）。
+            if let Some(kind) = self.gate.current()
+                && kind != BusyKind::Checking
+            {
+                status_item(ui, self.strings.busy_label(kind), theme::ACCENT);
+            }
+            // 3) 最近操作结果（UpdateChecked 由卡片按钮旁内联呈现）。
+            if let Some(n) = &self.notice
+                && !matches!(n, Notice::UpdateChecked)
+            {
+                let (ok, text) = render_notice(&self.strings, n);
+                status_item(ui, &text, if ok { theme::SUCCESS } else { theme::DANGER });
+            }
+        });
     }
 
-    /// 主界面内容（向导未激活时渲染）：核心闭环 = 部署状态 + 操作按钮组（#32）。
-    /// 已移除：Steam 路径编辑、兼容性小节、在线更新区（全部迁往设置对话框）；
-    /// 本地/线上版本退为内部概念，永不渲染（补丁更新维护在 Settings — General）。
-    /// 新增一行健康风险警示：仅「上游尚未适配 / 未找到核心 DLL」两态出现（点击跳 Settings — Steam）。
+    /// 主界面内容（向导未激活时渲染）：核心闭环 = 部署状态卡片（含补丁更新按钮，#34
+    /// 方案 B）+ 健康风险警示 + 操作按钮组 + 底部状态栏。已移除：Steam 路径编辑、
+    /// 兼容性小节（迁往设置对话框）；Steam 运行状态与补丁检查结果在底部状态栏（#34
+    /// 定稿：多条状态并排、互不覆盖）；本地/线上版本退为内部概念，永不渲染。
     fn main_content(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
         self.top_bar(ui);
-        self.card2(ui);
+        self.card2(ui, &ctx);
         self.health_warning_line(ui);
         self.action_area(ui);
-        self.notice_bar(ui);
+        self.status_bar(ui);
     }
 }
 
@@ -2283,7 +2409,7 @@ mod tests {
         }
     }
 
-    /// 防御分支：Notice::UpdateChecked 正常经 notice_text 分流，不直达 render_notice；
+    /// 防御分支：Notice::UpdateChecked 正常经 status_bar 分流，不直达 render_notice；
     /// 若直达，降级为中性空提示而非 panic（不中断渲染）。
     #[test]
     fn render_notice_update_checked_is_defensive() {
@@ -2470,6 +2596,9 @@ mod tests {
     /// 断言两件事：左块（标题+徽章）右缘不超内容右界；右块最左按钮左缘不小于其起点
     /// （right_to_left 溢出会向左侧出界，落在对话框边框之外）。
     #[test]
+    /// #34 复看定稿布局回归：Steam 兼容性小节 = 标题行 → 徽章行（徽章左 + 操作右）。
+    /// 断言：徽章与右侧操作（详细信息/预热）不溢出内容右界、右侧操作不与徽章重叠
+    /// （Online 是宽度的最坏组合：徽章文案最长 + 两按钮都出现；英文又宽于中文）。
     fn settings_steam_compat_row_fits_dialog_width() {
         let ctx = egui::Context::default();
         install_theme(&ctx);
@@ -2486,15 +2615,16 @@ mod tests {
                 ui.set_width(SETTINGS_DIALOG_WIDTH);
                 for lang in [Lang::Zh, Lang::En] {
                     let s = Strings::new(lang);
+                    // 标题行（竖条标题）。
                     ui.horizontal(|ui| {
-                        let avail_right = ui.available_width();
-                        // 竖条标题块（compat_section 原样复刻）。
-                        ui.horizontal(|ui| {
-                            ui.allocate_exact_size(egui::vec2(3.0, 13.0), egui::Sense::hover());
-                            ui.add_space(8.0);
-                            ui.label(egui::RichText::new(s.compat_title).size(13.5).strong());
-                        });
+                        ui.allocate_exact_size(egui::vec2(3.0, 13.0), egui::Sense::hover());
                         ui.add_space(8.0);
+                        ui.label(egui::RichText::new(s.compat_title).size(13.5).strong());
+                    });
+                    ui.add_space(8.0);
+                    // 徽章行：徽章 + 右侧操作（详细信息 + 预热），与 compat_section 同构。
+                    ui.horizontal(|ui| {
+                        let content_right = ui.cursor().right();
                         // 徽章（Online 文案为最宽）。
                         let badge = egui::Frame::new()
                             .corner_radius(egui::CornerRadius::same(12))
@@ -2507,17 +2637,22 @@ mod tests {
                             })
                             .response
                             .rect;
-                        // 左块（标题 + 徽章）右缘不得超出内容右界。
-                        if badge.right() > avail_right + 0.5 {
+                        if badge.right() > content_right + 0.5 {
                             violations.push(format!(
-                                "{lang:?} 左块右缘 {} 超过可用宽 {avail_right}",
+                                "{lang:?} 徽章右缘 {} 超过内容右界 {content_right}",
                                 badge.right()
                             ));
                         }
-                        // 右侧动作块起点（egui 自动加了 item_spacing）。
+                        // 右侧动作块起点（徽章之后）。
                         let block_left = ui.cursor().left();
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let _ = ui.button(s.compat_btn_details);
+                            let details = styled_button(
+                                ui,
+                                s.compat_btn_details,
+                                ButtonStyle::Neutral,
+                                egui::vec2(88.0, 26.0),
+                                true,
+                            );
                             let precache = styled_button(
                                 ui,
                                 s.compat_btn_precache,
@@ -2525,11 +2660,18 @@ mod tests {
                                 egui::vec2(132.0, 26.0),
                                 true,
                             );
-                            // 右块最左元素左缘不得越过其起点（否则溢出到对话框左侧外）。
+                            // 右块最左元素（预热）不得越过起点（否则溢出到左侧/与徽章重叠）。
                             if precache.rect.left() + 0.5 < block_left {
                                 violations.push(format!(
-                                    "{lang:?} 预热按钮左缘 {} 越过右块起点 {block_left}",
+                                    "{lang:?} 预热按钮左缘 {} 越过右块起点 {block_left}（与徽章重叠）",
                                     precache.rect.left()
+                                ));
+                            }
+                            // 右块整体不越出内容右边界。
+                            if details.rect.right() > content_right + 0.5 {
+                                violations.push(format!(
+                                    "{lang:?} 详细信息右缘 {} 超过内容右界 {content_right}",
+                                    details.rect.right()
                                 ));
                             }
                         });
@@ -2540,7 +2682,7 @@ mod tests {
         full.textures_delta.clear();
         assert!(
             violations.is_empty(),
-            "兼容性小节首行在对话框宽度 {SETTINGS_DIALOG_WIDTH} 下溢出:\n{}",
+            "兼容性小节在对话框宽度 {SETTINGS_DIALOG_WIDTH} 下溢出:\n{}",
             violations.join("\n")
         );
     }
@@ -2687,29 +2829,31 @@ mod tests {
                         theme::INK,
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let _ = styled_button(
-                            ui,
-                            lang.toggle_label(),
-                            ButtonStyle::Neutral,
-                            egui::vec2(72.0, 28.0),
-                            true,
-                        );
-                        let _ = styled_button(
-                            ui,
-                            s.btn_settings,
-                            ButtonStyle::Neutral,
-                            egui::vec2(72.0, 28.0),
-                            true,
-                        );
+                        // #34：顶栏只剩齿轮设置入口（语言切换已移除）。
+                        let _ = gear_button(ui, s.settings_gear_tooltip);
                     });
                 });
                 ui.add_space(6.0);
-                // card2 复刻（部署状态）。
+                // card2 复刻（部署状态主行 + 补丁更新按钮，#34 方案 B；Steam 状态已
+                // 移至底部状态栏）。
                 card_frame().show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     card_title(ui, s.card2_title);
                     ui.add_space(10.0);
-                    status_line(ui, s.status_not_deployed, theme::WEAK);
+                    ui.label(
+                        egui::RichText::new(s.status_not_deployed)
+                            .size(16.0)
+                            .strong()
+                            .color(theme::WEAK),
+                    );
+                    ui.add_space(10.0);
+                    let _ = styled_button(
+                        ui,
+                        s.settings_btn_patch_update_check,
+                        ButtonStyle::Neutral,
+                        egui::vec2(150.0, 32.0),
+                        true,
+                    );
                 });
                 ui.add_space(10.0);
                 // 健康警示：正常态（Ready）不渲染，跳过。
@@ -2719,7 +2863,7 @@ mod tests {
                     let spacing = ui.spacing().item_spacing.x;
                     let size = egui::vec2(
                         row_button_width(ui.available_width(), gap, spacing, 2),
-                        36.0,
+                        44.0,
                     );
                     let _ =
                         styled_button(ui, s.btn_apply_and_launch, ButtonStyle::Deploy, size, true);
@@ -2728,6 +2872,10 @@ mod tests {
                         styled_button(ui, s.btn_launch_normal, ButtonStyle::Neutral, size, true);
                 });
                 ui.add_space(10.0);
+                // status_bar 复刻（Steam 未运行项；其余项空）。
+                ui.horizontal(|ui| {
+                    status_item(ui, s.status_steam_stopped, theme::WEAK);
+                });
                 h = ui.cursor().top();
             });
         });
@@ -2772,6 +2920,14 @@ mod tests {
                     let _ = styled_button(
                         ui,
                         s.settings_tab_steam,
+                        ButtonStyle::Neutral,
+                        egui::vec2(88.0, 28.0),
+                        true,
+                    );
+                    ui.add_space(4.0);
+                    let _ = styled_button(
+                        ui,
+                        s.settings_tab_about,
                         ButtonStyle::Neutral,
                         egui::vec2(88.0, 28.0),
                         true,
@@ -2847,6 +3003,62 @@ mod tests {
                 "content_h={content_h}: 骨架+滚动区超出自适应内高 {inner_h}"
             );
         }
+    }
+
+    /// #34 修订：三页签（通用/关于/Steam）不溢出对话框宽度（双语）。
+    /// 断言：第三个页签右缘不超内容右界。
+    #[test]
+    fn settings_tab_row_fits_dialog_width() {
+        let ctx = egui::Context::default();
+        install_cjk_font(&ctx);
+        install_theme(&ctx);
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(640.0, 520.0),
+            )),
+            ..Default::default()
+        };
+        let mut violations = Vec::new();
+        let mut full = ctx.run_ui(raw, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                ui.set_width(SETTINGS_DIALOG_WIDTH);
+                for lang in [Lang::Zh, Lang::En] {
+                    let s = Strings::new(lang);
+                    ui.horizontal(|ui| {
+                        let avail_right = ui.available_width();
+                        let mut last_tab_right = 0.0f32;
+                        for label in [
+                            s.settings_tab_general,
+                            s.settings_tab_steam,
+                            s.settings_tab_about,
+                        ] {
+                            let r = styled_button(
+                                ui,
+                                label,
+                                ButtonStyle::Neutral,
+                                egui::vec2(88.0, 28.0),
+                                true,
+                            );
+                            last_tab_right = r.rect.right();
+                            ui.add_space(4.0);
+                        }
+                        if last_tab_right > avail_right + 0.5 {
+                            violations.push(format!(
+                                "{lang:?} 页签右缘 {last_tab_right} 超过可用宽 {avail_right}"
+                            ));
+                        }
+                        // 页签行最右：GitHub 入口已随 #34 修订移入关于页签，此行不再放。
+                    });
+                }
+            });
+        });
+        full.textures_delta.clear();
+        assert!(
+            violations.is_empty(),
+            "页签行在对话框宽度 {SETTINGS_DIALOG_WIDTH} 下溢出:\n{}",
+            violations.join("\n")
+        );
     }
 
     /// 滚动区公式：低窗口保下限 200、高窗口封顶 420、中段随窗口线性吸收余量。

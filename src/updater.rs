@@ -16,7 +16,7 @@ const RELEASES_URL: &str =
 /// 本工具仓库（App 更新检查）最新发布 API：只查询并跳转浏览器，不自更新。
 const APP_RELEASES_URL: &str =
     "https://api.github.com/repos/hu3rror/opensteamtool-gui-rs/releases/latest";
-/// 项目主页（Settings — General 的 About 区 GitHub 链接）。
+/// 项目主页（Settings — 更新页签 GitHub 入口与设置页签行右侧链接）。
 pub const APP_REPO_PAGE: &str = "https://github.com/hu3rror/opensteamtool-gui-rs";
 /// 发布页（App 更新「打开下载页」目标）。
 pub const APP_RELEASES_PAGE: &str = "https://github.com/hu3rror/opensteamtool-gui-rs/releases";
@@ -39,7 +39,7 @@ pub struct OnlineInfo {
     pub zip_url: String,
 }
 
-/// App 更新检查结果（Settings — General 的 About 区使用；不下载、不自替换）。
+/// App 更新检查结果（Settings — 更新页签使用；不下载、不自替换）。
 #[derive(Clone, Debug)]
 pub struct AppUpdateCheckResult {
     /// 线上最新版本（`tag_name` 去 `v` 前缀）。
