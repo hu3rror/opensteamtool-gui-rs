@@ -36,6 +36,14 @@ Delete the comment in your head and re-read the code. If a reader would still wr
 - `//!` at the top of a module states what the module is for and what its public interface is; `///` on an item states its contract. They are written for the caller, not as notes to the implementer.
 - Do not duplicate a type's own doc onto its `impl` blocks, accessors, or self-explanatory fields.
 
+### Deleting or rewriting comments
+
+- Edit comments whole-sentence. Delete a doc block entirely, or keep only lines that form complete, self-contained sentences. Never leave orphaned continuation lines — a leftover that starts with `或` / `（` / `、` or that lost its subject (`/// 是否为空都不能落「已是最新」` without the `文件缺失时无论线上版本` lead-in). After deleting, re-read every kept line and fold fragments back into complete sentences.
+- Rewrite the whole sentence when deleting its premise would change its meaning. `向导步骤 2 拒绝空路径，设置页允许空，启动回退视为未设置` must not shrink to `向导步骤 2 拒绝空路径…共用同一口径` — the surviving text would now contradict the code (all subjects read as rejecting empty paths).
+- Never delete load-bearing contracts: `SAFETY:` notes on `unsafe` blocks, decision tables/matrices, `panic`/error/idempotency semantics, compatibility and fallback constraints (`空串 = 未设置`, `缺省启用`), and ADR/issue/CONTEXT pointers.
+- When trimming history (`此前…`, `#NN 回归修复` labels), drop the narration but keep the constraint and the pointer it carried.
+- A comment-cleanup diff touches comments only: no code edits and no reformatting of neighboring code.
+
 ### Language
 
 - Comments and doc comments in this repo are written in Chinese — the established repo convention, which takes precedence over the English-comments default in the global `AGENTS.md`. Identifiers, CLI output, and commit messages stay in English.

@@ -24,7 +24,6 @@ pub fn detect_system_lang() -> Lang {
     Lang::En
 }
 
-/// 全部界面文案，按语言取值。
 #[derive(Clone, Copy)]
 pub struct Strings {
     pub app_title: &'static str,
@@ -42,10 +41,8 @@ pub struct Strings {
     pub btn_launch: &'static str,
     pub btn_exit_and_uninstall: &'static str,
     pub btn_uninstall_and_restart: &'static str,
-    /// 「重启 Steam」（已应用且 Steam 运行中时显示；纯 Steam 操作，无补丁）。
     pub btn_restart_steam: &'static str,
-    /// 补丁未下载引导（操作区下方弱化提示；未部署且 dlls/ 缺文件时显示）。
-    /// 指向操作区上方的「检查补丁更新」按钮（先检查 → 再下载并解压），不自动联网检查。
+    /// 补丁未下载引导：指向操作区上方的「检查补丁更新」按钮（先检查 → 再下载并解压），不自动联网检查。
     pub hint_download_patch: &'static str,
     pub main_warning_pending: &'static str,
     pub main_warning_missing: &'static str,
@@ -80,9 +77,7 @@ pub struct Strings {
     pub busy_killing: &'static str,
     pub tray_show: &'static str,
     pub tray_quit: &'static str,
-    /// Steam 未运行时「卸载补丁」按钮（无需先退出 Steam）。
     pub btn_uninstall: &'static str,
-    /// 托盘菜单「最小化时自动隐藏到托盘」勾选项。
     pub tray_minimize: &'static str,
     pub tray_restart: &'static str,
     pub settings_title: &'static str,
@@ -108,7 +103,6 @@ pub struct Strings {
     pub compat_tip_missing: &'static str,
     pub compat_tip_network: &'static str,
     pub compat_row_dll: &'static str,
-    /// 设置对话框页签：通用 / 关于 / Steam。
     pub settings_tab_general: &'static str,
     pub settings_tab_about: &'static str,
     pub settings_tab_steam: &'static str,
@@ -119,13 +113,11 @@ pub struct Strings {
     pub settings_tray_title: &'static str,
     /// Settings — 通用 页签最小化隐身勾选项（#37；与托盘菜单勾选同一事实源）。
     pub settings_tray_minimize: &'static str,
-    /// 关于页签软件版本行前缀（实际版本号由 crate 版本拼接）。
     pub settings_version_label: &'static str,
     pub settings_app_update_title: &'static str,
     pub settings_btn_app_update_check: &'static str,
     pub settings_app_update_checking: &'static str,
     pub settings_app_update_up_to_date: &'static str,
-    /// App 更新检查「发现新版本」前缀（后接版本号，如 v0.6.3）。
     pub settings_app_update_new_version: &'static str,
     pub settings_btn_open_download_page: &'static str,
     pub settings_btn_patch_update_check: &'static str,
@@ -142,7 +134,6 @@ pub struct Strings {
     pub settings_github_label: &'static str,
     pub settings_github_title: &'static str,
     pub wizard_title: &'static str,
-    /// 步骤指示（`{n}` 由 UI 替换为 1/2/3）。
     pub wizard_step_of: &'static str,
     pub wizard_language_prompt: &'static str,
     pub wizard_language_auto: &'static str,
@@ -151,7 +142,6 @@ pub struct Strings {
     pub wizard_path_prompt: &'static str,
     pub wizard_path_invalid: &'static str,
     pub wizard_btn_next: &'static str,
-    /// 步骤 3 未开始时的提示（下载需用户显式点击，不自动）。
     pub wizard_download_prompt: &'static str,
     pub wizard_download_ready: &'static str,
     pub wizard_download_running: &'static str,
@@ -163,7 +153,6 @@ pub struct Strings {
 }
 
 impl Strings {
-    /// 在线更新错误 → 当前语言提示文案。
     pub fn update_error(&self, e: &UpdateError) -> String {
         match e {
             UpdateError::Network(detail) => format!("{}: {detail}", self.err_network),
@@ -174,7 +163,6 @@ impl Strings {
         }
     }
 
-    /// 「操作」执行阶段错误 → 当前语言提示文案（按失败步骤取前缀）。
     pub fn workflow_error_text(&self, e: &WorkflowError) -> String {
         let prefix = match e.op {
             Op::CloseSteam => self.err_kill_steam,
@@ -185,7 +173,6 @@ impl Strings {
         format!("{}: {}", prefix, e.message)
     }
 
-    /// 前置校验错误 → 当前语言提示文案。
     pub fn precheck_text(&self, precheck: &Precheck) -> String {
         match precheck {
             Precheck::InvalidSteamDir => self.err_no_steam_dir.to_string(),
@@ -194,14 +181,12 @@ impl Strings {
         }
     }
 
-    /// 兼容性体检错误 → 当前语言提示文案（与 UpdateError 同等待遇；Display 只留给日志）。
     pub fn compat_error_text(&self, e: &CompatError) -> String {
         match e {
             CompatError::Network(detail) => format!("{}: {detail}", self.err_network),
             CompatError::Io(detail) => format!("{}: {detail}", self.err_compat_io),
         }
     }
-    /// 「操作」成功后 → 当前语言提示文案。
     pub fn success_text(&self, action: Action) -> &'static str {
         match action {
             Action::ApplyAndLaunch => self.ok_deployed,
@@ -211,7 +196,6 @@ impl Strings {
         }
     }
 
-    /// 忙碌态阶段 → 当前语言提示文案。
     pub fn busy_label(&self, kind: BusyKind) -> &'static str {
         match kind {
             BusyKind::Deploying => self.busy_deploying,
@@ -223,8 +207,7 @@ impl Strings {
         }
     }
 
-    /// 语言选项表（跟随系统 / 简体中文 / English）：设置对话框通用页签与向导步骤 1
-    /// 的唯一下拉数据源——新增语言只在此追加一行（#34）。
+    /// 语言选项表：设置通用页签与向导步骤 1 共用的唯一下拉数据源——新增语言只在此追加一行（#34）。
     pub fn language_options(&self) -> [(Language, &'static str); 3] {
         [
             (Language::Auto, self.wizard_language_auto),
@@ -485,8 +468,6 @@ impl Strings {
 mod tests {
     use super::*;
 
-    /// 语言选项表（#34，设置通用页签与向导步骤 1 共用）：覆盖全部三个偏好各一次；
-    /// 简体中文标签定名（「中文」→「简体中文」）；双语结构一致。
     #[test]
     fn language_options_cover_all_variants() {
         for lang in [Lang::Zh, Lang::En] {
@@ -505,7 +486,6 @@ mod tests {
         }
     }
 
-    /// 补丁未下载引导指向主页面补丁更新按钮（#34 修订后入口在主页面）。
     #[test]
     fn patch_hint_points_to_main_button() {
         let zh = Strings::new(Lang::Zh);
@@ -516,7 +496,6 @@ mod tests {
         assert!(!en.hint_download_patch.contains("General"));
     }
 
-    /// CompatError → 双语文案：Network 复用 err_network、Io 用 err_compat_io（与 UpdateError 同等待遇）。
     #[test]
     fn compat_error_text_both_langs() {
         for lang in [Lang::Zh, Lang::En] {
@@ -619,22 +598,17 @@ mod tests {
         }
     }
 
-    /// #36：卸载类按钮符号 ⏏（启动 ▶ / 重启 ↻）；卡片标题「部署状态 / DEPLOY
-    /// STATUS」；应用成功反馈「补丁已应用 / Patch applied」。覆盖携带状态词的 UI
-    /// 字段，确保「◀」「已部署」与 "deployed" 不作为任何状态词残留（zh + en）。
     #[test]
     fn ui_copy_follows_v36_terminology() {
         let zh = Strings::new(Lang::Zh);
         let en = Strings::new(Lang::En);
         for (lang, s) in [(Lang::Zh, &zh), (Lang::En, &en)] {
-            // 符号按动作定型：卸载类 ⏏；启动 ▶；重启 ↻。
             assert!(s.btn_exit_and_uninstall.starts_with('⏏'));
             assert!(s.btn_uninstall_and_restart.starts_with('⏏'));
             assert!(s.btn_apply_and_launch.starts_with('▶'));
             assert!(s.btn_launch.starts_with('▶'));
             assert!(s.btn_launch_normal.starts_with('▶'));
             assert!(s.btn_restart_steam.starts_with('↻'));
-            // 状态词残留检查：可能携带「部署/应用」状态词的字段全量过一遍。
             let statusish = [
                 s.card2_title,
                 s.status_invalid,
@@ -656,7 +630,6 @@ mod tests {
                 );
             }
         }
-        // 卡片标题与成功反馈的精确文案（#36 定稿）。
         assert_eq!(zh.card2_title, "部署状态");
         assert_eq!(en.card2_title, "DEPLOY STATUS");
         assert_eq!(zh.ok_deployed, "补丁已应用");

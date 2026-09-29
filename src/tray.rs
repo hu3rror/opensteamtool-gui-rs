@@ -1,16 +1,11 @@
-//! Windows 系统托盘：图标、菜单与事件（左键单击/双击切换显隐，右键菜单显示/退出）。
+//! Windows 系统托盘：图标、菜单与事件。
 
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder, TrayIconEvent};
-/// 托盘动作，UI 线程在 `App::ui` 中消费。
 pub enum TrayAction {
-    /// 左键单击/双击：切换窗口显隐。
     ToggleVisible,
-    /// 菜单「显示」。
     Show,
-    /// 菜单「退出」。
     Quit,
-    /// 勾选/取消「最小化时自动隐藏到托盘」。
     ToggleMinimizeToTray,
     /// 菜单「重启 Steam」（Steam 未运行时也可点击：等价「直接启动」，见 `set_restart_enabled`）。
     RestartSteam,
@@ -21,9 +16,7 @@ pub struct Tray {
     _menu: Menu,
     show_item: MenuItem,
     quit_item: MenuItem,
-    /// 「最小化时自动隐藏到托盘」勾选项。
     minimize_item: CheckMenuItem,
-    /// 菜单「重启 Steam」（Steam 路径无效时置灰，见 `set_restart_enabled`）。
     restart_item: MenuItem,
 }
 
@@ -71,17 +64,14 @@ impl Tray {
         self.restart_item.set_enabled(enabled);
     }
 
-    /// 「最小化时自动隐藏到托盘」是否勾选。
     pub fn is_minimize_to_tray(&self) -> bool {
         self.minimize_item.is_checked()
     }
 
-    /// 程序化设置「最小化时自动隐藏到托盘」勾选态（设置对话框勾选时同步到托盘菜单）。
     pub fn set_minimize_to_tray(&self, checked: bool) {
         self.minimize_item.set_checked(checked);
     }
 
-    /// 拉取一个待处理的托盘动作（非阻塞）。无事件返回 None。
     pub fn poll(&self) -> Option<TrayAction> {
         while let Ok(event) = TrayIconEvent::receiver().try_recv() {
             match event {
@@ -116,7 +106,6 @@ impl Tray {
     }
 }
 
-/// 从 `app.ico` 加载托盘图标（缩放到 32×32，Windows 托盘标准尺寸）。
 pub fn load_icon() -> Option<Icon> {
     let bytes = include_bytes!("../app.ico");
     let img = image::load_from_memory_with_format(bytes, image::ImageFormat::Ico).ok()?;

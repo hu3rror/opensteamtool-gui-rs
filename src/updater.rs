@@ -10,46 +10,35 @@ use zip::ZipArchive;
 
 use crate::dll::{TARGET_DLLS, VERSION_FILE};
 
-/// GitHub 线上最新发布 API。
 const RELEASES_URL: &str =
     "https://api.github.com/repos/OpenSteam001/OpenSteamTool/releases/latest";
-/// 本工具仓库（App 更新检查）最新发布 API：只查询并跳转浏览器，不自更新。
 const APP_RELEASES_URL: &str =
     "https://api.github.com/repos/hu3rror/opensteamtool-gui-rs/releases/latest";
-/// 项目主页（Settings — 关于页签 GitHub 链接按钮，mark 在按钮内）。
 pub const APP_REPO_PAGE: &str = "https://github.com/hu3rror/opensteamtool-gui-rs";
-/// 发布页（App 更新「打开下载页」目标）。
 pub const APP_RELEASES_PAGE: &str = "https://github.com/hu3rror/opensteamtool-gui-rs/releases";
-/// 浏览器标识 User-Agent（GitHub API 要求）。
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36 OpenSteamTool-Manager";
 
-/// 检查更新请求超时（连接 10s，总体 30s——API 响应小，快超快速失败）。
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const GLOBAL_TIMEOUT: Duration = Duration::from_secs(30);
-/// 下载 zip 超时（连接 10s 快速失败；总时长放宽到 10min，
-/// 因 GitHub 资产经 302 重定向到 CDN，慢网络下 body 阶段可能超过 30s。
+/// 下载 zip 超时：连接 10s 快速失败；总时长 10min——GitHub 资产经 302 重定向到 CDN，慢网络下 body 阶段可能超过 30s。
 const DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const DOWNLOAD_GLOBAL_TIMEOUT: Duration = Duration::from_secs(600);
 const DOWNLOAD_BODY_TIMEOUT: Duration = Duration::from_secs(600);
 
-/// 线上更新信息。
 #[derive(Clone, Debug)]
 pub struct OnlineInfo {
     pub version: String,
     pub zip_url: String,
 }
 
-/// App 更新检查结果（Settings — 关于页签使用；不下载、不自替换）。
 #[derive(Clone, Debug)]
 pub struct AppUpdateCheckResult {
-    /// 线上最新版本（`tag_name` 去 `v` 前缀）。
     pub latest_version: String,
-    /// 是否新于当前程序版本（比较在模块内完成）。
     pub newer: bool,
 }
 
 /// 数值语义的版本比较（点分数字段；缺段按 0 补）：`latest` 是否严格新于 `current`。
-/// App 更新检查专用——补丁版本比较不在 UI 出现，仍是「本地版本 vs 线上版本」字符串相等。
+/// App 更新检查专用——补丁版本比较不在 UI 出现（仍是字符串相等）。
 pub(crate) fn is_newer_version(latest: &str, current: &str) -> bool {
     let latest: Vec<u64> = latest.split('.').map(|s| s.parse().unwrap_or(0)).collect();
     let current: Vec<u64> = current.split('.').map(|s| s.parse().unwrap_or(0)).collect();
@@ -63,8 +52,6 @@ pub(crate) fn is_newer_version(latest: &str, current: &str) -> bool {
     false
 }
 
-/// 从 GitHub `releases/latest` JSON 提取本工具最新版本并判定是否新于 `current`。
-/// 纯函数（网络与序列化在 `check_app_update` 承担；版本比较单独可测）。
 fn app_release_from_json(json: &Value, current: &str) -> Result<AppUpdateCheckResult, UpdateError> {
     let tag = json
         .get("tag_name")
@@ -77,8 +64,7 @@ fn app_release_from_json(json: &Value, current: &str) -> Result<AppUpdateCheckRe
     })
 }
 
-/// 查询本工具仓库（`hu3rror/opensteamtool-gui-rs`）最新发布，与当前程序版本
-/// （crate 版本）比较。只检查，不做任何下载或自替换（明确非目标，见 #26）。
+/// 查询本工具仓库最新发布并与当前程序版本（crate 版本）比较；只检查，不下载、不自替换（明确非目标，#26）。
 pub fn check_app_update() -> Result<AppUpdateCheckResult, UpdateError> {
     let resp = agent()
         .get(APP_RELEASES_URL)
@@ -90,7 +76,6 @@ pub fn check_app_update() -> Result<AppUpdateCheckResult, UpdateError> {
     app_release_from_json(&json, env!("CARGO_PKG_VERSION"))
 }
 
-/// 在默认浏览器打开 URL（Windows：`cmd /C start`；spawn 失败仅记日志，不中断 UI）。
 pub fn open_in_browser(url: &str) {
     #[cfg(windows)]
     let result = std::process::Command::new("cmd")
@@ -121,18 +106,12 @@ pub(crate) fn download_agent() -> Agent {
         .into()
 }
 
-/// 更新相关错误，UI 层据此映射双语文案。
 #[derive(Clone, Debug, PartialEq)]
 pub enum UpdateError {
-    /// 网络请求失败（HTTP 非成功/传输错误）。
     Network(String),
-    /// 发布包中没有 .zip 资产。
     NoZip,
-    /// 解析发布信息失败。
     Parse(String),
-    /// 压缩包内没有目标 DLL。
     NoTargetDll,
-    /// 本地文件操作失败。
     Io(String),
 }
 
@@ -158,7 +137,6 @@ fn api_response_to_json(resp: ureq::http::Response<ureq::Body>) -> Result<Value,
         .map_err(|e| UpdateError::Parse(format!("JSON: {e}")))
 }
 
-/// 查询线上最新版本：解析 `tag_name`（去 `v` 前缀），在 assets 中找第一个 `.zip`。
 pub fn check_update() -> Result<OnlineInfo, UpdateError> {
     let resp = agent()
         .get(RELEASES_URL)
@@ -194,7 +172,6 @@ pub fn check_update() -> Result<OnlineInfo, UpdateError> {
     })
 }
 
-/// 下载 zip 到内存，仅提取文件名属于目标 DLL 集合的成员写入 `dlls/`，成功后写 `version.txt`。
 pub fn download_and_extract(info: &OnlineInfo, dll_dir: &Path) -> Result<(), UpdateError> {
     let mut resp = download_agent()
         .get(&info.zip_url)
@@ -315,37 +292,27 @@ mod tests {
         assert!(zip_url.is_none());
     }
 
-    /// App 更新版本比较：数值语义（非字典序）、缺段按 0 补、等版本非更新。
     #[test]
     fn is_newer_version_table() {
-        // 等版本 → 非更新。
         assert!(!is_newer_version("0.2.4", "0.2.4"));
-        // 典型新版本 → 更新。
         assert!(is_newer_version("0.6.3", "0.2.4"));
         assert!(is_newer_version("1.0.0", "0.9.9"));
-        // 数值比较而非字典序（"0.10" 大于 "0.9"）。
         assert!(is_newer_version("0.10.0", "0.9.0"));
-        // 旧版本 → 非更新。
         assert!(!is_newer_version("0.1.0", "0.2.0"));
-        // 段数不同：多出的非零段算更新；多出的零段不算。
         assert!(is_newer_version("1.2.1", "1.2"));
         assert!(!is_newer_version("1.2", "1.2.1"));
         assert!(!is_newer_version("1.2.0", "1.2"));
-        // 非数字段兜底按 0 处理（不 panic）。
         assert!(!is_newer_version("beta", "0.1.0"));
     }
 
-    /// App 更新 JSON 解析：提取 `tag_name`（去 v）并对比注入的当前版本；缺字段类型化错误。
     #[test]
     fn app_release_from_json_extracts_latest() {
         let json: Value = serde_json::from_str(r#"{"tag_name":"v0.6.3","assets":[]}"#).unwrap();
         let r = app_release_from_json(&json, "0.2.4").unwrap();
         assert_eq!(r.latest_version, "0.6.3");
         assert!(r.newer, "0.6.3 应新于 0.2.4");
-        // 当前版本已是最新 → 非更新。
         let r = app_release_from_json(&json, "0.6.3").unwrap();
         assert!(!r.newer);
-        // 缺 tag_name → 类型化 Parse 错误。
         let empty: Value = serde_json::from_str(r#"{}"#).unwrap();
         assert!(matches!(
             app_release_from_json(&empty, "0.2.4"),
@@ -358,7 +325,6 @@ mod tests {
         use std::io::Write;
         use zip::write::SimpleFileOptions;
 
-        // 构造一个含 3 个目标 DLL + 1 个无关文件的 zip。
         let mut buf = Vec::new();
         {
             let mut zw = zip::ZipWriter::new(Cursor::new(&mut buf));
@@ -412,7 +378,6 @@ mod tests {
             zw.finish().unwrap();
         }
 
-        // 用户场景：exe 旁边没有 dlls/ 目录（便携版未解压完整/目录被删）。
         let dir = std::env::temp_dir().join(format!("ost_missing_dlls_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         assert!(!dir.exists(), "precondition: dir must not exist");
@@ -448,8 +413,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// 端到端：真实请求 GitHub 检查/下载最新发布并解压（需网络）。
-    /// 手动运行：cargo test --release -- --ignored
     #[test]
     #[ignore = "requires network"]
     fn e2e_check_and_download() {

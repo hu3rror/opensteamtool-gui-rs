@@ -1,8 +1,4 @@
-//! 「更新流程」模块：在线更新「检查更新」结果的唯一事实源与派生。
-//!
-//! 深模块——小接口（`check_started` / `check_done` / `derived`），大实现
-//! （检查结果状态 + 「本地版本 vs 线上版本」单一派生）。纯 std，无 IO、
-//! 无线程、无 egui、无 i18n 依赖；文案映射仍由 i18n/ui 承担。
+//! 在线更新「检查更新」结果的唯一事实源与派生。
 
 use crate::updater::{OnlineInfo, UpdateError};
 
@@ -14,7 +10,6 @@ pub enum FlowState {
     Checked(Result<OnlineInfo, UpdateError>),
 }
 
-/// 通知栏检查结果文案分类（补丁更新检查）。
 /// **不携带版本号**（#30/#32）：版本比较只在流程内部完成，版本永不渲染。
 #[derive(Clone, Debug)]
 pub enum UpdateNotice<'a> {
@@ -23,15 +18,13 @@ pub enum UpdateNotice<'a> {
     CheckFailed(&'a UpdateError),
 }
 
-/// 单一派生产物：一次 `derived(local)` 输出通知文案 / 下载可用性两份消费。
-/// （主页面版本行已随 #32 移除；`line` 分类随之删除，版本永不渲染。）
+/// 一次 `derived(local)` 输出通知文案 / 下载可用性两份消费（版本永不渲染）。
 #[derive(Clone, Debug)]
 pub struct UpdateDerived<'a> {
     pub notice: Option<UpdateNotice<'a>>,
     pub download: Option<&'a OnlineInfo>,
 }
 
-/// 检查更新流程：持有唯一检查结果，`derived` 派生全部下游消费。
 pub struct UpdateFlow {
     state: FlowState,
 }
@@ -53,7 +46,6 @@ impl UpdateFlow {
         self.state = FlowState::Checked(result);
     }
 
-    /// 派生：从状态 + 当前本地版本计算通知/下载。
     pub fn derived(&self, local_version: Option<&str>) -> UpdateDerived<'_> {
         let local = local_version.unwrap_or("");
         match &self.state {
@@ -107,7 +99,6 @@ mod tests {
         }
     }
 
-    /// Idle（从未检查）：无通知、无下载。
     #[test]
     fn derived_idle_is_unknown() {
         let flow = UpdateFlow::new();
@@ -116,7 +107,6 @@ mod tests {
         assert!(d.download.is_none());
     }
 
-    /// check_started：Idle → Checking；derived 产出无通知、无下载。
     #[test]
     fn check_started_enters_checking() {
         let mut flow = UpdateFlow::new();
@@ -126,7 +116,6 @@ mod tests {
         assert!(d.download.is_none());
     }
 
-    /// check_done(Ok) 且本地与线上同：通知「已是最新」、无下载。
     #[test]
     fn derived_up_to_date_when_local_matches() {
         let mut flow = UpdateFlow::new();
@@ -136,7 +125,6 @@ mod tests {
         assert!(d.download.is_none());
     }
 
-    /// check_done(Ok) 且本地与线上异：通知「发现可更新版本」、下载携带数据。
     #[test]
     fn derived_new_version_when_local_differs() {
         let mut flow = UpdateFlow::new();
@@ -148,7 +136,6 @@ mod tests {
         assert_eq!(info.zip_url, "https://x/z.zip");
     }
 
-    /// 本地无版本记录（None → 空串比较）：按「发现可更新版本」处理且可下载。
     #[test]
     fn derived_new_version_when_local_missing() {
         let mut flow = UpdateFlow::new();
@@ -158,9 +145,6 @@ mod tests {
         assert!(d.download.is_some());
     }
 
-    /// 文件缺失 + 空线上版本（异常上游 tag + 本地文件未下载）：仍是修复场景——
-    /// 下载按钮必须出现（下载用 `zip_url` 不依赖 version；#26 US 20「本地补丁文件缺失
-    /// 即可下载」的边界：空 tag 不得吞掉修复入口，也不得落「已是最新」误导）。
     #[test]
     fn derived_files_missing_with_empty_online_version_still_downloadable() {
         let mut flow = UpdateFlow::new();
@@ -176,7 +160,6 @@ mod tests {
         );
     }
 
-    /// 线上版本为空串（异常上游）：通知按「发现可更新版本」但下载按钮不出现（现状守卫保留）。
     #[test]
     fn derived_empty_online_version_hides_download() {
         let mut flow = UpdateFlow::new();
@@ -186,7 +169,6 @@ mod tests {
         assert!(d.download.is_none(), "空线上版本不应出现下载按钮");
     }
 
-    /// check_done(Err)：通知为检查失败分类、无下载（UpdateError 无 PartialEq，分支匹配）。
     #[test]
     fn derived_check_failed_on_error() {
         let mut flow = UpdateFlow::new();
@@ -199,7 +181,6 @@ mod tests {
         assert!(d.download.is_none());
     }
 
-    /// 下载成功重派生：local 更新为线上版本后自然落「已是最新」、下载消失（决策 5 显式化）。
     #[test]
     fn derived_after_local_update_becomes_up_to_date() {
         let mut flow = UpdateFlow::new();
@@ -210,7 +191,6 @@ mod tests {
         assert!(d.download.is_none());
     }
 
-    /// 重检覆盖：Checked 后再次 check_started + check_done 新结果，derived 反映新结论。
     #[test]
     fn recheck_overwrites_previous_result() {
         let mut flow = UpdateFlow::new();

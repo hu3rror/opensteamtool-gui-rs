@@ -1,7 +1,4 @@
-//! 「操作」模块：组合动作的判定表与顺序执行。
-//!
-//! 深模块——小接口（`plan` / `execute`），大实现（动作判定表、前置校验、
-//! 分阶段执行、首错即停）。不依赖 i18n 与 UI；文案 helpers 由 ui.rs 提供。
+//! 「操作」模块：组合动作的判定表与顺序执行（`plan` / `execute`）。
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -12,35 +9,25 @@ use crate::steam;
 use crate::steam_state::SteamState;
 
 /// 用户从按钮触发的组合操作（见 CONTEXT.md「操作（Action）」）。
-/// 可混含补丁操作（部署/卸载）与 Steam 启动/退出。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Action {
-    /// 应用补丁并启动 Steam（部署 + 启动）。
     ApplyAndLaunch,
-    /// 启动 Steam（不含补丁操作；已部署补丁时即带补丁启动，UI 写「启动 Steam」
-    /// 而非「正常启动」——见 ADR-0011）。
+    /// 启动 Steam（不含补丁操作；已部署补丁时即带补丁启动，UI 写「启动 Steam」而非「正常启动」——见 ADR-0011）。
     Launch,
-    /// 退出 Steam 并卸载补丁。
     ExitAndUninstall,
-    /// 卸载补丁并重启 Steam。
     UninstallAndRestart,
-    /// 重启 Steam（关闭进程组后重新启动，不含补丁操作）。
     Restart,
 }
 
 impl Action {
     /// 点击时若 Steam 在运行**需要先弹「关闭确认」框**的操作（确认流判定）。
     /// #36 修订：只有两个卸载类复合动作（退出并卸载 / 卸载并重启）需要确认；
-    /// 「应用补丁并启动」意图明确（补丁应用本身就是目的），Steam 运行中直接
-    /// 放行走「优雅退出 → 部署 → 拉起」（见 ui.rs `request_action` 的
-    /// `kill_first` 派生）；`Restart` 恒含关闭步骤但不弹确认框（按钮语义即
-    /// 「关闭并重启」，再确认是冗余打扰）。
+    /// 「应用补丁并启动」Steam 运行中直接放行（`kill_first` 派生）；`Restart` 恒含关闭步骤但不弹确认框（按钮语义即「关闭并重启」，再确认是冗余打扰）。
     pub fn asks_to_close_steam(self) -> bool {
         matches!(self, Action::ExitAndUninstall | Action::UninstallAndRestart)
     }
 }
 
-/// 一条执行步骤。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Op {
     CloseSteam,
@@ -50,7 +37,6 @@ pub enum Op {
 }
 
 impl Op {
-    /// 执行本步骤期间的阶段文案类型。
     pub fn phase(self) -> BusyKind {
         match self {
             Op::CloseSteam => BusyKind::ClosingSteam,
@@ -61,7 +47,6 @@ impl Op {
     }
 }
 
-/// 执行所需路径上下文。
 #[derive(Clone, Debug)]
 pub struct WorkflowCtx {
     pub dll_dir: PathBuf,
@@ -69,14 +54,10 @@ pub struct WorkflowCtx {
     pub steam: Arc<SteamState>,
 }
 
-/// 前置校验失败（plan 阶段判定，未进入忙碌状态）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Precheck {
-    /// Steam 路径为空或不是目录（路径无效）。
     InvalidSteamDir,
-    /// `dlls/` 缺少目标 DLL（仅部署类操作）。
     MissingTargetDlls,
-    /// Steam 目录缺少 `steam.exe`。
     MissingSteamExe,
 }
 
@@ -87,8 +68,6 @@ pub struct WorkflowError {
     pub message: String,
 }
 
-/// 动作判定表 + 前置校验。返回有序执行步骤；前置不满足返回 `Precheck`。
-///
 /// `kill_first` 表示先关闭 Steam：确认弹窗同意后为 true，或「应用补丁并启动」在
 /// Steam 运行中直接放行时同样为 true（#36：ApplyAndLaunch 不再弹确认框）。
 pub fn plan(
@@ -97,7 +76,6 @@ pub fn plan(
     steam_dir: &Path,
     dll_dir: &Path,
 ) -> Result<Vec<Op>, Precheck> {
-    // 前置校验（保序：目录 → DLL → steam.exe）。
     if !steam_dir.is_dir() {
         return Err(Precheck::InvalidSteamDir);
     }
@@ -162,7 +140,6 @@ mod tests {
     use super::*;
     use crate::dll::TARGET_DLLS;
 
-    /// 建临时目录并写入三个目标 DLL（返回目录）。
     fn tmp_dlls(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("ost_wf_{}_{}", name, std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -172,7 +149,6 @@ mod tests {
         dir
     }
 
-    /// 建临时 Steam 目录（可选写入 steam.exe）。
     fn tmp_steam(name: &str, with_exe: bool) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("ost_wf_{}_{}", name, std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -182,7 +158,6 @@ mod tests {
         dir
     }
 
-    // 1. plan 判定表：4 action × kill_first ∈ {false, true} → 期望 ops 序列。
     #[test]
     fn plan_table() {
         let dlls = tmp_dlls("plan_dlls");
@@ -216,7 +191,6 @@ mod tests {
             plan(Action::UninstallAndRestart, true, &steam, &dlls).unwrap(),
             vec![Op::CloseSteam, Op::Uninstall, Op::Launch]
         );
-        // 重启：恒含关闭+启动，不经确认（kill_first 组合下也不重复关闭）。
         assert_eq!(
             plan(Action::Restart, false, &steam, &dlls).unwrap(),
             vec![Op::CloseSteam, Op::Launch]
@@ -230,16 +204,13 @@ mod tests {
         std::fs::remove_dir_all(&steam).ok();
     }
 
-    // 2. plan 前置校验：三种 Precheck 各一例，且按序（目录 → DLL → steam.exe）。
     #[test]
     fn plan_prechecks() {
-        // 无效目录 → InvalidSteamDir（空路径 is_dir 恒 false）。
         assert_eq!(
             plan(Action::Launch, false, Path::new(""), Path::new("")),
             Err(Precheck::InvalidSteamDir)
         );
 
-        // 部署类缺 DLL → MissingTargetDlls（先于 steam.exe 校验）。
         let empty_dlls = tmp_steam("plan_empty_dlls", false);
         let steam = tmp_steam("plan_steam_nodlls", false);
         assert_eq!(
@@ -249,7 +220,6 @@ mod tests {
         std::fs::remove_dir_all(&empty_dlls).ok();
         std::fs::remove_dir_all(&steam).ok();
 
-        // 需启动类缺 steam.exe → MissingSteamExe。
         let dlls = tmp_dlls("plan_exe_dlls");
         let steam_no_exe = tmp_steam("plan_steam_noexe", false);
         assert_eq!(
@@ -268,7 +238,6 @@ mod tests {
         std::fs::remove_dir_all(&steam_no_exe).ok();
     }
 
-    // 3. execute 真实接口：Deploy 把三个 DLL 复制进 Steam 目录，并创建 config/lua。
     #[test]
     fn execute_deploys_to_steam_dir() {
         let dlls = tmp_dlls("exec_dlls");
@@ -292,7 +261,6 @@ mod tests {
         std::fs::remove_dir_all(&steam).ok();
     }
 
-    // 4. execute 卸载路径：DLL 被删除。
     #[test]
     fn execute_uninstalls() {
         let dlls = tmp_dlls("exec_un_dlls");
@@ -315,8 +283,6 @@ mod tests {
         std::fs::remove_dir_all(&steam).ok();
     }
 
-    // 5. 首错即停 + 错误定位：Uninstall 成功 → Launch 失败（无 steam.exe），
-    //    返回 Err(op=Launch)，且 Uninstall 副作用已生效。
     #[test]
     fn execute_stops_at_first_error() {
         let dlls = tmp_dlls("exec_err_dlls");
@@ -337,7 +303,6 @@ mod tests {
             "err message: {}",
             err.message
         );
-        // Uninstall 已生效，DLL 应已被删除。
         for d in TARGET_DLLS {
             assert!(!steam.join(d).exists(), "still present {d}");
         }
@@ -346,16 +311,12 @@ mod tests {
         std::fs::remove_dir_all(&steam).ok();
     }
 
-    // 6. Action::asks_to_close_steam 表（#36 修订）：仅两个卸载类复合动作需先弹确认；
-    //    ApplyAndLaunch 不再弹（Steam 运行中直接放行走优雅退出，见 ui.rs）；Launch 不需
-    //    （Restart 恒关闭但不弹）。
     #[test]
     fn action_asks_to_close_steam_table() {
         assert!(!Action::ApplyAndLaunch.asks_to_close_steam());
         assert!(!Action::Launch.asks_to_close_steam());
         assert!(Action::ExitAndUninstall.asks_to_close_steam());
         assert!(Action::UninstallAndRestart.asks_to_close_steam());
-        // 重启语义即「关闭并重启」，不经确认框。
         assert!(!Action::Restart.asks_to_close_steam());
     }
 }

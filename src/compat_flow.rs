@@ -1,9 +1,5 @@
 //! 「体检流程」状态机：兼容性体检生命周期的唯一编排者。
-//!
-//! 深模块——小接口（`step` / `display`），大实现（代数戳、每代数一次网络刷新、
-//! 刷新/预热独立在途、复检守卫）。纯状态机：无 IO、无线程、无 egui、无 i18n；
-//! App 只喂事件、执行返回的效果（spawn 后台线程）、渲染展示态。
-//! 状态转移全部可经 `step` 单测（接缝 = 状态机接口）。
+//! 纯状态机：无 IO、无线程、无 egui、无 i18n；状态转移全部可经 `step` 单测。
 
 use crate::compat::{self, CompatError, OverallHealthReport, ProbeTarget};
 
@@ -19,38 +15,35 @@ pub enum PrecacheMode {
     Manual,
 }
 
-/// 流程事件（App 喂入）。
 #[derive(Clone, Debug)]
 pub enum Event {
     /// Steam 路径变更（含启动首次）：推进代数；与上次路径相同 → 无动作（防抖）。
     PathChanged(String),
-    /// 快速体检完成。
     ProbeDone {
         epoch: Epoch,
         report: OverallHealthReport,
     },
-    /// 网络刷新完成。
     RefreshDone {
         epoch: Epoch,
         report: OverallHealthReport,
     },
-    /// 预热完成。
     PrecacheDone {
         epoch: Epoch,
         result: Result<(), CompatError>,
     },
-    /// 手动「一键缓存签名」（自动预热由流程内部在 ProbeDone 时触发）。
     PrecacheRequested,
 }
 
-/// 待办效果（App 执行）。效果携带发起时路径——spawn 时钉住，不在消息处理时重读。
 #[derive(Clone, Debug, PartialEq)]
 pub enum Effect {
-    /// 发起快速体检（零网络）。
-    Probe { epoch: Epoch, path: String },
-    /// 发起网络刷新。
-    Refresh { epoch: Epoch, path: String },
-    /// 发起预热下载。
+    Probe {
+        epoch: Epoch,
+        path: String,
+    },
+    Refresh {
+        epoch: Epoch,
+        path: String,
+    },
     Precache {
         epoch: Epoch,
         path: String,
@@ -58,7 +51,6 @@ pub enum Effect {
     },
 }
 
-/// 汇总徽标分类（issue #23 §7.7 状态视觉）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CompatSummary {
     Checking,
@@ -69,23 +61,17 @@ pub enum CompatSummary {
     Network,
 }
 
-/// 展示态（App 渲染；全部字段归流程所有，App 只读）；report/precache_error 为流程内部引用，热路径零拷贝。
 #[derive(Clone, Debug)]
 pub struct Display<'a> {
     pub report: Option<&'a OverallHealthReport>,
-    /// 体检/复检进行中（显示 Checking / 禁用按钮）。
     pub checking: bool,
-    /// 预热进行中（按钮显示「正在缓存...」）。
     pub precaching: bool,
     /// 预热失败错误（手动失败就地显示；自动失败静默）。
     pub precache_error: Option<&'a CompatError>,
-    /// 预热成功提示（复检/刷新合并后保留；下次预热开始或路径变更清除）。
     pub precache_done: bool,
-    /// 汇总分类（徽章渲染）。
     pub summary: CompatSummary,
 }
 
-/// 体检流程状态机。
 pub struct CompatFlow {
     epoch: Epoch,
     path: Option<String>,
@@ -114,7 +100,6 @@ impl CompatFlow {
         }
     }
 
-    /// 推进事件：返回展示态与待办效果。App 执行效果、渲染展示态。
     pub fn step(&mut self, event: Event) -> (Display<'_>, Vec<Effect>) {
         let effects = match event {
             Event::PathChanged(path) => self.on_path_changed(path),
@@ -230,7 +215,6 @@ impl CompatFlow {
         effects
     }
 
-    /// 启动一次预热（自动/手动共用）：置在途标志、清提示、产出效果。
     fn start_precache(
         &mut self,
         mode: PrecacheMode,
@@ -251,7 +235,6 @@ impl CompatFlow {
         });
     }
 
-    /// 展示态（借用流程内部状态，零拷贝；App 渲染后即释放借用）。
     pub fn display(&self) -> Display<'_> {
         Display {
             report: self.report.as_ref(),
@@ -264,7 +247,6 @@ impl CompatFlow {
     }
 }
 
-/// 三项探针报告（状态判定与目标收集共用的形状，收敛重复）。
 fn probes(report: &OverallHealthReport) -> [&compat::ProbeReport; 3] {
     [
         &report.steamclient_pattern,
@@ -302,9 +284,7 @@ pub fn compat_summary(checking: bool, report: Option<&OverallHealthReport>) -> C
     }
 }
 
-/// 待预热目标（RemoteAvailable{cached:false} 或验证缓存命中但无离线缓存），
-/// 以报告携带的 `signature_cached` 存在性事实为准（算子层探针时判定，流程不落盘）。
-/// App 详情按钮可见性也读它。
+/// 待预热目标：RemoteAvailable{cached:false} 或验证缓存命中但无离线缓存的项，以 `signature_cached` 存在性事实为准（流程不落盘）。
 pub fn precache_targets(report: &OverallHealthReport) -> Vec<(ProbeTarget, String)> {
     probes(report)
         .iter()
@@ -317,8 +297,7 @@ pub fn precache_targets(report: &OverallHealthReport) -> Vec<(ProbeTarget, Strin
         .collect()
 }
 
-/// 快速体检后是否需要后台网络刷新：存在短路项（CompatibleOffline）或乐观项
-/// （RemoteAvailable{cached:false}）即需补查。本代数刷新预算已消耗时由流程守卫拦截。
+/// 快速体检后是否需要后台网络刷新：存在短路项（CompatibleOffline）或乐观项（RemoteAvailable{cached:false}）即需补查；预算消耗由流程守卫拦截。
 fn needs_network_refresh(report: &OverallHealthReport) -> bool {
     probes(report).map(|p| &p.status).iter().any(|s| {
         matches!(
@@ -329,7 +308,6 @@ fn needs_network_refresh(report: &OverallHealthReport) -> bool {
     })
 }
 
-/// 是否应自动预热：体检落定 Online（上游已适配未缓存）且当前无预热进行中。
 fn should_auto_precache(report: &OverallHealthReport, precaching: bool) -> bool {
     !precaching && compat_summary(false, Some(report)) == CompatSummary::Online
 }
@@ -338,7 +316,6 @@ fn should_auto_precache(report: &OverallHealthReport, precaching: bool) -> bool 
 mod tests {
     use super::*;
 
-    /// 构造探针报告样本（signature_cached 占位，summary 判定不依赖它）。
     fn probe_report(
         target: ProbeTarget,
         status: compat::ProbeStatus,
@@ -379,12 +356,10 @@ mod tests {
 
     use compat::ProbeStatus as S;
 
-    /// 三份同状态报告（ProbeStatus 非 Copy，不用数组重复语法）。
     fn all(status: compat::ProbeStatus) -> [compat::ProbeStatus; 3] {
         [status.clone(), status.clone(), status]
     }
 
-    /// 便捷：喂 PathChanged 并取回首个体检效果的代数。
     fn start_probe(flow: &mut CompatFlow, path: &str) -> Epoch {
         let (_, effects) = flow.step(Event::PathChanged(path.to_string()));
         match effects.as_slice() {
@@ -393,21 +368,18 @@ mod tests {
         }
     }
 
-    /// 取效果列表中的首个预热效果。
     fn find_precache(effects: &[Effect]) -> Option<&Effect> {
         effects
             .iter()
             .find(|e| matches!(e, Effect::Precache { .. }))
     }
 
-    /// 检查中 / 无报告 → Checking（骨架态）。
     #[test]
     fn compat_summary_checking_when_in_progress() {
         assert_eq!(compat_summary(true, None), CompatSummary::Checking);
         assert_eq!(compat_summary(false, None), CompatSummary::Checking);
     }
 
-    /// 任一 DLL 缺失 → Missing（最高优先级）。
     #[test]
     fn compat_summary_missing_when_dll_absent() {
         let r = report_with(
@@ -421,7 +393,6 @@ mod tests {
         assert_eq!(compat_summary(false, Some(&r)), CompatSummary::Missing);
     }
 
-    /// 上游未适配 → Pending（优先于 Network/Online）。
     #[test]
     fn compat_summary_pending_beats_network_and_online() {
         let r = report_with(
@@ -435,7 +406,6 @@ mod tests {
         assert_eq!(compat_summary(false, Some(&r)), CompatSummary::Pending);
     }
 
-    /// 网络错误（无 Pending）→ Network。
     #[test]
     fn compat_summary_network_when_unreachable() {
         let r = report_with(
@@ -449,7 +419,6 @@ mod tests {
         assert_eq!(compat_summary(false, Some(&r)), CompatSummary::Network);
     }
 
-    /// 存在未缓存项 → Online（提示预热）。
     #[test]
     fn compat_summary_online_when_missing_cache() {
         let r = report_with(
@@ -463,7 +432,6 @@ mod tests {
         assert_eq!(compat_summary(false, Some(&r)), CompatSummary::Online);
     }
 
-    /// 全缓存就绪（在线或离线）→ Ready。
     #[test]
     fn compat_summary_ready_when_all_cached() {
         let online = report_with(
@@ -486,7 +454,6 @@ mod tests {
         assert_eq!(compat_summary(false, Some(&offline)), CompatSummary::Ready);
     }
 
-    /// 待预热目标：收集「已适配但离线缓存缺失」的项（以 signature_cached 存在性为准）。
     #[test]
     fn precache_targets_picks_available_without_signature() {
         let r = report_with(
@@ -504,7 +471,6 @@ mod tests {
         assert!(ts.contains(&ProbeTarget::PatternSteamUi));
     }
 
-    /// 离线缓存已就绪的项（signature_cached=true）不被收集。
     #[test]
     fn precache_targets_excludes_existing_signature() {
         let mut r = report_with(
@@ -521,7 +487,6 @@ mod tests {
         assert_eq!(targets[0].0, ProbeTarget::PatternSteamUi);
     }
 
-    /// 路径变更推进代数、产出快速体检效果、展示检查态；同路径防抖无动作。
     #[test]
     fn path_change_bumps_epoch_and_spawns_probe() {
         let mut flow = CompatFlow::new();
@@ -550,7 +515,6 @@ mod tests {
         );
     }
 
-    /// 当前代数体检完成：更新报告、退出检查态；无短路项不产出任何效果。
     #[test]
     fn probe_done_updates_display_without_refresh_when_confirmed() {
         let mut flow = CompatFlow::new();
@@ -565,7 +529,6 @@ mod tests {
         assert!(d.report.is_some());
     }
 
-    /// 陈旧代数（路径已变更）的完成事件一律丢弃，不触碰展示态。
     #[test]
     fn stale_epoch_messages_are_dropped() {
         let mut flow = CompatFlow::new();
@@ -593,7 +556,6 @@ mod tests {
         assert!(effects.is_empty());
     }
 
-    /// 含短路/乐观项的报告触发一次网络刷新；同代数内不再触发（刷新预算一次性）。
     #[test]
     fn refresh_fires_once_per_epoch() {
         let mut flow = CompatFlow::new();
@@ -619,7 +581,6 @@ mod tests {
         assert!(effects.is_empty());
     }
 
-    /// 刷新失败（NetworkError）也视同已消耗本代数预算（一次性语义，不隐式重试）。
     #[test]
     fn failed_refresh_consumes_epoch_budget() {
         let mut flow = CompatFlow::new();
@@ -644,7 +605,6 @@ mod tests {
         assert!(effects.is_empty());
     }
 
-    /// 刷新完成合并报告，但保留在途预热标志与提示（并行、在途独立）。
     #[test]
     fn refresh_merge_preserves_inflight_precache() {
         let mut flow = CompatFlow::new();
@@ -679,7 +639,6 @@ mod tests {
         );
     }
 
-    /// Online 态自动预热：产出 Auto 模式效果；失败静默（错误不显示、手动入口保留）。
     #[test]
     fn auto_precache_failure_is_silent() {
         let mut flow = CompatFlow::new();
@@ -715,7 +674,6 @@ mod tests {
         assert_eq!(d.summary, CompatSummary::Online);
     }
 
-    /// 手动预热：无报告/无目标/已在途时不产出效果；失败就地显示错误。
     #[test]
     fn manual_precache_requires_report_and_targets() {
         let mut flow = CompatFlow::new();
@@ -754,7 +712,6 @@ mod tests {
         assert!(matches!(d.precache_error, Some(CompatError::Io(_))));
     }
 
-    /// 预热成功 → 同代数复检；复检的短路项不再触发二次网络刷新（循环守卫盖全两条腿）。
     #[test]
     fn precache_success_reprobes_same_epoch_without_re_refresh() {
         let mut flow = CompatFlow::new();
@@ -789,7 +746,6 @@ mod tests {
         assert!(d.precache_done);
     }
 
-    /// 预热成功提示生命周期：新预热开始或路径变更清除；复检/刷新合并保留。
     #[test]
     fn precache_done_lifecycle() {
         let mut flow = CompatFlow::new();
