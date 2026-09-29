@@ -131,8 +131,9 @@ pub fn save(path: &Path, config: &Config) -> Result<(), ConfigError> {
     write_atomic(path, text.as_bytes()).map_err(ConfigError::Io)
 }
 
-/// TOML 解析（三字段小 schema 手动映射；任何非法一律类型化错误，严格而非宽容——
-/// 宽容会悄悄吞掉写错的文件，严格让调用方显式降级）。
+/// TOML 解析（三字段小 schema 手动映射；严格而非宽容——宽容会悄悄吞掉写错的
+/// 文件，严格让调用方显式降级）。唯一例外：`minimize_to_tray` 为字段级宽容
+/// （缺失或类型非法均降级默认启用，不拖垮整份配置，见下方实现注释）。
 fn parse(text: &str) -> Result<Config, ConfigError> {
     let doc = text
         .parse::<toml_edit::DocumentMut>()
@@ -162,12 +163,11 @@ fn parse(text: &str) -> Result<Config, ConfigError> {
         .ok_or_else(|| ConfigError::Parse("missing or invalid language".into()))?;
 
     // 最小化隐身：字段缺失 = 默认启用（老配置无该字段，不迁移不 bump 版本）；
-    // 存在但类型非法仍严格报错（不宽容吞掉写错的值）。
+    // 存在但类型非法同样宽容降级默认（#35 Q5 读法 B）：写错的托盘值不拖垮整份
+    // 配置，其余字段照常解析——严格解析只保留给 schema 关键字段。
     let minimize_to_tray = match doc.get("minimize_to_tray") {
         None => true,
-        Some(v) => v
-            .as_bool()
-            .ok_or_else(|| ConfigError::Parse("minimize_to_tray must be a boolean".into()))?,
+        Some(v) => v.as_bool().unwrap_or(true),
     };
 
     Ok(Config {
@@ -282,13 +282,24 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(load(&path), Err(ConfigError::Parse(_))));
-        // minimize_to_tray 类型非法（存在但非布尔：不宽容吞掉写错的值）。
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 非布尔 minimize_to_tray 宽容降级（#35 Q5 读法 B）：写错的托盘值不拖垮整份
+    /// 配置——字段级容错，默认启用且其余字段正常解析（严格解析只保留给关键字段）。
+    #[test]
+    fn minimize_to_tray_non_bool_is_tolerated() {
+        let dir = tmp_dir("traytol");
+        let path = dir.join(CONFIG_FILE);
         std::fs::write(
             &path,
             "version = 1\nsteam_path = \"C:/S\"\nlanguage = \"zh\"\nminimize_to_tray = \"yes\"",
         )
         .unwrap();
-        assert!(matches!(load(&path), Err(ConfigError::Parse(_))));
+        let cfg = load(&path).unwrap();
+        assert_eq!(cfg.steam_path, "C:/S");
+        assert_eq!(cfg.language, Language::Zh);
+        assert!(cfg.minimize_to_tray, "非布尔托盘值应宽容降级默认启用");
         std::fs::remove_dir_all(&dir).ok();
     }
 
