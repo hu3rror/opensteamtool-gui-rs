@@ -93,12 +93,24 @@ mod tests {
 
     #[test]
     fn monitor_smoke_on_ci() {
-        // 无 Steam 环境（同旧 CI 测试假设）：初始扫描后连续 force_poll 无事件，
-        // 状态与初始一致（Steam 在两次扫描间启动/退出的概率可忽略）。
+        // 冒烟：监视器管线能跑通且不自相矛盾。不断言「无事件」——本机可能恰好有
+        // Steam 启动/退出（真实事件）；改断言事件与状态转移一致：CI 无 Steam 时恒为
+        // None，有 Steam 时 Started/Stopped 必对应 is_running() 的相应变化，两环境都
+        // 稳定（原断言在 Steam 于两次扫描间启动的开发机上误红，属环境依赖而非缺陷）。
         let steam = Arc::new(SteamState::new());
         let mut m = SteamMonitor::new(&steam);
         let initial = m.is_running();
-        assert_eq!(m.force_poll(), None);
-        assert_eq!(m.is_running(), initial);
+        let event = m.force_poll();
+        match event {
+            None => assert_eq!(m.is_running(), initial, "无事件时状态应不变"),
+            Some(SteamEvent::Started) => {
+                assert!(!initial, "Started 事件只能在初始未运行时出现");
+                assert!(m.is_running(), "Started 事件应对应 Steam 运行中");
+            }
+            Some(SteamEvent::Stopped) => {
+                assert!(initial, "Stopped 事件只能在初始运行时出现");
+                assert!(!m.is_running(), "Stopped 事件应对应 Steam 已退出");
+            }
+        }
     }
 }

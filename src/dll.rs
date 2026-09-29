@@ -38,7 +38,7 @@ pub fn read_local_version(dll_dir: &Path) -> Option<String> {
 }
 
 /// 目标 DLL 在 `dir` 下是否齐全，即「补丁已下载」的文件本位判据（版本记录不作数，
-/// 见 ADR-0011）。部署前置校验（`workflow::plan` 的 `NoTargetDlls`）与 UI 置灰/本地
+/// 见 ADR-0011）。部署前置校验（`workflow::plan` 的 `MissingTargetDlls`）与 UI 置灰/本地
 /// 版本行/更新对比/通知文案共用同一谓词，一处演化各处跟随。
 pub fn target_dlls_present(dir: &Path) -> bool {
     TARGET_DLLS.iter().all(|d| dir.join(d).is_file())

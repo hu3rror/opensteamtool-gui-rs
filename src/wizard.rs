@@ -3,13 +3,15 @@
 //! 深模块——小接口（`step` / `view` / `finished`），大实现（三步推进、下载
 //! 失败的重试/跳过、关窗等同跳过、终局收敛）。纯状态机：无 IO、无线程、无 egui、
 //! 无 i18n；App 只喂事件、执行返回的效果（spawn 下载 / 持久化配置）、渲染展示态。
+//! 唯一例外：步骤 3 的「就绪 / 待下载」判定以构造时注入的 `dlls/` 目录为参
+//! （ADR-0011 文件本位判据），注入使测试能用临时目录驱动该分支。
 //!
 //! 触发判据 `should_show` 是独立纯函数（路径注入，测试用临时目录）；「有效 Steam
 //! 路径」判据与 `config`/`dll` 共用同一 `is_dir` 口径。终局语义见 ADR-0012：完成
 //! （下载成功）与跳过（显式跳过或关窗）都持久化语言与路径并切回主界面；跳过/失败
 //! 留下的「补丁缺失」是文件系统事实，不由向导记录。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::config::{self, Language};
 use crate::dll;
@@ -22,7 +24,7 @@ pub enum Step {
     Language,
     /// 步骤 2：Steam 路径（注册表检测预填 + 浏览兜底）。
     SteamPath,
-    /// 步骤 3：补丁下载并解压（失败可重试/跳过）。
+    /// 步骤 3：补丁下载并解压（已下载则呈现就绪态；失败可重试/跳过）。
     Download,
 }
 
@@ -32,6 +34,9 @@ pub enum Step {
 pub enum DownloadState {
     /// 已进入步骤 3、尚未开始（等待用户点击）。
     Idle,
+    /// 补丁已下载（注入 `dll_dir` 下三目标 DLL 齐全，ADR-0011 文件本位判据）：
+    /// 步骤 3 呈现「就绪」无需下载；点「完成」（复用跳过事件）即收敛终局。
+    Ready,
     /// 正在后台「检查更新 → 下载并解压」。
     Running,
     /// 下载失败（就地显示；可重试或跳过）。
@@ -39,7 +44,7 @@ pub enum DownloadState {
 }
 
 /// 向导事件（App 喂入）。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Event {
     /// 步骤 1 选定语言：立即本地化后续步骤并推进到步骤 2。
     LanguageChosen(Language),
@@ -86,18 +91,22 @@ pub struct Wizard {
     step: Step,
     language: Language,
     steam_path: String,
+    /// 步骤 3 就绪判据的文件系统注入点（App 传 `dll::dll_dir()`）。
+    dll_dir: PathBuf,
     download: DownloadState,
     finished: bool,
 }
 
 impl Wizard {
-    /// 播种：语言取当前配置偏好，路径取当前会话值（配置无效时即注册表检测结果）。
-    /// 重跑向导时以现值播种，使重跑是「编辑」而非「重置」。
-    pub fn new(language: Language, steam_path: String) -> Self {
+    /// 播种：语言取当前配置偏好，路径取当前会话值（配置无效时即注册表检测结果）；
+    /// `dll_dir` 是步骤 3 就绪判据的文件系统注入点（App 传 `dll::dll_dir()`，测试用
+    /// 临时目录）。重跑向导时以现值播种，使重跑是「编辑」而非「重置」。
+    pub fn new(language: Language, steam_path: String, dll_dir: PathBuf) -> Self {
         Self {
             step: Step::Language,
             language,
             steam_path,
+            dll_dir,
             download: DownloadState::Idle,
             finished: false,
         }
@@ -124,7 +133,13 @@ impl Wizard {
                     // 只推进到步骤 3，不自动下载：由用户点击「下载并解压」显式开始
                     // （自动下载有入侵感，见 #29 交互决定）。
                     self.step = Step::Download;
-                    self.download = DownloadState::Idle;
+                    // 补丁是否已下载是文件系统事实（ADR-0011 文件本位判据）：已下载
+                    // → 就绪态（不再提示「尚未下载」），否则停在 Idle 等待显式下载。
+                    self.download = if dll::target_dlls_present(&self.dll_dir) {
+                        DownloadState::Ready
+                    } else {
+                        DownloadState::Idle
+                    };
                     Vec::new()
                 } else {
                     Vec::new() // 无效路径停留步骤 2（关窗仍可逃生）。
@@ -282,7 +297,7 @@ mod tests {
     #[test]
     fn step_progression_to_completion() {
         let steam = tmp_dir("progress");
-        let mut w = Wizard::new(Language::Auto, String::new());
+        let mut w = Wizard::new(Language::Auto, String::new(), tmp_dir("progress_dlls"));
 
         let (v, fx) = w.step(Event::LanguageChosen(Language::Zh));
         assert_eq!(v.step, Step::SteamPath);
@@ -325,7 +340,7 @@ mod tests {
     #[test]
     fn invalid_path_submit_stays() {
         let steam = tmp_dir("invalid_submit");
-        let mut w = Wizard::new(Language::En, String::new());
+        let mut w = Wizard::new(Language::En, String::new(), tmp_dir("invalid_submit_dlls"));
         w.step(Event::LanguageChosen(Language::En));
 
         let (v, fx) = w.step(Event::PathEdited("Z:/nope_98765".into()));
@@ -433,7 +448,11 @@ mod tests {
     /// 关窗从任意步骤都结束并持久化当前语言/路径。
     #[test]
     fn close_from_language_step_finishes() {
-        let mut w = Wizard::new(Language::Auto, "C:/prefilled".into());
+        let mut w = Wizard::new(
+            Language::Auto,
+            "C:/prefilled".into(),
+            tmp_dir("close_lang_dlls"),
+        );
         let (_, fx) = w.step(Event::Closed);
         assert!(w.finished());
         assert_eq!(
@@ -448,7 +467,7 @@ mod tests {
     /// 终局后忽略一切事件（迟到的下载结果不复活向导、不重复持久化）。
     #[test]
     fn events_after_finish_are_ignored() {
-        let mut w = Wizard::new(Language::Zh, String::new());
+        let mut w = Wizard::new(Language::Zh, String::new(), tmp_dir("after_finish_dlls"));
         w.step(Event::Closed);
         let (_, fx) = w.step(Event::DownloadDone(Ok(())));
         assert!(fx.is_empty());
@@ -472,7 +491,7 @@ mod tests {
     #[test]
     fn idle_request_starts_once() {
         let steam = tmp_dir("idle");
-        let mut w = Wizard::new(Language::En, String::new());
+        let mut w = Wizard::new(Language::En, String::new(), tmp_dir("idle_dlls"));
         w.step(Event::LanguageChosen(Language::En));
         w.step(Event::PathEdited(steam.display().to_string()));
         w.step(Event::PathSubmitted);
@@ -487,12 +506,95 @@ mod tests {
     }
 
     /// 步进帮助函数：建一个已进入步骤 3 并显式开始下载（下载在途）的向导。
+    /// `dll_dir` 取与 steam 目录同名的空临时目录（补丁未下载，进入步骤 3 为 Idle）。
     fn entered_download(steam: &Path, language: Language) -> Wizard {
-        let mut w = Wizard::new(language, String::new());
+        let dlls = std::env::temp_dir().join(format!(
+            "ost_wiz_{}_dlls_{}",
+            steam.file_name().unwrap_or_default().to_string_lossy(),
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dlls);
+        std::fs::create_dir_all(&dlls).unwrap();
+        let mut w = Wizard::new(language, String::new(), dlls);
         w.step(Event::LanguageChosen(language));
         w.step(Event::PathEdited(steam.display().to_string()));
         w.step(Event::PathSubmitted);
         w.step(Event::DownloadRequested);
         w
+    }
+
+    // ---------- 步骤 3 就绪态（补丁已下载，ADR-0011 文件本位判据） ----------
+
+    /// 补丁已下载（`dlls/` 三目标 DLL 齐全）→ 进入步骤 3 呈现就绪态而非「尚未下载」；
+    /// 就绪态点「完成」（复用跳过事件）→ 收敛终局（持久化语言与路径）。
+    #[test]
+    fn patch_present_enters_ready_state() {
+        let steam = tmp_dir("ready_steam");
+        let dlls = tmp_dir("ready_dlls");
+        for name in dll::TARGET_DLLS {
+            std::fs::write(dlls.join(name), b"x").unwrap();
+        }
+
+        let mut w = Wizard::new(Language::Zh, steam.display().to_string(), dlls.clone());
+        w.step(Event::LanguageChosen(Language::Zh));
+        w.step(Event::PathEdited(steam.display().to_string()));
+        let (v, fx) = w.step(Event::PathSubmitted);
+        assert_eq!(v.step, Step::Download);
+        assert!(
+            matches!(v.download, DownloadState::Ready),
+            "补丁已下载时应呈现就绪态，而非提示「尚未下载」的 Idle"
+        );
+        assert!(fx.is_empty(), "就绪不产出下载效果");
+
+        // 就绪态「完成」（复用跳过事件）→ 终局收敛。
+        let (_, fx) = w.step(Event::SkipDownload);
+        assert!(w.finished());
+        assert_eq!(
+            fx,
+            vec![Effect::Finish {
+                language: Language::Zh,
+                steam_path: steam.display().to_string()
+            }]
+        );
+
+        std::fs::remove_dir_all(&steam).ok();
+        std::fs::remove_dir_all(&dlls).ok();
+    }
+
+    /// 补丁未下载的各种文件本位形态（目录不存在 / 空目录 / 部分文件 / 仅版本记录）
+    /// → 仍为 Idle，步骤 3 的下载提示成立（ADR-0011：三文件齐全才算已下载）。
+    #[test]
+    fn patch_absent_keeps_idle_in_all_missing_shapes() {
+        let steam = tmp_dir("absent_steam");
+        // 目录不存在。
+        let missing =
+            std::env::temp_dir().join(format!("ost_wiz_absent_missing_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&missing);
+        // 空目录。
+        let empty = tmp_dir("absent_empty");
+        // 部分文件（2/3）。
+        let partial = tmp_dir("absent_partial");
+        std::fs::write(partial.join(dll::TARGET_DLLS[0]), b"x").unwrap();
+        std::fs::write(partial.join(dll::TARGET_DLLS[1]), b"x").unwrap();
+        // 仅版本记录（无 DLL）。
+        let version_only = tmp_dir("absent_version");
+        std::fs::write(version_only.join(dll::VERSION_FILE), b"1.4.8").unwrap();
+
+        for dlls in [&missing, &empty, &partial, &version_only] {
+            let mut w = Wizard::new(Language::En, steam.display().to_string(), dlls.clone());
+            w.step(Event::LanguageChosen(Language::En));
+            w.step(Event::PathEdited(steam.display().to_string()));
+            let (v, _) = w.step(Event::PathSubmitted);
+            assert_eq!(v.step, Step::Download);
+            assert!(
+                matches!(v.download, DownloadState::Idle),
+                "补丁未下载（{dlls:?}）时应停留在 Idle 等待显式下载"
+            );
+        }
+
+        std::fs::remove_dir_all(&steam).ok();
+        std::fs::remove_dir_all(&empty).ok();
+        std::fs::remove_dir_all(&partial).ok();
+        std::fs::remove_dir_all(&version_only).ok();
     }
 }

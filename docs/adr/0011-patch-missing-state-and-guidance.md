@@ -2,7 +2,7 @@
 
 便携包默认不携带目标 DLL（`tools/build-release.ps1` 只放 `dlls/` 占位 README，补丁需「检查更新 + 下载并解压」拉取），因此「未下载」是全新安装的默认状态。此状态下有两处 UX 缺陷：
 
-1. 未部署分支的「应用补丁并启动」照常可点，点下去才报 `Precheck::NoTargetDlls`（「dlls/ 目录缺少目标 DLL 文件」）。
+1. 未部署分支的「应用补丁并启动」照常可点，点下去才报 `Precheck::MissingTargetDlls`（「dlls/ 目录缺少目标 DLL 文件」）。
 2. 「下载并解压新版本」按钮只在检查更新成功后出现（`update_flow::derived` 的 `download` 字段），全新状态下根本没有下载按钮可点——「引导下载」若无配套可达性就是死引导。
 3. 已应用且 Steam 未运行时，启动按钮写「正常启动 Steam」——补丁已在 Steam 目录，一点启动即带补丁加载，并非「正常启动」。
 

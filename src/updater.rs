@@ -122,7 +122,7 @@ pub(crate) fn download_agent() -> Agent {
 }
 
 /// 更新相关错误，UI 层据此映射双语文案。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum UpdateError {
     /// 网络请求失败（HTTP 非成功/传输错误）。
     Network(String),

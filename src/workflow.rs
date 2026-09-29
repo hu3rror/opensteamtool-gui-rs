@@ -72,12 +72,12 @@ pub struct WorkflowCtx {
 /// 前置校验失败（plan 阶段判定，未进入忙碌状态）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Precheck {
-    /// Steam 路径为空或不是目录。
-    NoSteamDir,
+    /// Steam 路径为空或不是目录（路径无效）。
+    InvalidSteamDir,
     /// `dlls/` 缺少目标 DLL（仅部署类操作）。
-    NoTargetDlls,
+    MissingTargetDlls,
     /// Steam 目录缺少 `steam.exe`。
-    NoSteamExe,
+    MissingSteamExe,
 }
 
 /// 执行阶段失败：哪一步 + 底层原始信息（本地化前缀由 ui.rs 映射）。
@@ -99,17 +99,17 @@ pub fn plan(
 ) -> Result<Vec<Op>, Precheck> {
     // 前置校验（保序：目录 → DLL → steam.exe）。
     if !steam_dir.is_dir() {
-        return Err(Precheck::NoSteamDir);
+        return Err(Precheck::InvalidSteamDir);
     }
     if action == Action::ApplyAndLaunch && !dll::target_dlls_present(dll_dir) {
-        return Err(Precheck::NoTargetDlls);
+        return Err(Precheck::MissingTargetDlls);
     }
     let needs_exe = matches!(
         action,
         Action::Launch | Action::ApplyAndLaunch | Action::UninstallAndRestart | Action::Restart
     );
     if needs_exe && !steam_dir.join("steam.exe").is_file() {
-        return Err(Precheck::NoSteamExe);
+        return Err(Precheck::MissingSteamExe);
     }
 
     // 判定表。
@@ -234,36 +234,36 @@ mod tests {
     // 2. plan 前置校验：三种 Precheck 各一例，且按序（目录 → DLL → steam.exe）。
     #[test]
     fn plan_prechecks() {
-        // 无效目录 → NoSteamDir（空路径 is_dir 恒 false）。
+        // 无效目录 → InvalidSteamDir（空路径 is_dir 恒 false）。
         assert_eq!(
             plan(Action::Launch, false, Path::new(""), Path::new("")),
-            Err(Precheck::NoSteamDir)
+            Err(Precheck::InvalidSteamDir)
         );
 
-        // 部署类缺 DLL → NoTargetDlls（先于 steam.exe 校验）。
+        // 部署类缺 DLL → MissingTargetDlls（先于 steam.exe 校验）。
         let empty_dlls = tmp_steam("plan_empty_dlls", false);
         let steam = tmp_steam("plan_steam_nodlls", false);
         assert_eq!(
             plan(Action::ApplyAndLaunch, false, &steam, &empty_dlls),
-            Err(Precheck::NoTargetDlls)
+            Err(Precheck::MissingTargetDlls)
         );
         std::fs::remove_dir_all(&empty_dlls).ok();
         std::fs::remove_dir_all(&steam).ok();
 
-        // 需启动类缺 steam.exe → NoSteamExe。
+        // 需启动类缺 steam.exe → MissingSteamExe。
         let dlls = tmp_dlls("plan_exe_dlls");
         let steam_no_exe = tmp_steam("plan_steam_noexe", false);
         assert_eq!(
             plan(Action::Launch, false, &steam_no_exe, &dlls),
-            Err(Precheck::NoSteamExe)
+            Err(Precheck::MissingSteamExe)
         );
         assert_eq!(
             plan(Action::UninstallAndRestart, false, &steam_no_exe, &dlls),
-            Err(Precheck::NoSteamExe)
+            Err(Precheck::MissingSteamExe)
         );
         assert_eq!(
             plan(Action::Restart, false, &steam_no_exe, &dlls),
-            Err(Precheck::NoSteamExe)
+            Err(Precheck::MissingSteamExe)
         );
         std::fs::remove_dir_all(&dlls).ok();
         std::fs::remove_dir_all(&steam_no_exe).ok();

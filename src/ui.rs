@@ -20,7 +20,7 @@ use crate::theme::{self, ButtonStyle};
 use crate::tray::{Tray, TrayAction};
 use crate::update_flow::{UpdateFlow, UpdateNotice};
 use crate::updater::{self, OnlineInfo, UpdateError};
-use crate::wizard::{self, DownloadState, Step as WizardStep};
+use crate::wizard::{self, Step as WizardStep};
 use crate::workflow::{self, Action};
 
 // 颜色一律取自 theme.rs 语义色板（ADR-0010）：仓库唯一色值来源，勿在此处写内联色值。
@@ -517,6 +517,57 @@ fn wizard_download() -> Result<(), UpdateError> {
     updater::download_and_extract(&info, &dll::dll_dir())
 }
 
+/// 步骤 3 子状态 → 展示决策：提示文案、是否错误色、主按钮（文案 + 点击事件；None =
+/// 无主按钮）、是否显示跳过。渲染层只消费此决策，陈述永远派生自状态——就绪态不提供
+/// 下载按钮、隐藏跳过（「完成」即收尾，复用跳过终局收敛），杜绝「补丁已下载却提示
+/// 尚未下载」一类陈述失真（文件本位判据见 ADR-0011）。
+struct WizardStep3Content {
+    prompt: String,
+    danger: bool,
+    primary: Option<(String, wizard::Event)>,
+    show_skip: bool,
+}
+
+fn wizard_step3_content(strings: &Strings, dl: &wizard::DownloadState) -> WizardStep3Content {
+    match dl {
+        wizard::DownloadState::Idle => WizardStep3Content {
+            prompt: strings.wizard_download_prompt.to_string(),
+            danger: false,
+            primary: Some((
+                strings.wizard_btn_download.to_string(),
+                wizard::Event::DownloadRequested,
+            )),
+            show_skip: true,
+        },
+        wizard::DownloadState::Ready => WizardStep3Content {
+            prompt: strings.wizard_download_ready.to_string(),
+            danger: false,
+            primary: Some((
+                strings.wizard_btn_done.to_string(),
+                wizard::Event::SkipDownload,
+            )),
+            show_skip: false,
+        },
+        wizard::DownloadState::Running => WizardStep3Content {
+            prompt: strings.wizard_download_running.to_string(),
+            danger: false,
+            primary: None,
+            show_skip: true,
+        },
+        wizard::DownloadState::Failed(e) => WizardStep3Content {
+            prompt: strings
+                .wizard_download_failed
+                .replace("{err}", &strings.update_error(e)),
+            danger: true,
+            primary: Some((
+                strings.wizard_btn_retry.to_string(),
+                wizard::Event::DownloadRequested,
+            )),
+            show_skip: true,
+        },
+    }
+}
+
 /// 向导步骤渲染（纯函数：视图 + 文案 → 用户意图 + 卡片矩形；不触碰 App 状态，可单测）。
 ///
 /// 布局：窄卡片整体水平居中。`card_frame().show` 的落点不随父布局对齐（Frame 的
@@ -621,72 +672,55 @@ fn wizard_steps_ui(
                             }
                         }
                         WizardStep::Download => {
-                            // 子状态文案：Idle 提示需显式开始；Running 进行中；Failed 就地报错。
-                            match &view.download {
-                                DownloadState::Idle => {
-                                    ui.label(
-                                        egui::RichText::new(strings.wizard_download_prompt)
-                                            .size(13.0),
-                                    );
-                                }
-                                DownloadState::Running => {
-                                    ui.label(
-                                        egui::RichText::new(strings.wizard_download_running)
-                                            .size(13.0),
-                                    );
-                                }
-                                DownloadState::Failed(e) => {
-                                    ui.label(
-                                        egui::RichText::new(
-                                            strings
-                                                .wizard_download_failed
-                                                .replace("{err}", &strings.update_error(e)),
-                                        )
-                                        .size(13.0)
-                                        .color(theme::DANGER),
-                                    );
-                                }
-                            }
+                            // 子状态文案与按钮完全由 `wizard_step3_content` 决策（纯函数，
+                            // 单测覆盖：Idle 提示需显式开始；Ready 补丁已下载；Running
+                            // 进行中；Failed 就地报错）。
+                            let content = wizard_step3_content(&strings, &view.download);
+                            let prompt = egui::RichText::new(content.prompt.as_str()).size(13.0);
+                            let prompt = if content.danger {
+                                prompt.color(theme::DANGER)
+                            } else {
+                                prompt
+                            };
+                            ui.label(prompt);
                             ui.add_space(16.0);
                             // 按钮行手动居中（horizontal 占满宽，需前置空间补偿）。
                             ui.horizontal(|ui| {
                                 let item_gap = ui.spacing().item_spacing.x;
-                                // 主按钮：Idle = 开始下载；Failed = 重试；Running 无主按钮。
-                                let start_label = match &view.download {
-                                    DownloadState::Idle => Some(strings.wizard_btn_download),
-                                    DownloadState::Failed(_) => Some(strings.wizard_btn_retry),
-                                    DownloadState::Running => None,
-                                };
-                                // 副按钮：跳过（任何子状态都可用，跳过不阻塞完成）。
-                                let mut row_w = 120.0; // 跳过按钮恒显示
-                                let mut count = 1;
-                                if start_label.is_some() {
+                                let mut row_w = 0.0;
+                                let mut count: i32 = 0;
+                                if content.primary.is_some() {
                                     count += 1;
                                     row_w += 140.0;
                                 }
-                                row_w += (count - 1) as f32 * item_gap;
+                                if content.show_skip {
+                                    count += 1;
+                                    row_w += 120.0;
+                                }
+                                row_w += (count.saturating_sub(1)) as f32 * item_gap;
                                 ui.add_space(((ui.available_width() - row_w) / 2.0).max(0.0));
 
-                                if let Some(label) = start_label
+                                if let Some((label, ev)) = &content.primary
                                     && styled_button(
                                         ui,
-                                        label,
+                                        label.as_str(),
                                         ButtonStyle::Primary,
                                         egui::vec2(140.0, 34.0),
                                         true,
                                     )
                                     .clicked()
                                 {
-                                    event = Some(wizard::Event::DownloadRequested);
+                                    event = Some(ev.clone());
                                 }
-                                if styled_button(
-                                    ui,
-                                    strings.wizard_btn_skip,
-                                    ButtonStyle::Neutral,
-                                    egui::vec2(120.0, 34.0),
-                                    true,
-                                )
-                                .clicked()
+                                if content.show_skip
+                                    && styled_button(
+                                        ui,
+                                        strings.wizard_btn_skip,
+                                        ButtonStyle::Neutral,
+                                        egui::vec2(120.0, 34.0),
+                                        true,
+                                    )
+                                    .clicked()
                                 {
                                     event = Some(wizard::Event::SkipDownload);
                                 }
@@ -750,7 +784,7 @@ impl App {
         // 首次运行向导：配置缺失/损坏或已存路径无效时激活（`should_show` 为纯谓词）。
         // 以当前会话值（配置或注册表检测）播种路径、以配置偏好播种语言；重跑即编辑。
         let wizard = wizard::should_show(&config::config_path())
-            .then(|| wizard::Wizard::new(lang_pref, steam_path.clone()));
+            .then(|| wizard::Wizard::new(lang_pref, steam_path.clone(), dll::dll_dir()));
         let steam_dir = Path::new(&steam_path);
         let status = dll::check_status(steam_dir);
         let local_version = dll::read_local_version(&dll::dll_dir());
@@ -1458,7 +1492,11 @@ impl App {
     /// 设置对话框（向导替代主界面渲染）。重跑是「编辑」而非「重置」（#29 播种约定）。
     fn rerun_wizard(&mut self) {
         self.settings_open = false;
-        self.wizard = Some(wizard::Wizard::new(self.lang_pref, self.steam_path.clone()));
+        self.wizard = Some(wizard::Wizard::new(
+            self.lang_pref,
+            self.steam_path.clone(),
+            dll::dll_dir(),
+        ));
     }
     // ---------- UI ----------
 
@@ -1895,7 +1933,7 @@ impl App {
                         self.strings.btn_apply_and_launch,
                         ButtonStyle::Deploy,
                         size,
-                        // 补丁未下载（dlls/ 缺文件）时置灰，避免点了才报 NoTargetDlls（见 ADR-0011）。
+                        // 补丁未下载（dlls/ 缺文件）时置灰，避免点了才报 MissingTargetDlls（见 ADR-0011）。
                         !self.gate.is_busy() && dll::dlls_present(),
                     )
                     .clicked()
@@ -2278,8 +2316,8 @@ mod tests {
                 (false, s.workflow_error_text(&wf))
             );
             assert_eq!(
-                render_notice(&s, &Notice::Precheck(workflow::Precheck::NoSteamDir)),
-                (false, s.precheck_text(&workflow::Precheck::NoSteamDir))
+                render_notice(&s, &Notice::Precheck(workflow::Precheck::InvalidSteamDir)),
+                (false, s.precheck_text(&workflow::Precheck::InvalidSteamDir))
             );
             assert_eq!(
                 render_notice(&s, &Notice::Downloaded(Err(e.clone()))),
@@ -2527,7 +2565,7 @@ mod tests {
                     language: Language::Auto,
                     steam_path: String::new(),
                     path_valid: false,
-                    download: DownloadState::Idle,
+                    download: wizard::DownloadState::Idle,
                 };
                 let (_, rect) = wizard_steps_ui(ui, Strings::new(Lang::Zh), &view);
                 card = Some(rect);
@@ -2553,6 +2591,69 @@ mod tests {
             "卡片不应是整窗宽（实际 {}",
             rect.width()
         );
+    }
+
+    /// 步骤 3 呈现接缝（纯函数）：补丁已下载（Ready）呈现「已下载」+「完成」，绝不
+    /// 出现「尚未下载」提示或下载按钮；跳过隐藏（完成即收尾）。双语文案均成立。
+    #[test]
+    fn wizard_step3_ready_presents_done_not_download() {
+        for lang in [Lang::Zh, Lang::En] {
+            let s = Strings::new(lang);
+            let c = wizard_step3_content(&s, &wizard::DownloadState::Ready);
+            assert_eq!(c.prompt, s.wizard_download_ready);
+            assert!(!c.danger);
+            assert_eq!(
+                c.primary,
+                Some((s.wizard_btn_done.to_string(), wizard::Event::SkipDownload))
+            );
+            assert!(!c.show_skip, "{lang:?} 就绪态不应显示跳过（完成即收尾）");
+            assert_ne!(
+                c.prompt, s.wizard_download_prompt,
+                "{lang:?} 就绪态不得宣称「尚未下载」"
+            );
+        }
+    }
+
+    /// 步骤 3 其余子状态决策不变：Idle = 下载提示 + 下载按钮 + 跳过；Running = 进行中
+    /// 无主按钮 + 跳过；Failed = 就地报错（错误色）+ 重试 + 跳过。
+    #[test]
+    fn wizard_step3_other_states_unchanged() {
+        for lang in [Lang::Zh, Lang::En] {
+            let s = Strings::new(lang);
+            let idle = wizard_step3_content(&s, &wizard::DownloadState::Idle);
+            assert_eq!(idle.prompt, s.wizard_download_prompt);
+            assert!(!idle.danger);
+            assert_eq!(
+                idle.primary,
+                Some((
+                    s.wizard_btn_download.to_string(),
+                    wizard::Event::DownloadRequested
+                ))
+            );
+            assert!(idle.show_skip);
+
+            let running = wizard_step3_content(&s, &wizard::DownloadState::Running);
+            assert_eq!(running.prompt, s.wizard_download_running);
+            assert!(running.primary.is_none());
+            assert!(running.show_skip);
+
+            let e = updater::UpdateError::Network("t".into());
+            let failed = wizard_step3_content(&s, &wizard::DownloadState::Failed(e.clone()));
+            assert_eq!(
+                failed.prompt,
+                s.wizard_download_failed
+                    .replace("{err}", &s.update_error(&e))
+            );
+            assert!(failed.danger);
+            assert_eq!(
+                failed.primary,
+                Some((
+                    s.wizard_btn_retry.to_string(),
+                    wizard::Event::DownloadRequested
+                ))
+            );
+            assert!(failed.show_skip);
+        }
     }
 
     // ==================== #32 回归：自适应窗口 vs 设置对话框 ====================
