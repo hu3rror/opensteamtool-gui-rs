@@ -8,7 +8,7 @@ use crate::dll;
 use crate::steam;
 use crate::steam_state::SteamState;
 
-/// 用户从按钮触发的组合操作（见 CONTEXT.md「操作（Action）」）。
+/// 用户从按钮触发的组合操作（见 GLOSSARY.md「操作（Action）」）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Action {
     ApplyAndLaunch,

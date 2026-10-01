@@ -1,4 +1,4 @@
-# OpenSteamTool Manager Context
+# OpenSteamTool Manager Glossary
 
 Windows 原生工具，管理 Steam 补丁的部署/卸载与在线更新（Rust + egui 桌面 GUI，单二进制）。
 

@@ -61,7 +61,7 @@ git push origin v1.0.0
 
 ## 术语
 
-补丁（Patch）、部署（Deploy）、卸载（Uninstall）、操作（Action）、重启（Restart）、本地版本 / 线上版本（Local Version / Online Version，内部概念）、设置向导（Setup Wizard）、应用更新检查（App Update Check）、补丁更新检查（Patch Update Check）、自动隐身（Auto-tray）、最小化隐身（Minimize-to-Tray）——定义见 [CONTEXT.md](CONTEXT.md)。
+补丁（Patch）、部署（Deploy）、卸载（Uninstall）、操作（Action）、重启（Restart）、本地版本 / 线上版本（Local Version / Online Version，内部概念）、设置向导（Setup Wizard）、应用更新检查（App Update Check）、补丁更新检查（Patch Update Check）、自动隐身（Auto-tray）、最小化隐身（Minimize-to-Tray）——定义见 [GLOSSARY.md](GLOSSARY.md)。
 
 ## 源码结构
 

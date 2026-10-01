@@ -2,7 +2,7 @@
 
 use crate::updater::{OnlineInfo, UpdateError};
 
-/// 线上更新检查结果状态（唯一事实源；「更新流程」词条见 CONTEXT.md）。
+/// 线上更新检查结果状态（唯一事实源；「更新流程」词条见 GLOSSARY.md）。
 #[derive(Clone, Debug)]
 pub enum FlowState {
     Idle,

@@ -12,7 +12,7 @@
 ## 修订（#27：配置编辑器与 OnlineFix 预设移除，3008a06）
 
 设置重设计移除「配置编辑器」与「OnlineFix 启动预设」两个功能（3008a06，Refs #27；
-CONTEXT.md 词条与 README 同步删除）。随它们消亡的错误家族同步退出：
+GLOSSARY.md 词条与 README 同步删除）。随它们消亡的错误家族同步退出：
 `config_edit_error_text` / `of_error_text` / `onlinefix_error` / `VdfStructureError` /
 `of_status_line` 及对应单测全部删除，`Strings` 中不再有这些方法。仍存活的映射：
 `update_error` / `workflow_error_text` / `precheck_text` /

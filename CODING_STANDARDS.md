@@ -20,14 +20,14 @@ Delete the comment in your head and re-read the code. If a reader would still wr
 
 - A doc comment on an item whose contract is not visible in its name and signature: invariants, panics, error and degradation behavior, or special compatibility requirements.
 - An implementation comment for a hidden constraint, counterintuitive behavior, historical pitfall, or compatibility requirement — state the reason, not the mechanics.
-- A short in-line pointer to where the full reasoning lives: `ADR-0012`, `CONTEXT.md「忙碌门禁」`, `#26`. Cite it; do not reproduce it in the source.
+- A short in-line pointer to where the full reasoning lives: `ADR-0012`, `GLOSSARY.md「忙碌门禁」`, `#26`. Cite it; do not reproduce it in the source.
 
 ### Not allowed
 
 - Restating the code: narrating the next statement (`// 启动 → 隐藏。`), summarizing the function body, or echoing the signature and parameter names.
 - Section and banner dividers (`// ---------- 派生函数 ----------`, `// ==================== 状态机转移 ====================`). Extract a function, module, or file instead.
 - Commented-out code. Git keeps the history; delete it.
-- Changelog and provenance narration in source (`此前…`, `旧实现…`, `自 ui.rs 迁入`, `previously…`, `moved from…`). The commit message, ADR, or `CONTEXT.md` owns that.
+- Changelog and provenance narration in source (`此前…`, `旧实现…`, `自 ui.rs 迁入`, `previously…`, `moved from…`). The commit message, ADR, or `GLOSSARY.md` owns that.
 - `TODO` / `FIXME` with no owner and issue. New ones are `TODO(#NN): …`; never add a bare one.
 - A doc comment on every field, variant, or constant by reflex. Document the type once, then only the members whose meaning the name does not carry.
 
@@ -40,7 +40,7 @@ Delete the comment in your head and re-read the code. If a reader would still wr
 
 - Edit comments whole-sentence. Delete a doc block entirely, or keep only lines that form complete, self-contained sentences. Never leave orphaned continuation lines — a leftover that starts with `或` / `（` / `、` or that lost its subject (`/// 是否为空都不能落「已是最新」` without the `文件缺失时无论线上版本` lead-in). After deleting, re-read every kept line and fold fragments back into complete sentences.
 - Rewrite the whole sentence when deleting its premise would change its meaning. `向导步骤 2 拒绝空路径，设置页允许空，启动回退视为未设置` must not shrink to `向导步骤 2 拒绝空路径…共用同一口径` — the surviving text would now contradict the code (all subjects read as rejecting empty paths).
-- Never delete load-bearing contracts: `SAFETY:` notes on `unsafe` blocks, decision tables/matrices, `panic`/error/idempotency semantics, compatibility and fallback constraints (`空串 = 未设置`, `缺省启用`), and ADR/issue/CONTEXT pointers.
+- Never delete load-bearing contracts: `SAFETY:` notes on `unsafe` blocks, decision tables/matrices, `panic`/error/idempotency semantics, compatibility and fallback constraints (`空串 = 未设置`, `缺省启用`), and ADR/issue/GLOSSARY pointers.
 - When trimming history (`此前…`, `#NN 回归修复` labels), drop the narration but keep the constraint and the pointer it carried.
 - A comment-cleanup diff touches comments only: no code edits and no reformatting of neighboring code.
 

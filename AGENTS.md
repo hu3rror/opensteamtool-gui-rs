@@ -10,7 +10,7 @@ Five canonical triage labels, each label string equal to its name: `needs-triage
 
 ### Domain docs
 
-Single-context: a root `CONTEXT.md` plus `docs/adr/` for decisions. See `docs/agents/domain.md`.
+Single-context: a root `GLOSSARY.md` plus `docs/adr/` for decisions. See `docs/agents/domain.md`.
 
 ### PowerShell baseline
 

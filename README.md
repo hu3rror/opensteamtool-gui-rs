@@ -61,7 +61,7 @@ You can also trigger it manually from the Actions tab.
 
 ## Terminology
 
-Patch, Deploy, Uninstall, Action, Restart, Local Version / Online Version (internal-only), Setup Wizard, App Update Check, Patch Update Check, Auto-tray, Minimize-to-Tray — definitions in [CONTEXT.md](CONTEXT.md).
+Patch, Deploy, Uninstall, Action, Restart, Local Version / Online Version (internal-only), Setup Wizard, App Update Check, Patch Update Check, Auto-tray, Minimize-to-Tray — definitions in [GLOSSARY.md](GLOSSARY.md).
 
 ## Source layout
 

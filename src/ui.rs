@@ -435,9 +435,9 @@ pub struct App {
     steam_monitor: SteamMonitor,
     steam_state: Arc<SteamState>,
     local_version: Option<String>,
-    /// 在线更新「检查更新」流程（唯一事实源 + 派生，见 CONTEXT.md「更新流程」）。
+    /// 在线更新「检查更新」流程（唯一事实源 + 派生，见 GLOSSARY.md「更新流程」）。
     update_flow: UpdateFlow,
-    /// 交互类后台操作互斥门禁（同时刻仅一个操作在途；见 CONTEXT.md「忙碌门禁」）。
+    /// 交互类后台操作互斥门禁（同时刻仅一个操作在途；见 GLOSSARY.md「忙碌门禁」）。
     gate: BusyGate,
     confirm: Option<Action>,
     notice: Option<Notice>,
