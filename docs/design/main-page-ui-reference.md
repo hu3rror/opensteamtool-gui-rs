@@ -175,10 +175,10 @@ Implementation Tuning
 
 未经 ADR / Spec 变更，不自行修改。
 
-> **深浅色切换的状态**：Light Mode 色板（L1）已定稿（§10），但
-> 「切换功能」未实现——无切换入口、无持久化字段、无运行时模式选择。
-> 本次 Main Page 重写只落地 Dark（B），L1 值仅存于 §10，不进代码。
-> 切换功能的实现时机另行立项，届时按 §47/§48 架构接入。
+> **深浅色切换的状态**：已实现（ADR-0016 / #39）。Light Mode 色板（L1）已定稿（§10）
+> 并接线：`Palette { dark(), light() }` 双色源、config `theme` 三态偏好、System 模式
+> 跟随系统（含运行时变化与原生标题栏联动）。本节 Locked 内容为 Main Page 重写时的
+> 定稿；切换实现细节以 ADR-0016 为准。
 
 ## Tunable
 
@@ -412,10 +412,10 @@ eyebrow       “PATCH”（双语一致，小号大写英文，§14）
 
 ### Light Mode Palette（已定稿）：L1 — Ice Mist
 
-> **状态：切换功能尚未实现，本次 Main Page 重写只落实 Dark（B）。**
-> L1 为未来 Light Mode 的定稿色源（原型定稿，见 §12）；色值已定稿但
-> 不接线、不做切换入口/持久化。实现时仅在 `theme.rs` 预留 `Palette::light()`
-> 数据（§47/§48 架构），等切换功能立项后启用。
+> **状态：已接线（ADR-0016 / #39）**——Main Page 重写当时只落实 Dark（B），
+> 切换功能已另行立项实现：L1 为已启用的 Light Mode 定稿色源（原型定稿，见 §12），
+> 色值以 `src/theme.rs` 的 `Palette::light()` 为准（L1 accent hover 为定稿槽值、
+> 对比度敏感项向黑混、警戒组由 Warning Blue 派生、GitHub mark 保留黑 mark，见 ADR-0016）。
 
 ### Character
 
@@ -454,7 +454,7 @@ Warning Blue     #3E6F9E
 不混用其他 Palette 方向（A / C / D / E、L2 / L3 已评估未选用，见 §12）。
 
 Dark（B）与 Light（L1）是同一品牌的两套已定稿色源，各自独立存在；
-本次实现只落 Dark。
+切换功能已实现（ADR-0016），两套色源分别对应 `Palette::dark()` / `Palette::light()`。
 
 所有颜色按单一推导链：
 
@@ -1816,7 +1816,7 @@ AGENTS 修改 Main Page 时：
 6. 优先复用已有抽象。
 7. 不修改已经确定的业务行为。
 8. 不为视觉重构复制新的业务状态源。
-9. 不引入无关功能（含深浅色切换：本次不实现，见 §4）。
+9. 不引入无关功能（深浅色切换已单独立项实现，见 ADR-0016，不属于 Main Page 改动范围）。
 10. 不为了视觉效果引入不必要的新依赖。
 
 ## 48.1 视觉以原型渲染为准（§3）
@@ -1826,6 +1826,12 @@ Main Page 的视觉呈现以 `prototypes/main-page-ui-prototype.html` 的 B / L1
 （用户裁决）。原型是 throwaway 视觉参考，不是运行时资源。
 
 ## 48.2 深浅切换分离（本次只落 Dark）
+
+> **状态更新（ADR-0016 / #39）**：切换功能已实现——语义槽结构体化为
+> `Palette { dark(), light() }`（§10 L1 已接线）、config 新增 `theme` 三态字段、
+> `install_theme` 按双色板装配 `Visuals::dark/light`、运行时每帧按 `ctx.theme()`
+> 解析（System 模式跟随 OS 与原生标题栏）。下方条款为 Main Page 重写时的历史
+> 约束，其中「不新增」清单与「L1 不进代码」已作废；实现细节以 ADR-0016 为准。
 
 * `theme.rs` 的语义槽值改为 Dark（B）色值；UI 只消费语义槽/派生函数，
   不出现内联色值（既有源码扫描守卫测试继续生效）。
