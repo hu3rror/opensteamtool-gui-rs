@@ -1,25 +1,30 @@
 //! 语义色板（ADR-0010）：全仓库唯一的色值来源；hover / 徽章浅底 / selection 由派生函数产出，不写死新色值。
+//! 色值 = Dark（B）定稿（spec §10 Deep Navy / Ice Blue）；Light（L1）不进代码（spec §48.2）。
 
 use eframe::egui::Color32;
 
-pub const ACCENT: Color32 = Color32::from_rgb(0x0F, 0x6C, 0xBD);
-pub const SUCCESS: Color32 = Color32::from_rgb(0x16, 0xA3, 0x4A);
-pub const WARN: Color32 = Color32::from_rgb(0xB4, 0x53, 0x09);
-pub const DANGER: Color32 = Color32::from_rgb(0xDC, 0x26, 0x26);
-pub const INK: Color32 = Color32::from_rgb(0x0F, 0x17, 0x2A);
-pub const SUB: Color32 = Color32::from_rgb(0x33, 0x41, 0x55);
-pub const WEAK: Color32 = Color32::from_rgb(0x64, 0x74, 0x8B);
-pub const PANEL: Color32 = Color32::from_rgb(0xF8, 0xF9, 0xFA);
-pub const CARD: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xFF);
-/// 反色白（深底按钮文字；与卡片底同值不同槽）。
+pub const ACCENT: Color32 = Color32::from_rgb(0x5C, 0x91, 0xC7);
+pub const SUCCESS: Color32 = Color32::from_rgb(0x6B, 0xA8, 0x8F);
+pub const WARN: Color32 = Color32::from_rgb(0xC3, 0x9A, 0x5B);
+pub const DANGER: Color32 = Color32::from_rgb(0xC9, 0x79, 0x79);
+/// 主文字（Dark 下为浅色，见 spec §10 Text Primary）。
+pub const INK: Color32 = Color32::from_rgb(0xE8, 0xED, 0xF3);
+pub const SUB: Color32 = Color32::from_rgb(0xA9, 0xB5, 0xC3);
+pub const WEAK: Color32 = Color32::from_rgb(0x77, 0x85, 0x96);
+/// 窗口页面底（Background）。
+pub const PANEL: Color32 = Color32::from_rgb(0x0F, 0x15, 0x1C);
+pub const CARD: Color32 = Color32::from_rgb(0x15, 0x1E, 0x28);
+/// 反色白（深底按钮文字）。
 pub const WHITE: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xFF);
-pub const BORDER: Color32 = Color32::from_rgb(0xE2, 0xE8, 0xF0);
-pub const ENTRY: Color32 = Color32::from_rgb(0xCB, 0xD5, 0xE1);
+pub const BORDER: Color32 = Color32::from_rgb(0x29, 0x37, 0x46);
+/// 控件层次/描边（Surface Elevated 的深色对偶：比 hairline 暗一档，spec §10）。
+pub const ENTRY: Color32 = Color32::from_rgb(0x1C, 0x28, 0x35);
 
-pub const CAUTION_BG: Color32 = Color32::from_rgb(0xF0, 0xF9, 0xFF);
-pub const CAUTION_HOVER: Color32 = Color32::from_rgb(0xE0, 0xF2, 0xFE);
-pub const CAUTION_FG: Color32 = Color32::from_rgb(0x02, 0x84, 0xC7);
-pub const CAUTION_BORDER: Color32 = Color32::from_rgb(0x7D, 0xD3, 0xFC);
+/// 警戒组（ADR-0010 唯一写死例外）：Warning Secondary Blue 家族，仅「退出 Steam 并卸载补丁」。
+pub const CAUTION_BG: Color32 = Color32::from_rgb(0x1A, 0x2A, 0x3D);
+pub const CAUTION_HOVER: Color32 = Color32::from_rgb(0x23, 0x37, 0x4F);
+pub const CAUTION_FG: Color32 = Color32::from_rgb(0x58, 0x7A, 0x9D);
+pub const CAUTION_BORDER: Color32 = Color32::from_rgb(0x4A, 0x6E, 0x93);
 
 const SOLID_HOVER: f32 = 0.92;
 const NEUTRAL_HOVER: f32 = 0.9;
@@ -59,11 +64,13 @@ pub struct ButtonPalette {
     pub border: Option<Color32>,
 }
 
-/// 按钮样式语义名（对齐操作语义；新增样式只加变体，不新增色值）。
+/// 按钮样式语义名（对齐操作语义；spec §18 起 Primary CTA 统一 Solid Brand Blue，Deploy 绿废止）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ButtonStyle {
-    Deploy,
     Primary,
+    /// ADR-0010 警戒组样式表契约保留（主页面现为 inline 警示行消费 CAUTION_FG；
+    /// 按钮形态未在本次主页面使用，禁删以防 Deploy 绿/警戒按钮回归样式分裂）。
+    #[allow(dead_code)]
     Caution,
     Neutral,
 }
@@ -71,12 +78,6 @@ pub enum ButtonStyle {
 impl ButtonStyle {
     pub fn palette(self) -> ButtonPalette {
         match self {
-            ButtonStyle::Deploy => ButtonPalette {
-                bg: SUCCESS,
-                hover: darken(SUCCESS, SOLID_HOVER),
-                fg: WHITE,
-                border: None,
-            },
             ButtonStyle::Primary => ButtonPalette {
                 bg: ACCENT,
                 hover: accent_hover(),
@@ -115,8 +116,8 @@ mod tests {
             darken(Color32::WHITE, 0.9),
             Color32::from_rgb(229, 229, 229)
         );
-        assert_eq!(darken(SUCCESS, 0.92), Color32::from_rgb(0x14, 0x95, 0x44));
-        assert_eq!(darken(ACCENT, 0.92), Color32::from_rgb(0x0D, 0x63, 0xAD));
+        assert_eq!(darken(SUCCESS, 0.92), Color32::from_rgb(0x62, 0x9A, 0x83));
+        assert_eq!(darken(ACCENT, 0.92), Color32::from_rgb(0x54, 0x85, 0xB7));
         assert_eq!(darken(ACCENT, 0.0), Color32::from_rgb(0, 0, 0));
     }
 
@@ -124,41 +125,41 @@ mod tests {
     fn blend_golden_values() {
         assert_eq!(blend(SUCCESS, WHITE, 0.0), SUCCESS);
         assert_eq!(blend(SUCCESS, WHITE, 1.0), WHITE);
-        assert_eq!(blend(SUCCESS, WHITE, 0.9), Color32::from_rgb(232, 246, 237));
-        assert_eq!(blend(ACCENT, WHITE, 0.82), Color32::from_rgb(212, 229, 243));
+        assert_eq!(
+            blend(SUCCESS, WHITE, 0.9),
+            Color32::from_rgb(0xF0, 0xF6, 0xF4)
+        );
+        assert_eq!(
+            blend(ACCENT, WHITE, 0.82),
+            Color32::from_rgb(0xE2, 0xEB, 0xF5)
+        );
     }
 
     #[test]
     fn derived_helpers_golden_values() {
-        assert_eq!(badge_bg(SUCCESS), Color32::from_rgb(232, 246, 237));
-        assert_eq!(selection_bg(), Color32::from_rgb(212, 229, 243));
+        assert_eq!(badge_bg(SUCCESS), Color32::from_rgb(0xF0, 0xF6, 0xF4));
+        assert_eq!(selection_bg(), Color32::from_rgb(0xE2, 0xEB, 0xF5));
     }
 
     #[test]
     fn button_palette_full_table() {
-        let deploy = ButtonStyle::Deploy.palette();
-        assert_eq!(deploy.bg, Color32::from_rgb(0x16, 0xA3, 0x4A));
-        assert_eq!(deploy.hover, Color32::from_rgb(0x14, 0x95, 0x44));
-        assert_eq!(deploy.fg, Color32::from_rgb(0xFF, 0xFF, 0xFF));
-        assert_eq!(deploy.border, None);
-
         let primary = ButtonStyle::Primary.palette();
-        assert_eq!(primary.bg, Color32::from_rgb(0x0F, 0x6C, 0xBD));
-        assert_eq!(primary.hover, Color32::from_rgb(0x0D, 0x63, 0xAD));
+        assert_eq!(primary.bg, Color32::from_rgb(0x5C, 0x91, 0xC7));
+        assert_eq!(primary.hover, Color32::from_rgb(0x54, 0x85, 0xB7));
         assert_eq!(primary.fg, Color32::from_rgb(0xFF, 0xFF, 0xFF));
         assert_eq!(primary.border, None);
 
         let caution = ButtonStyle::Caution.palette();
-        assert_eq!(caution.bg, Color32::from_rgb(0xF0, 0xF9, 0xFF));
-        assert_eq!(caution.hover, Color32::from_rgb(0xE0, 0xF2, 0xFE));
-        assert_eq!(caution.fg, Color32::from_rgb(0x02, 0x84, 0xC7));
-        assert_eq!(caution.border, Some(Color32::from_rgb(0x7D, 0xD3, 0xFC)));
+        assert_eq!(caution.bg, Color32::from_rgb(0x1A, 0x2A, 0x3D));
+        assert_eq!(caution.hover, Color32::from_rgb(0x23, 0x37, 0x4F));
+        assert_eq!(caution.fg, Color32::from_rgb(0x58, 0x7A, 0x9D));
+        assert_eq!(caution.border, Some(Color32::from_rgb(0x4A, 0x6E, 0x93)));
 
         let neutral = ButtonStyle::Neutral.palette();
-        assert_eq!(neutral.bg, Color32::from_rgb(0xFF, 0xFF, 0xFF));
-        assert_eq!(neutral.hover, Color32::from_rgb(0xE5, 0xE5, 0xE5));
-        assert_eq!(neutral.fg, Color32::from_rgb(0x33, 0x41, 0x55));
-        assert_eq!(neutral.border, Some(Color32::from_rgb(0xCB, 0xD5, 0xE1)));
+        assert_eq!(neutral.bg, Color32::from_rgb(0x15, 0x1E, 0x28));
+        assert_eq!(neutral.hover, Color32::from_rgb(0x12, 0x1B, 0x24));
+        assert_eq!(neutral.fg, Color32::from_rgb(0xA9, 0xB5, 0xC3));
+        assert_eq!(neutral.border, Some(Color32::from_rgb(0x1C, 0x28, 0x35)));
     }
 
     #[test]
@@ -167,17 +168,13 @@ mod tests {
         let mut distinct = SLOTS.to_vec();
         distinct.sort_by_key(|c| (c.r(), c.g(), c.b()));
         distinct.dedup();
-        assert_eq!(distinct.len(), 11, "仅 card/white 允许同值不同槽");
+        assert_eq!(distinct.len(), 12, "Dark（B）色源 12 槽全异");
     }
 
     #[test]
     fn derived_colors_do_not_occupy_slots() {
         let no_dup = |c: Color32| !SLOTS.contains(&c) && !CAUTION_GROUP.contains(&c);
-        for style in [
-            ButtonStyle::Deploy,
-            ButtonStyle::Primary,
-            ButtonStyle::Neutral,
-        ] {
+        for style in [ButtonStyle::Primary, ButtonStyle::Neutral] {
             let p = style.palette();
             assert!(no_dup(p.hover), "{style:?} hover 占用了槽/警戒色");
             assert_ne!(p.hover, p.bg, "{style:?} hover 与 bg 相同");

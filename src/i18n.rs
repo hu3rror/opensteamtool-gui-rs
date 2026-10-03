@@ -30,11 +30,19 @@ pub struct Strings {
     pub window_title: &'static str,
     pub steam_path_label: &'static str,
     pub browse: &'static str,
-    /// 部署状态卡片标题（词表定名「部署状态 / DEPLOY STATUS」，#36）。
-    pub card2_title: &'static str,
-    pub status_invalid: &'static str,
+    /// 部署状态词条：Hero 大字（spec §15 严格「已应用/未应用」，无前缀符号）。
     pub status_deployed: &'static str,
     pub status_not_deployed: &'static str,
+    /// Hero 补丁操作失败文案（spec §30 Operation Failure）。
+    pub op_failed: &'static str,
+    /// Primary CTA「前往设置修复」（spec §25）。
+    pub pri_fix_path: &'static str,
+    /// Supporting 标题/正文（默认不显示，仅在需解释状态或 Primary 不可用时显示，spec §17）。
+    pub sup_files_title: &'static str,
+    pub sup_path_title: &'static str,
+    pub sup_path_body: &'static str,
+    /// Health Warning 右侧去向提示（点击整行跳 Settings → Steam，spec §24.2）。
+    pub health_go: &'static str,
     pub btn_apply_and_launch: &'static str,
     pub btn_launch_normal: &'static str,
     /// 「启动 Steam」（已应用且 Steam 未运行时；带补丁启动，不言「正常」，见 ADR-0011）。
@@ -47,6 +55,10 @@ pub struct Strings {
     pub main_warning_pending: &'static str,
     pub main_warning_missing: &'static str,
     pub btn_download_and_extract: &'static str,
+    /// Update 按钮位检查中（spec §26.2 Checking，同按钮位 spinner，不进状态栏）。
+    pub up_checking: &'static str,
+    /// Update 检查失败行内结论（spec §26.7）。
+    pub up_check_failed: &'static str,
     pub checking: &'static str,
     pub confirm_title: &'static str,
     pub confirm_close_steam: &'static str,
@@ -229,21 +241,28 @@ impl Strings {
             window_title: "OpenSteamTool 一键管理工具",
             steam_path_label: "路径",
             browse: "浏览...",
-            card2_title: "部署状态",
-            status_invalid: "【未应用】请先指定有效的 Steam 安装路径",
-            status_deployed: "【已应用】OpenSteamTool 补丁已成功生效",
-            status_not_deployed: "【未应用】检测到补丁文件未完整部署",
-            btn_apply_and_launch: "▶ 应用补丁并启动 Steam",
-            btn_launch_normal: "▶ 正常启动 Steam",
-            btn_launch: "▶ 启动 Steam",
-            btn_exit_and_uninstall: "⏏ 退出 Steam 并卸载补丁",
-            btn_uninstall_and_restart: "⏏ 卸载补丁并重启 Steam",
-            btn_restart_steam: "↻ 重启 Steam",
-            hint_download_patch: "补丁未下载：请点击上方「检查补丁更新」下载新版本",
-            main_warning_pending: "⚠ Steam 核心兼容性异常：上游尚未适配此版本（点击前往 设置 → Steam）",
-            main_warning_missing: "⚠ 未找到核心 DLL（steamclient64.dll / steamui.dll）——点击前往 设置 → Steam",
+            // 部署状态词条（spec §15）：Hero 大字。
+            status_deployed: "已应用",
+            status_not_deployed: "未应用",
+            op_failed: "补丁应用失败",
+            pri_fix_path: "前往设置修复",
+            sup_files_title: "补丁未下载",
+            sup_path_title: "Steam 路径无效",
+            sup_path_body: "请在设置中指定有效的 Steam 安装路径",
+            health_go: "设置 →",
+            btn_apply_and_launch: "应用补丁并启动 Steam",
+            btn_launch_normal: "正常启动 Steam",
+            btn_launch: "启动 Steam",
+            btn_exit_and_uninstall: "退出 Steam 并卸载补丁",
+            btn_uninstall_and_restart: "卸载补丁并重启 Steam",
+            btn_restart_steam: "重启 Steam",
+            hint_download_patch: "请点击「检查补丁更新」下载新版本",
+            main_warning_pending: "当前 Steam 尚未适配",
+            main_warning_missing: "未找到 Steam 核心文件",
             btn_download_and_extract: "下载并解压新版本",
-            checking: "正在检查更新...",
+            up_checking: "检查中…",
+            up_check_failed: "检查失败",
+            checking: "正在检查补丁…",
             confirm_title: "确认",
             confirm_close_steam: "Steam 正在运行。是否自动关闭 Steam 并继续？",
             yes: "是",
@@ -265,11 +284,11 @@ impl Strings {
             ok_launched: "Steam 已启动",
             ok_restarted: "Steam 已重启",
             ok_downloaded: "新版本下载并解压完成",
-            busy_deploying: "正在部署...",
-            busy_uninstalling: "正在卸载...",
-            busy_launching: "正在启动...",
-            busy_downloading: "正在下载...",
-            busy_killing: "正在关闭 Steam...",
+            busy_deploying: "正在应用补丁…",
+            busy_uninstalling: "正在卸载补丁…",
+            busy_launching: "正在启动 Steam…",
+            busy_downloading: "正在下载补丁…",
+            busy_killing: "正在关闭 Steam…",
             tray_show: "显示",
             tray_quit: "退出",
             btn_uninstall: "卸载补丁",
@@ -349,21 +368,28 @@ impl Strings {
             window_title: "OpenSteamTool Manager",
             steam_path_label: "Path",
             browse: "Browse...",
-            card2_title: "DEPLOY STATUS",
-            status_invalid: "[Not Applied] Please specify a valid Steam path",
-            status_deployed: "[Applied] OpenSteamTool patch is now active",
-            status_not_deployed: "[Not Applied] Patch files incomplete or missing",
-            btn_apply_and_launch: "▶ Apply Patch & Launch Steam",
-            btn_launch_normal: "▶ Launch Steam Normally",
-            btn_launch: "▶ Launch Steam",
-            btn_exit_and_uninstall: "⏏ Exit Steam & Uninstall Patch",
-            btn_uninstall_and_restart: "⏏ Uninstall Patch & Restart Steam",
-            btn_restart_steam: "↻ Restart Steam",
-            hint_download_patch: "Patch not downloaded: click 'Check Patch Update' above to download",
-            main_warning_pending: "⚠ Steam core compatibility issue: this version is not yet supported upstream (click to open Settings → Steam)",
-            main_warning_missing: "⚠ Core DLLs not found (steamclient64.dll / steamui.dll) — click to open Settings → Steam",
+            // 部署状态词条（spec §15）：Hero 大字。
+            status_deployed: "Applied",
+            status_not_deployed: "Not Applied",
+            op_failed: "Failed to apply patch",
+            pri_fix_path: "Open Settings to Fix",
+            sup_files_title: "Patch not downloaded",
+            sup_path_title: "Steam path is invalid",
+            sup_path_body: "Set a valid Steam path in Settings",
+            health_go: "Settings →",
+            btn_apply_and_launch: "Apply Patch & Launch Steam",
+            btn_launch_normal: "Launch Steam Normally",
+            btn_launch: "Launch Steam",
+            btn_exit_and_uninstall: "Exit Steam & Uninstall Patch",
+            btn_uninstall_and_restart: "Uninstall Patch & Restart Steam",
+            btn_restart_steam: "Restart Steam",
+            hint_download_patch: "Click \"Check for Patch Update\" to download the new version",
+            main_warning_pending: "Steam is not yet supported",
+            main_warning_missing: "Steam core files not found",
             btn_download_and_extract: "Download & Extract New Version",
-            checking: "Checking for updates...",
+            up_checking: "Checking…",
+            up_check_failed: "Check failed",
+            checking: "Checking for patch updates…",
             confirm_title: "Confirm",
             confirm_close_steam: "Steam is running. Close Steam automatically and continue?",
             yes: "Yes",
@@ -385,14 +411,14 @@ impl Strings {
             ok_launched: "Steam launched",
             ok_restarted: "Steam restarted",
             ok_downloaded: "New version downloaded & extracted",
-            busy_deploying: "Deploying...",
-            busy_uninstalling: "Uninstalling...",
-            busy_launching: "Launching...",
-            busy_downloading: "Downloading...",
-            busy_killing: "Closing Steam...",
+            busy_deploying: "Applying patch…",
+            busy_uninstalling: "Uninstalling patch…",
+            busy_launching: "Launching Steam…",
+            busy_downloading: "Downloading patch…",
+            busy_killing: "Closing Steam…",
             tray_show: "Show",
             tray_quit: "Quit",
-            btn_uninstall: "Remove Patch",
+            btn_uninstall: "Uninstall Patch",
             tray_minimize: "Minimize to tray automatically",
             tray_restart: "Restart Steam",
             settings_title: "Settings",
@@ -492,7 +518,7 @@ mod tests {
         let en = Strings::new(Lang::En);
         assert!(zh.hint_download_patch.contains("检查补丁更新"));
         assert!(!zh.hint_download_patch.contains("通用"));
-        assert!(en.hint_download_patch.contains("Check Patch Update"));
+        assert!(en.hint_download_patch.contains("Check for Patch Update"));
         assert!(!en.hint_download_patch.contains("General"));
     }
 
@@ -603,15 +629,23 @@ mod tests {
         let zh = Strings::new(Lang::Zh);
         let en = Strings::new(Lang::En);
         for (lang, s) in [(Lang::Zh, &zh), (Lang::En, &en)] {
-            assert!(s.btn_exit_and_uninstall.starts_with('⏏'));
-            assert!(s.btn_uninstall_and_restart.starts_with('⏏'));
-            assert!(s.btn_apply_and_launch.starts_with('▶'));
-            assert!(s.btn_launch.starts_with('▶'));
-            assert!(s.btn_launch_normal.starts_with('▶'));
-            assert!(s.btn_restart_steam.starts_with('↻'));
+            // 图标化后按钮文案不得再带 Unicode 符号（spec §36 由程序化图标代替 ▶↻⏏⚙⚠）。
+            for t in [
+                s.btn_exit_and_uninstall,
+                s.btn_uninstall_and_restart,
+                s.btn_apply_and_launch,
+                s.btn_launch,
+                s.btn_launch_normal,
+                s.btn_restart_steam,
+                s.main_warning_pending,
+                s.main_warning_missing,
+            ] {
+                assert!(
+                    !t.chars().any(|c| ['▶', '⏏', '↻', '⚙', '⚠'].contains(&c)),
+                    "{lang:?} 文案 {t} 残留 Unicode 符号"
+                );
+            }
             let statusish = [
-                s.card2_title,
-                s.status_invalid,
                 s.status_deployed,
                 s.status_not_deployed,
                 s.ok_deployed,
@@ -630,8 +664,10 @@ mod tests {
                 );
             }
         }
-        assert_eq!(zh.card2_title, "部署状态");
-        assert_eq!(en.card2_title, "DEPLOY STATUS");
+        assert_eq!(zh.status_deployed, "已应用");
+        assert_eq!(en.status_deployed, "Applied");
+        assert_eq!(zh.status_not_deployed, "未应用");
+        assert_eq!(en.status_not_deployed, "Not Applied");
         assert_eq!(zh.ok_deployed, "补丁已应用");
         assert_eq!(en.ok_deployed, "Patch applied");
     }

@@ -18,6 +18,7 @@ const KILL_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// - [`Self::group_running`]：进程组判定（路径前缀，彻底），写 `localconfig.vdf`
 ///   等需要「Steam 彻底未运行」的门闩用。
 /// - [`Self::kill`]：终止整个进程组并轮询等待全部消失。
+///
 /// `System` 跨线程共享，内部以 `Mutex` 串行化；kill 用多段锁——等待期不阻塞其他查询。
 #[derive(Debug)]
 pub struct SteamState {

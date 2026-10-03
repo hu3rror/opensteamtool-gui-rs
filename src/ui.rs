@@ -13,12 +13,16 @@ use crate::compat_flow::{self, CompatFlow, CompatSummary};
 use crate::config::{self, Config, Language};
 use crate::dll::{self, DeployStatus};
 use crate::i18n::{Lang, Strings};
+use crate::main_page::{
+    self, IconKind, MainPageVm, PrimaryAction, PrimaryKind, SecondaryAction, UpdateConclusion,
+    UpdateKind,
+};
 use crate::process::{self, SteamEvent, SteamMonitor};
 use crate::steam;
 use crate::steam_state::SteamState;
 use crate::theme::{self, ButtonPalette, ButtonStyle};
 use crate::tray::{Tray, TrayAction};
-use crate::update_flow::{UpdateFlow, UpdateNotice};
+use crate::update_flow::UpdateFlow;
 use crate::updater::{self, OnlineInfo, UpdateError};
 use crate::wizard::{self, Step as WizardStep};
 use crate::workflow::{self, Action};
@@ -32,6 +36,15 @@ const SETTINGS_DIALOG_WIDTH: f32 = 580.0;
 const SETTINGS_DIALOG_SKELETON_H: f32 = 208.0;
 const SETTINGS_SCROLL_MIN_H: f32 = 200.0;
 
+/// 主页面内容列最大宽度（spec §40 Tunable 基线：Hero max-width 600 lp）。
+const MAIN_COLUMN_WIDTH: f32 = 600.0;
+
+/// 圆角层级（spec §38 基线：Hero 18 / CTA 10 / Row 10 / Small 7 lp）。
+const R_HERO: u8 = 18;
+const R_CTA: u8 = 10;
+const R_ROW: u8 = 10;
+const R_SMALL: u8 = 7;
+
 fn settings_scroll_height(window_inner_h: f32) -> f32 {
     (window_inner_h - SETTINGS_DIALOG_SKELETON_H).clamp(SETTINGS_SCROLL_MIN_H, 420.0)
 }
@@ -41,13 +54,14 @@ fn autosize_inner_height(content_h: f32) -> f32 {
 }
 
 fn install_theme(ctx: &egui::Context) {
-    let mut visuals = egui::Visuals::light();
+    // Dark（B）唯一基线（spec §48.2：不做深浅切换；egui 内建控件用深色语义）。
+    let mut visuals = egui::Visuals::dark();
     visuals.panel_fill = theme::PANEL;
-    visuals.window_fill = theme::CARD;
+    visuals.window_fill = theme::PANEL;
     visuals.faint_bg_color = theme::PANEL;
-    visuals.extreme_bg_color = theme::PANEL; // TextEdit 底色（旧 FILL_SECONDARY 并入 panel 槽）
-    visuals.widgets.inactive.weak_bg_fill = theme::CARD;
-    visuals.widgets.open.weak_bg_fill = theme::CARD;
+    visuals.extreme_bg_color = theme::ENTRY; // TextEdit 底（控件层次槽）
+    visuals.widgets.inactive.weak_bg_fill = theme::ENTRY;
+    visuals.widgets.open.weak_bg_fill = theme::ENTRY;
     visuals.override_text_color = Some(theme::INK);
     let radius = egui::CornerRadius::same(8);
     for w in [
@@ -62,7 +76,7 @@ fn install_theme(ctx: &egui::Context) {
     visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, theme::ENTRY);
     visuals.widgets.inactive.bg_fill = theme::CARD;
     visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, theme::ACCENT);
-    visuals.widgets.hovered.bg_fill = theme::PANEL;
+    visuals.widgets.hovered.bg_fill = theme::ENTRY;
     visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, theme::accent_hover());
     visuals.selection.bg_fill = theme::selection_bg();
     visuals.selection.stroke = egui::Stroke::new(1.0, theme::ACCENT);
@@ -70,7 +84,7 @@ fn install_theme(ctx: &egui::Context) {
     ctx.set_visuals(visuals);
     ctx.all_styles_mut(|s| {
         s.spacing.item_spacing = egui::vec2(10.0, 10.0);
-        s.spacing.window_margin = egui::Margin::symmetric(20, 18);
+        s.spacing.window_margin = egui::Margin::symmetric(16, 18);
         s.spacing.button_padding = egui::vec2(14.0, 7.0);
     });
 }
@@ -144,23 +158,16 @@ fn gear_button(ui: &mut egui::Ui, tooltip: &str) -> egui::Response {
         let hovered = response.hovered();
         paint_button_chrome(ui, rect, hovered, palette);
         let color = if hovered { theme::ACCENT } else { palette.fg };
-        paint_gear(ui.painter(), rect.center(), color);
+        main_page::paint_icon(
+            ui.painter(),
+            IconKind::Settings,
+            rect.center(),
+            color,
+            15.0,
+            0.0,
+        );
     }
     response
-}
-
-fn paint_gear(painter: &egui::Painter, center: egui::Pos2, color: egui::Color32) {
-    let ring_r = 6.5;
-    let ring_w = 2.0;
-    let tooth_r = 1.7;
-    painter.circle_stroke(center, ring_r, egui::Stroke::new(ring_w, color));
-    let tooth_center_r = ring_r + ring_w / 2.0 + tooth_r * 0.7;
-    for i in 0..8 {
-        let a = i as f32 * std::f32::consts::FRAC_PI_4;
-        let p = center + egui::vec2(a.cos() * tooth_center_r, a.sin() * tooth_center_r);
-        painter.circle_filled(p, tooth_r, color);
-    }
-    painter.circle_filled(center, 1.6, color);
 }
 
 fn github_link_button(
@@ -294,26 +301,12 @@ fn render_notice(s: &Strings, notice: &Notice) -> (bool, String) {
     }
 }
 
-/// **永不渲染补丁版本号**（#30 验收）：版本比较只在流程内部完成，三种结果均无版本数字。
-fn render_patch_notice(s: &Strings, n: &UpdateNotice) -> (bool, String) {
-    match n {
-        UpdateNotice::UpToDate => (true, s.settings_patch_up_to_date.to_string()),
-        UpdateNotice::NewVersion => (true, s.settings_patch_new_version.to_string()),
-        UpdateNotice::CheckFailed(e) => (false, s.update_error(e)),
-    }
-}
-
 fn health_warning(s: &Strings, summary: CompatSummary) -> Option<&'static str> {
     match summary {
         CompatSummary::Pending => Some(s.main_warning_pending),
         CompatSummary::Missing => Some(s.main_warning_missing),
         _ => None,
     }
-}
-
-fn row_button_width(available: f32, gap: f32, item_spacing: f32, count: u32) -> f32 {
-    let n = count.max(1) as f32;
-    ((available - (n - 1.0) * (gap + item_spacing)) / n).max(150.0)
 }
 
 enum Msg {
@@ -345,6 +338,14 @@ enum Notice {
     Downloaded(Result<(), UpdateError>),
     WorkflowDone(Action, Result<(), workflow::WorkflowError>),
     Precheck(workflow::Precheck),
+}
+
+/// 主页面交互意图（Hero / Secondary / Update 按钮位收集后统一处理）。
+enum MainEvent {
+    Action(Action),
+    FixPath,
+    Check,
+    Download(OnlineInfo),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1016,6 +1017,15 @@ impl App {
         self.start_action(ctx, action, kill_first);
     }
 
+    /// 免确认执行：仅「卸载补丁」行使用（spec §45 卸载补丁确认 No；
+    /// §20.3 确认框不得扩散到 Steam 未运行时的卸载——该行渲染即未运行态，点击瞬间也不因竞态误弹）。
+    fn request_action_quiet(&mut self, ctx: &egui::Context, action: Action) {
+        if self.gate.is_busy() {
+            return;
+        }
+        self.start_action(ctx, action, false);
+    }
+
     fn start_action(&mut self, ctx: &egui::Context, action: Action, kill_first: bool) {
         let dll_dir = dll::dll_dir();
         let steam_dir = PathBuf::from(self.steam_path.trim());
@@ -1407,19 +1417,40 @@ impl App {
             dll::dll_dir(),
         ));
     }
-    fn top_bar(&mut self, ui: &mut egui::Ui) {
-        // 标题按固定行高手绘 LEFT_CENTER 锚点，与右侧按钮垂直同轴（勿回退 with_layout，见 ADR-0010）。
+    /// 顶部应用头：品牌 mark + 名称 + 设置齿轮（spec §7）。
+    fn header(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            let h = 28.0;
-            let font = egui::FontId::proportional(16.0);
-            let tw = text_width(ui, self.strings.app_title, &font, theme::INK);
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(tw, h), egui::Sense::hover());
-            ui.painter().text(
-                rect.left_center(),
-                egui::Align2::LEFT_CENTER,
-                self.strings.app_title,
-                font,
-                theme::INK,
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::hover());
+            if ui.is_rect_visible(rect) {
+                let painter = ui.painter();
+                painter.rect(
+                    rect,
+                    egui::CornerRadius::same(R_SMALL),
+                    theme::ACCENT,
+                    egui::Stroke::NONE,
+                    egui::StrokeKind::Inside,
+                );
+                main_page::paint_icon(
+                    painter,
+                    IconKind::Play,
+                    rect.center() + egui::vec2(-3.0, 0.0),
+                    theme::WHITE,
+                    11.0,
+                    0.0,
+                );
+                // mark 右下角白环（原型 brand SVG 的环绕圆）。
+                painter.circle_stroke(
+                    rect.center() + egui::vec2(8.5, 8.5),
+                    3.4,
+                    egui::Stroke::new(1.6, theme::WHITE),
+                );
+            }
+            ui.add_space(11.0);
+            ui.label(
+                egui::RichText::new(self.strings.app_title)
+                    .size(15.0)
+                    .strong()
+                    .color(theme::INK),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if gear_button(ui, self.strings.settings_gear_tooltip).clicked() {
@@ -1427,25 +1458,65 @@ impl App {
                 }
             });
         });
-        ui.add_space(6.0);
+        // header 底部 hairline（与状态栏 dock 顶部分隔线一致，spec §32）。
+        let y = ui.cursor().top();
+        ui.painter().line_segment(
+            [
+                egui::pos2(ui.min_rect().left(), y),
+                egui::pos2(ui.min_rect().left() + ui.available_width(), y),
+            ],
+            egui::Stroke::new(1.0, theme::BORDER),
+        );
+        ui.add_space(12.0);
     }
 
+    /// Health Warning（spec §24）：仅「上游尚未适配 / 未找到核心 DLL」两态；Amber + 整行可点跳 Settings → Steam。
     fn health_warning_line(&mut self, ui: &mut egui::Ui) {
         let summary = self.flow.display().summary;
         let Some(text) = health_warning(&self.strings, summary) else {
             return;
         };
-        let resp = ui.add(
-            egui::Button::new(egui::RichText::new(text).size(12.5).color(theme::DANGER))
-                .fill(theme::badge_bg(theme::DANGER))
-                .stroke(egui::Stroke::new(1.0, theme::DANGER))
-                .corner_radius(egui::CornerRadius::same(8))
-                .min_size(egui::vec2(ui.available_width(), 34.0)),
-        );
-        if resp.clicked() {
+        let (rect, response) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 38.0), egui::Sense::click());
+        if ui.is_rect_visible(rect) {
+            let painter = ui.painter();
+            let bg = theme::blend(theme::WARN, theme::PANEL, 0.86);
+            let border_color = theme::blend(theme::WARN, theme::PANEL, 0.6);
+            let fg = theme::blend(theme::WARN, theme::WHITE, 0.2);
+            painter.rect(
+                rect,
+                egui::CornerRadius::same(R_ROW),
+                bg,
+                egui::Stroke::new(1.0, border_color),
+                egui::StrokeKind::Inside,
+            );
+            main_page::paint_icon(
+                painter,
+                IconKind::Warning,
+                egui::pos2(rect.left() + 16.0, rect.center().y),
+                fg,
+                15.0,
+                0.0,
+            );
+            painter.text(
+                egui::pos2(rect.left() + 38.0, rect.center().y),
+                egui::Align2::LEFT_CENTER,
+                text,
+                egui::FontId::proportional(13.0),
+                fg,
+            );
+            painter.text(
+                egui::pos2(rect.right() - 18.0, rect.center().y),
+                egui::Align2::RIGHT_CENTER,
+                self.strings.health_go,
+                egui::FontId::proportional(12.5),
+                theme::WEAK,
+            );
+        }
+        if response.clicked() {
             self.open_settings(SettingsTab::Steam);
         }
-        ui.add_space(8.0);
+        ui.add_space(12.0);
     }
 
     fn on_compat_event(&mut self, ctx: &egui::Context, event: compat_flow::Event) {
@@ -1696,228 +1767,472 @@ impl App {
         }
     }
 
-    fn card2(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        card_frame().show(ui, |ui| {
-            ui.set_width(ui.available_width()); // 卡片撑满窗口宽度
-            card_title(ui, self.strings.card2_title);
-            ui.add_space(10.0);
-
-            let (text, color) = match self.status {
-                DeployStatus::InvalidPath => (self.strings.status_invalid, theme::WEAK),
-                DeployStatus::Deployed => (self.strings.status_deployed, theme::SUCCESS),
-                DeployStatus::NotDeployed => (self.strings.status_not_deployed, theme::WEAK),
-            };
-            ui.label(egui::RichText::new(text).size(16.0).strong().color(color));
-            ui.add_space(10.0);
-
-            // 可用性与文案由「更新流程」派生（ADR-0011 文件本位判据）；版本号永不渲染（ADR-0014）。
-            let derived = self.update_flow.derived(self.local_known_version());
-            let patch_result = derived
-                .notice
-                .map(|n| render_patch_notice(&self.strings, &n));
-            let patch_info = derived.download.cloned();
-            let checking = self.gate.current() == Some(BusyKind::Checking);
-            let mut do_check = false;
-            let mut do_download: Option<OnlineInfo> = None;
-            ui.horizontal(|ui| {
-                if let Some(info) = &patch_info {
-                    if styled_button(
-                        ui,
-                        self.strings.btn_download_and_extract,
-                        ButtonStyle::Primary,
-                        egui::vec2(180.0, 32.0),
-                        !self.gate.is_busy(),
-                    )
-                    .clicked()
-                    {
-                        do_download = Some(info.clone());
-                    }
-                } else if styled_button(
-                    ui,
-                    self.strings.settings_btn_patch_update_check,
-                    ButtonStyle::Neutral,
-                    egui::vec2(150.0, 32.0),
-                    !self.gate.is_busy(),
-                )
-                .clicked()
-                {
-                    do_check = true;
+    /// Hero Surface：eyebrow → 状态 → supporting → Primary CTA → Patch Update Check（spec §13/§14 顺序）。
+    fn hero_surface(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, vm: &MainPageVm) {
+        let mut event: Option<MainEvent> = None;
+        egui::Frame::new()
+            .fill(theme::CARD)
+            .stroke(egui::Stroke::new(1.0, theme::BORDER))
+            .corner_radius(egui::CornerRadius::same(R_HERO))
+            .inner_margin(egui::Margin::symmetric(30, 24))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                self.hero_eyebrow(ui);
+                ui.add_space(12.0);
+                self.hero_status(ui, vm);
+                ui.add_space(14.0);
+                self.hero_supporting(ui, vm);
+                ui.add_space(20.0);
+                if let Some(e) = self.hero_primary(ui, ctx, vm) {
+                    event = Some(e);
                 }
-                if checking {
-                    ui.label(
-                        egui::RichText::new(self.strings.checking)
-                            .size(12.5)
-                            .color(theme::WEAK),
-                    );
-                } else if let Some((ok, text)) = patch_result {
-                    ui.label(egui::RichText::new(text).size(12.5).color(if ok {
-                        theme::SUCCESS
-                    } else {
-                        theme::DANGER
-                    }));
+                ui.add_space(12.0);
+                if let Some(e) = self.patch_update_check(ui, ctx, vm) {
+                    event = Some(e);
                 }
             });
-            if do_check {
-                self.check_update(ctx);
-            }
-            if let Some(info) = do_download {
-                self.download_update(ctx, info);
-            }
-        });
-        ui.add_space(10.0);
+        match event {
+            Some(MainEvent::Action(action)) => self.request_action(ctx, action),
+            Some(MainEvent::FixPath) => self.open_settings(SettingsTab::Steam),
+            Some(MainEvent::Check) => self.check_update(ctx),
+            Some(MainEvent::Download(info)) => self.download_update(ctx, info),
+            None => {}
+        }
     }
 
-    fn action_area(&mut self, ui: &mut egui::Ui) {
-        let ctx = ui.ctx().clone();
+    /// eyebrow：accent 短条 + 大写 PATCH（spec §14 定稿，双语一致）。
+    fn hero_eyebrow(&self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            let gap = 12.0;
-            let spacing = ui.spacing().item_spacing.x;
-            match self.status {
-                DeployStatus::Deployed if self.steam_running => {
-                    let size = egui::vec2(
-                        row_button_width(ui.available_width(), gap, spacing, 3),
-                        44.0,
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 2.0), egui::Sense::hover());
+            ui.painter().rect_filled(rect, 1.0, theme::ACCENT);
+            ui.add_space(10.0);
+            ui.label(
+                egui::RichText::new(main_page::EYEBROW)
+                    .size(12.0)
+                    .strong()
+                    .color(theme::WEAK),
+            );
+        });
+    }
+
+    /// Hero 状态大字（spec §15/§27/§30/§37：正常态中性主色，语义色只做点缀）。
+    fn hero_status(&self, ui: &mut egui::Ui, vm: &MainPageVm) {
+        use main_page::HeroStatus::*;
+        match vm.hero {
+            Applied => {
+                ui.horizontal(|ui| {
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(24.0, 38.0), egui::Sense::hover());
+                    main_page::paint_icon(
+                        ui.painter(),
+                        IconKind::Check,
+                        rect.center(),
+                        theme::SUCCESS,
+                        17.0,
+                        0.0,
                     );
-                    if styled_button(
-                        ui,
-                        self.strings.btn_exit_and_uninstall,
-                        ButtonStyle::Caution,
-                        size,
-                        !self.gate.is_busy(),
-                    )
-                    .clicked()
-                    {
-                        self.request_action(&ctx, Action::ExitAndUninstall);
+                    ui.add_space(2.0);
+                    ui.label(
+                        egui::RichText::new(self.strings.status_deployed)
+                            .size(36.0)
+                            .strong()
+                            .color(theme::INK),
+                    );
+                });
+            }
+            NotApplied => {
+                ui.label(
+                    egui::RichText::new(self.strings.status_not_deployed)
+                        .size(36.0)
+                        .strong()
+                        .color(theme::INK),
+                );
+            }
+            Busy => {
+                ui.label(
+                    egui::RichText::new(self.busy_stage_text())
+                        .size(36.0)
+                        .strong()
+                        .color(theme::SUB),
+                );
+            }
+            Failed => {
+                ui.label(
+                    egui::RichText::new(self.strings.op_failed)
+                        .size(36.0)
+                        .strong()
+                        .color(theme::DANGER),
+                );
+            }
+        }
+    }
+
+    /// 当前 busy 阶段文案（Hero 与 Primary busy 共享；描述阶段而非按钮名，spec §27）。
+    fn busy_stage_text(&self) -> String {
+        let kind = self.gate.current().expect("busy hero 必有忙碌种类");
+        self.strings.busy_label(kind).to_string()
+    }
+
+    /// Supporting Text（spec §17）：默认不显，仅需解释状态或 Primary 不可用时。
+    fn hero_supporting(&self, ui: &mut egui::Ui, vm: &MainPageVm) {
+        use main_page::Supporting::*;
+        let Some(sup) = vm.supporting else {
+            return;
+        };
+        let (title, body) = match sup {
+            FilesMissing => (
+                self.strings.sup_files_title,
+                self.strings.hint_download_patch,
+            ),
+            PathInvalid => (self.strings.sup_path_title, self.strings.sup_path_body),
+        };
+        ui.label(
+            egui::RichText::new(title)
+                .size(13.5)
+                .strong()
+                .color(theme::INK),
+        );
+        ui.label(egui::RichText::new(body).size(13.5).color(theme::WEAK));
+        ui.add_space(16.0);
+    }
+
+    /// Primary CTA（spec §18/§19）：Solid Brand Blue，单行 Icon+Label 整体居中；busy 原位阶段化。
+    fn hero_primary(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        vm: &MainPageVm,
+    ) -> Option<MainEvent> {
+        let (label, icon, enabled, phase) = match vm.primary.kind {
+            PrimaryKind::BusyStage => {
+                ctx.request_repaint(); // spinner 动画
+                (
+                    self.busy_stage_text(),
+                    IconKind::Spinner,
+                    false,
+                    ctx.input(|i| i.time) as f32,
+                )
+            }
+            PrimaryKind::Action(a) => {
+                let (label, icon) = match a {
+                    PrimaryAction::ApplyAndLaunch => (
+                        self.strings.btn_apply_and_launch.to_string(),
+                        IconKind::Play,
+                    ),
+                    PrimaryAction::Launch => (self.strings.btn_launch.to_string(), IconKind::Play),
+                    PrimaryAction::Restart => (
+                        self.strings.btn_restart_steam.to_string(),
+                        IconKind::Restart,
+                    ),
+                    PrimaryAction::FixPath => {
+                        (self.strings.pri_fix_path.to_string(), IconKind::Settings)
                     }
-                    ui.add_space(gap);
-                    if styled_button(
-                        ui,
-                        self.strings.btn_restart_steam,
-                        ButtonStyle::Neutral,
-                        size,
-                        !self.gate.is_busy(),
-                    )
-                    .clicked()
-                    {
-                        self.request_action(&ctx, Action::Restart);
-                    }
-                    ui.add_space(gap);
-                    if styled_button(
-                        ui,
-                        self.strings.btn_uninstall_and_restart,
-                        ButtonStyle::Neutral,
-                        size,
-                        !self.gate.is_busy(),
-                    )
-                    .clicked()
-                    {
-                        self.request_action(&ctx, Action::UninstallAndRestart);
-                    }
+                };
+                (label, icon, vm.primary.enabled, 0.0)
+            }
+        };
+        let width = 340.0_f32.min(ui.available_width());
+        let size = egui::vec2(width, 44.0);
+        let sense = if enabled {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        };
+        let (rect, response) = ui.allocate_exact_size(size, sense);
+        if ui.is_rect_visible(rect) {
+            let hovered = enabled && response.hovered();
+            let fill = if !enabled {
+                theme::ENTRY
+            } else if hovered {
+                theme::accent_hover()
+            } else {
+                theme::ACCENT
+            };
+            let fg = if enabled { theme::WHITE } else { theme::WEAK };
+            let painter = ui.painter();
+            painter.rect(
+                rect,
+                egui::CornerRadius::same(R_CTA),
+                fill,
+                egui::Stroke::NONE,
+                egui::StrokeKind::Inside,
+            );
+            // Icon + Label 整体居中（spec §18.1：不换行，不为英文缩字）。
+            let font = egui::FontId::proportional(15.0);
+            let tw = text_width(ui, &label, &font, fg);
+            let icon_w = 19.0;
+            let gap = 8.0;
+            let group_w = tw + icon_w + gap;
+            let left = rect.center().x - group_w / 2.0;
+            main_page::paint_icon(
+                painter,
+                icon,
+                egui::pos2(left + icon_w / 2.0, rect.center().y),
+                fg,
+                15.0,
+                phase,
+            );
+            painter.text(
+                egui::pos2(left + icon_w + gap, rect.center().y),
+                egui::Align2::LEFT_CENTER,
+                label,
+                font,
+                fg,
+            );
+        }
+        if response.clicked() && enabled {
+            match vm.primary.kind {
+                PrimaryKind::Action(PrimaryAction::ApplyAndLaunch) => {
+                    return Some(MainEvent::Action(Action::ApplyAndLaunch));
                 }
-                DeployStatus::Deployed => {
-                    // 按钮写「启动」而非「正常启动」——带补丁启动不是正常启动（见 ADR-0011）。
-                    let size = egui::vec2(
-                        row_button_width(ui.available_width(), gap, spacing, 3),
-                        44.0,
-                    );
-                    if styled_button(
-                        ui,
-                        self.strings.btn_launch,
-                        ButtonStyle::Neutral,
-                        size,
-                        !self.gate.is_busy(),
-                    )
-                    .clicked()
-                    {
-                        self.request_action(&ctx, Action::Launch);
-                    }
-                    ui.add_space(gap);
-                    if styled_button(
-                        ui,
-                        self.strings.btn_uninstall,
-                        ButtonStyle::Neutral,
-                        size,
-                        !self.gate.is_busy(),
-                    )
-                    .clicked()
-                    {
-                        self.request_action(&ctx, Action::ExitAndUninstall);
-                    }
-                    ui.add_space(gap);
-                    if styled_button(
-                        ui,
-                        self.strings.btn_uninstall_and_restart,
-                        ButtonStyle::Neutral,
-                        size,
-                        !self.gate.is_busy(),
-                    )
-                    .clicked()
-                    {
-                        self.request_action(&ctx, Action::UninstallAndRestart);
-                    }
+                PrimaryKind::Action(PrimaryAction::Launch) => {
+                    return Some(MainEvent::Action(Action::Launch));
                 }
-                DeployStatus::NotDeployed => {
-                    let size = egui::vec2(
-                        row_button_width(ui.available_width(), gap, spacing, 2),
-                        44.0,
-                    );
-                    if styled_button(
-                        ui,
-                        self.strings.btn_apply_and_launch,
-                        ButtonStyle::Deploy,
-                        size,
-                        // 补丁未下载（dlls/ 缺文件）时置灰，避免点了才报 MissingTargetDlls（见 ADR-0011）。
-                        !self.gate.is_busy() && dll::dlls_present(),
-                    )
-                    .clicked()
-                    {
-                        self.request_action(&ctx, Action::ApplyAndLaunch);
-                    }
-                    ui.add_space(gap);
-                    if styled_button(
-                        ui,
-                        self.strings.btn_launch_normal,
-                        ButtonStyle::Neutral,
-                        size,
-                        !self.gate.is_busy(),
-                    )
-                    .clicked()
-                    {
-                        self.request_action(&ctx, Action::Launch);
-                    }
+                PrimaryKind::Action(PrimaryAction::Restart) => {
+                    return Some(MainEvent::Action(Action::Restart));
                 }
-                DeployStatus::InvalidPath => {
-                    let size = egui::vec2(
-                        row_button_width(ui.available_width(), gap, spacing, 2),
-                        44.0,
+                PrimaryKind::Action(PrimaryAction::FixPath) => return Some(MainEvent::FixPath),
+                PrimaryKind::BusyStage => unreachable!("disabled busy 按钮不可点击"),
+            }
+        }
+        None
+    }
+
+    /// Patch Update Check（spec §26）：同一按钮位 检查 → 下载；检查中/下载中 spinner 原位；
+    /// 结论行内表达（上游结果由 update_flow 派生，版本永不渲染，ADR-0014）。
+    fn patch_update_check(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        vm: &MainPageVm,
+    ) -> Option<MainEvent> {
+        let spin = matches!(
+            vm.update.kind,
+            UpdateKind::Checking | UpdateKind::Downloading
+        );
+        let (label, icon) = match vm.update.kind {
+            UpdateKind::Checking => (self.strings.up_checking, IconKind::Spinner),
+            UpdateKind::Downloading => (self.strings.busy_downloading, IconKind::Spinner),
+            UpdateKind::Check => (
+                self.strings.settings_btn_patch_update_check,
+                IconKind::Refresh,
+            ),
+            UpdateKind::Download => (self.strings.btn_download_and_extract, IconKind::Download),
+        };
+        let mut event: Option<MainEvent> = None;
+        ui.horizontal(|ui| {
+            if spin {
+                ctx.request_repaint();
+            }
+            let font = egui::FontId::proportional(13.0);
+            let enabled = vm.update.enabled;
+            let icon_w = 16.0;
+            let tw = text_width(ui, label, &font, theme::SUB);
+            let width = (tw + icon_w + 26.0).max(130.0);
+            let (rect, response) = ui.allocate_exact_size(
+                egui::vec2(width, 30.0),
+                if enabled {
+                    egui::Sense::click()
+                } else {
+                    egui::Sense::hover()
+                },
+            );
+            if ui.is_rect_visible(rect) {
+                let hovered = enabled && response.hovered();
+                if hovered {
+                    ui.painter().rect(
+                        rect,
+                        egui::CornerRadius::same(R_SMALL),
+                        theme::ENTRY,
+                        egui::Stroke::new(1.0, theme::BORDER),
+                        egui::StrokeKind::Inside,
                     );
-                    styled_button(
-                        ui,
-                        self.strings.btn_apply_and_launch,
-                        ButtonStyle::Deploy,
-                        size,
-                        false,
-                    );
-                    ui.add_space(gap);
-                    styled_button(
-                        ui,
-                        self.strings.btn_launch_normal,
-                        ButtonStyle::Neutral,
-                        size,
-                        false,
-                    );
+                }
+                let fg = if !enabled {
+                    theme::WEAK
+                } else if hovered {
+                    theme::INK
+                } else {
+                    theme::SUB
+                };
+                let phase = if spin {
+                    ctx.input(|i| i.time) as f32
+                } else {
+                    0.0
+                };
+                main_page::paint_icon(
+                    ui.painter(),
+                    icon,
+                    egui::pos2(rect.left() + 13.0, rect.center().y),
+                    fg,
+                    14.0,
+                    phase,
+                );
+                ui.painter().text(
+                    egui::pos2(rect.left() + 28.0, rect.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    label,
+                    font,
+                    fg,
+                );
+            }
+            if response.clicked() && enabled {
+                match vm.update.kind {
+                    UpdateKind::Check => event = Some(MainEvent::Check),
+                    UpdateKind::Download => {
+                        if let Some(info) = self
+                            .update_flow
+                            .derived(self.local_known_version())
+                            .download
+                        {
+                            event = Some(MainEvent::Download(info.clone()));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(note) = vm.update.note {
+                ui.add_space(6.0);
+                match note {
+                    UpdateConclusion::UpToDate => {
+                        ui.label(
+                            egui::RichText::new(self.strings.settings_patch_up_to_date)
+                                .size(12.5)
+                                .color(theme::SUCCESS),
+                        );
+                    }
+                    UpdateConclusion::NewVersion => {
+                        ui.label(
+                            egui::RichText::new(self.strings.settings_patch_new_version)
+                                .size(12.5)
+                                .color(theme::SUCCESS),
+                        );
+                    }
+                    UpdateConclusion::CheckFailed => {
+                        // 行内只显示词条；失败详情向 update_flow 现查做 hover（不占布局，§26.7）。
+                        let detail = self
+                            .update_flow
+                            .derived(self.local_known_version())
+                            .notice
+                            .and_then(|n| match n {
+                                crate::update_flow::UpdateNotice::CheckFailed(e) => {
+                                    Some(self.strings.update_error(e))
+                                }
+                                _ => None,
+                            })
+                            .unwrap_or_default();
+                        ui.label(
+                            egui::RichText::new(self.strings.up_check_failed)
+                                .size(12.5)
+                                .color(theme::DANGER),
+                        )
+                        .on_hover_text(detail);
+                    }
                 }
             }
         });
-        if self.status == DeployStatus::NotDeployed && !dll::dlls_present() {
-            ui.add_space(8.0);
-            ui.label(
-                egui::RichText::new(self.strings.hint_download_patch)
-                    .size(12.0)
-                    .color(theme::WEAK),
-            );
+        event
+    }
+
+    /// Secondary Action Group（spec §21-§23）：纵向 Inline 行，Visual Weight 低、整行可点；
+    /// 警示行（退出 Steam 并卸载）专用 Warning Secondary Blue（ADR-0010 警戒组）。
+    fn secondary_group(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, vm: &MainPageVm) {
+        if vm.secondary.rows.is_empty() {
+            return;
         }
-        ui.add_space(10.0);
+        for (i, row) in vm.secondary.rows.iter().enumerate() {
+            let label = match row.action {
+                SecondaryAction::LaunchNormal => self.strings.btn_launch_normal,
+                SecondaryAction::Uninstall => self.strings.btn_uninstall,
+                SecondaryAction::ExitAndUninstall => self.strings.btn_exit_and_uninstall,
+                SecondaryAction::UninstallAndRestart => self.strings.btn_uninstall_and_restart,
+            };
+            let icon = match row.action {
+                SecondaryAction::LaunchNormal => IconKind::Play,
+                SecondaryAction::Uninstall | SecondaryAction::UninstallAndRestart => {
+                    IconKind::Uninstall
+                }
+                SecondaryAction::ExitAndUninstall => IconKind::Exit,
+            };
+            let base_fg = if row.warn_blue {
+                theme::CAUTION_FG
+            } else {
+                theme::SUB
+            };
+            let size = egui::vec2(ui.available_width().max(0.0), 40.0);
+            let (rect, response) = ui.allocate_exact_size(
+                size,
+                if row.enabled {
+                    egui::Sense::click()
+                } else {
+                    egui::Sense::hover()
+                },
+            );
+            if ui.is_rect_visible(rect) {
+                let painter = ui.painter();
+                // 行间极轻分隔线（spec §23 不建完整 Card）。
+                if i > 0 {
+                    let line_color = theme::blend(theme::BORDER, theme::PANEL, 0.55);
+                    painter.line_segment(
+                        [
+                            egui::pos2(rect.left() + 12.0, rect.top()),
+                            egui::pos2(rect.right() - 12.0, rect.top()),
+                        ],
+                        egui::Stroke::new(1.0, line_color),
+                    );
+                }
+                let hovered = row.enabled && response.hovered();
+                if hovered {
+                    painter.rect(
+                        rect,
+                        egui::CornerRadius::same(R_ROW),
+                        theme::ENTRY,
+                        egui::Stroke::NONE,
+                        egui::StrokeKind::Inside,
+                    );
+                }
+                let fg = if !row.enabled {
+                    theme::WEAK
+                } else if hovered {
+                    theme::INK
+                } else {
+                    base_fg
+                };
+                main_page::paint_icon(
+                    painter,
+                    icon,
+                    egui::pos2(rect.left() + 14.0, rect.center().y),
+                    fg,
+                    15.0,
+                    0.0,
+                );
+                painter.text(
+                    egui::pos2(rect.left() + 38.0, rect.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    label,
+                    egui::FontId::proportional(13.5),
+                    fg,
+                );
+            }
+            if response.clicked() && row.enabled {
+                match row.action {
+                    // 未运行时「卸载补丁」：退出无进程可退 → no-op，等效纯卸载（workflow::plan 语义）；
+                    // 走免确认路径（§45），不被点击瞬间 Steam 已运行的状态误引入确认框（§20.3）。
+                    SecondaryAction::Uninstall => {
+                        self.request_action_quiet(ctx, Action::ExitAndUninstall);
+                    }
+                    SecondaryAction::LaunchNormal => {
+                        self.request_action(ctx, Action::Launch);
+                    }
+                    SecondaryAction::ExitAndUninstall => {
+                        self.request_action(ctx, Action::ExitAndUninstall);
+                    }
+                    SecondaryAction::UninstallAndRestart => {
+                        self.request_action(ctx, Action::UninstallAndRestart);
+                    }
+                }
+            }
+        }
     }
 
     fn local_known_version(&self) -> Option<&str> {
@@ -1926,7 +2241,10 @@ impl App {
             .flatten()
     }
 
-    fn status_bar(&mut self, ui: &mut egui::Ui) {
+    /// 状态栏 dock 高度近似（顶线 1 + margin + item ≈ 44lp；用于自适应窗口内高补偿）。
+    const STATUS_DOCK_H: f32 = 44.0;
+
+    fn status_dock(&mut self, ui: &mut egui::Ui) {
         let items = status_bar_items(
             self.steam_running,
             self.gate.current(),
@@ -1940,13 +2258,74 @@ impl App {
         });
     }
 
-    fn main_content(&mut self, ui: &mut egui::Ui) {
+    /// 返回内容列净高（供窗口首帧自适应；不含 dock，调用方加 STATUS_DOCK_H）。
+    fn main_content(&mut self, ui: &mut egui::Ui) -> f32 {
         let ctx = ui.ctx().clone();
-        self.top_bar(ui);
-        self.card2(ui, &ctx);
+        let mut content_h = 0.0f32;
+        // 状态栏：窗口底部专用 Dock，横跨全宽、独立于内容列（spec §32）。
+        egui::Panel::bottom("status_dock")
+            .frame(
+                egui::Frame::new()
+                    .fill(theme::PANEL)
+                    .inner_margin(egui::Margin::symmetric(16, 10)),
+            )
+            .show_separator_line(false)
+            .show(ui, |ui| {
+                let top = ui.max_rect().top();
+                ui.painter().line_segment(
+                    [
+                        egui::pos2(ui.max_rect().left(), top),
+                        egui::pos2(ui.max_rect().right(), top),
+                    ],
+                    egui::Stroke::new(1.0, theme::BORDER),
+                );
+                self.status_dock(ui);
+            });
+        egui::CentralPanel::default().show(ui, |ui| {
+            self.header(ui);
+            // 垂直呼吸（spec §39）：上:下 ≈ φ:1（0.618/0.382），弹性分配剩余空间；
+            // 内容净高按典型值估算，防 min 窗口时 spacer 挤占内容。
+            let avail_h = ui.available_height();
+            let breathing = (avail_h - 300.0).max(0.0);
+            let top_space = breathing * 0.618;
+            let bottom_space = breathing * 0.382;
+            ui.add_space(top_space);
+            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                ui.set_max_width(MAIN_COLUMN_WIDTH.min(ui.available_width()));
+                self.build_main_column(ui, &ctx);
+            });
+            ui.add_space(bottom_space);
+            content_h = ui.cursor().top();
+        });
+        content_h
+    }
+
+    /// 内容列：Hero → Health Warning → Secondary Group（spec §5/§24.1 定稿顺序）。
+    fn build_main_column(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        // 检查结论快照：当场向 update_flow 查询并转 owned（版本永不渲染，ADR-0014）。
+        let derived = self.update_flow.derived(self.local_known_version());
+        let input = crate::main_page::MainPageInput {
+            deploy: self.status,
+            steam_running: self.steam_running,
+            busy: self.gate.current(),
+            dlls_present: dll::dlls_present(),
+            update_downloadable: derived.download.is_some(),
+            update_notice: derived.notice.map(|n| match n {
+                crate::update_flow::UpdateNotice::UpToDate => UpdateConclusion::UpToDate,
+                crate::update_flow::UpdateNotice::NewVersion => UpdateConclusion::NewVersion,
+                crate::update_flow::UpdateNotice::CheckFailed(_) => UpdateConclusion::CheckFailed,
+            }),
+            apply_failed: matches!(
+                self.notice,
+                Some(Notice::WorkflowDone(Action::ApplyAndLaunch, Err(_)))
+            ),
+        };
+        let vm = main_page::derive(&input);
+        self.hero_surface(ui, ctx, &vm);
+        ui.add_space(14.0);
         self.health_warning_line(ui);
-        self.action_area(ui);
-        self.status_bar(ui);
+        ui.add_space(8.0);
+        self.secondary_group(ui, ctx, &vm);
     }
 }
 
@@ -1998,11 +2377,10 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ui, |ui| {
             if self.wizard.is_some() {
                 self.wizard_ui(&ctx, ui);
+                content_h = ui.cursor().top();
             } else {
-                self.main_content(ui);
+                content_h = self.main_content(ui);
             }
-
-            content_h = ui.cursor().top();
         });
 
         // 内容变矮后仍不得低于设置对话框的最小内高（见 autosize_inner_height）。
@@ -2010,7 +2388,7 @@ impl eframe::App for App {
             self.autosized = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
                 ui.available_width().max(620.0),
-                autosize_inner_height(content_h),
+                autosize_inner_height(content_h + Self::STATUS_DOCK_H),
             )));
         }
 
@@ -2171,26 +2549,6 @@ mod tests {
     }
 
     #[test]
-    fn patch_notice_never_renders_version_numbers() {
-        for lang in [Lang::Zh, Lang::En] {
-            let s = Strings::new(lang);
-            let up = render_patch_notice(&s, &UpdateNotice::UpToDate);
-            let new = render_patch_notice(&s, &UpdateNotice::NewVersion);
-            assert_eq!(up, (true, s.settings_patch_up_to_date.to_string()));
-            assert_eq!(new, (true, s.settings_patch_new_version.to_string()));
-            for (_, text) in [&up, &new] {
-                assert!(
-                    !text.contains("1.4.8") && !text.contains("v1"),
-                    "{lang:?} 补丁结果文案不应出现版本号: {text}"
-                );
-            }
-            let e = UpdateError::Network("t".into());
-            let failed = render_patch_notice(&s, &UpdateNotice::CheckFailed(&e));
-            assert_eq!(failed, (false, s.update_error(&e)));
-        }
-    }
-
-    #[test]
     fn render_notice_update_checked_is_defensive() {
         let s = Strings::new(Lang::Zh);
         assert_eq!(
@@ -2265,26 +2623,30 @@ mod tests {
     }
 
     #[test]
-    fn row_button_width_exactly_fills_row() {
-        let gap = 12.0;
-        for available in [500.0, 580.0, 620.0, 800.0, 1000.0] {
-            for item_spacing in [6.0, 8.0, 10.0, 12.0] {
-                let w = row_button_width(available, gap, item_spacing, 2);
-                let total = w * 2.0 + gap + item_spacing;
-                assert!(
-                    (total - available).abs() < 0.01,
-                    "n=2 available={available} gap={gap} spacing={item_spacing} -> w={w}, total={total} 应等于可用宽度"
-                );
-                let w3 = row_button_width(available, gap, item_spacing, 3);
-                let total3 = w3 * 3.0 + 2.0 * (gap + item_spacing);
-                assert!(
-                    (total3 - available).abs() < 0.01,
-                    "n=3 available={available} gap={gap} spacing={item_spacing} -> w={w3}, total={total3} 应等于可用宽度"
-                );
-            }
-        }
-        assert_eq!(row_button_width(200.0, 12.0, 10.0, 2), 150.0);
-        assert_eq!(row_button_width(200.0, 12.0, 10.0, 3), 150.0);
+    fn primary_cta_fits_longest_english_label() {
+        // spec §42：英文 Primary 单行不换行、不缩字——在 340lp 基线宽度内放得下。
+        let ctx = egui::Context::default();
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(640.0, 520.0),
+            )),
+            ..Default::default()
+        };
+        let mut w = 0.0f32;
+        let mut full = ctx.run_ui(raw, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let font = egui::FontId::proportional(15.0);
+                let s = Strings::new(Lang::En);
+                let text = s.btn_apply_and_launch;
+                w = text_width(ui, text, &font, theme::WHITE) + 19.0 + 8.0;
+            });
+        });
+        full.textures_delta.clear();
+        assert!(
+            w <= 340.0,
+            "最长 Primary 英文文案 + 图标在 340lp 内放不下（实际 {w:.0}lp）"
+        );
     }
 
     #[test]
@@ -2566,6 +2928,8 @@ mod tests {
     }
 
     fn slim_main_content_height(ctx: &egui::Context, lang: Lang) -> f32 {
+        // 最简主页面一行（无 supporting / health / secondary 时）的内容高：
+        // header + Hero（eyebrow + 状态 + Primary + update），供设置对话框自适应窗口测量。
         let mut h = 0.0f32;
         let raw = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -2577,61 +2941,73 @@ mod tests {
         let mut full = ctx.run_ui(raw, |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
                 let s = Strings::new(lang);
+                // header 简化（品牌 mark + 标题 + 齿轮 + hairline）
                 ui.horizontal(|ui| {
-                    let h2 = 28.0;
-                    let font = egui::FontId::proportional(16.0);
-                    let tw = text_width(ui, s.app_title, &font, theme::INK);
-                    let (rect, _) =
-                        ui.allocate_exact_size(egui::vec2(tw, h2), egui::Sense::hover());
-                    ui.painter().text(
-                        rect.left_center(),
-                        egui::Align2::LEFT_CENTER,
-                        s.app_title,
-                        font,
-                        theme::INK,
+                    let _ = ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::hover());
+                    ui.add_space(11.0);
+                    ui.label(
+                        egui::RichText::new(s.app_title)
+                            .size(15.0)
+                            .strong()
+                            .color(theme::INK),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let _ = gear_button(ui, s.settings_gear_tooltip);
                     });
                 });
-                ui.add_space(6.0);
-                card_frame().show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    card_title(ui, s.card2_title);
-                    ui.add_space(10.0);
-                    ui.label(
-                        egui::RichText::new(s.status_not_deployed)
-                            .size(16.0)
-                            .strong()
-                            .color(theme::WEAK),
-                    );
-                    ui.add_space(10.0);
-                    let _ = styled_button(
-                        ui,
-                        s.settings_btn_patch_update_check,
-                        ButtonStyle::Neutral,
-                        egui::vec2(150.0, 32.0),
-                        true,
-                    );
-                });
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    let gap = 12.0;
-                    let spacing = ui.spacing().item_spacing.x;
-                    let size = egui::vec2(
-                        row_button_width(ui.available_width(), gap, spacing, 2),
-                        44.0,
-                    );
-                    let _ =
-                        styled_button(ui, s.btn_apply_and_launch, ButtonStyle::Deploy, size, true);
-                    ui.add_space(gap);
-                    let _ =
-                        styled_button(ui, s.btn_launch_normal, ButtonStyle::Neutral, size, true);
-                });
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    status_item(ui, s.status_steam_stopped, theme::WEAK);
-                });
+                let y = ui.cursor().top();
+                ui.painter().line_segment(
+                    [
+                        egui::pos2(ui.min_rect().left(), y),
+                        egui::pos2(ui.min_rect().left() + ui.available_width(), y),
+                    ],
+                    egui::Stroke::new(1.0, theme::BORDER),
+                );
+                ui.add_space(12.0);
+                // Hero 最简形态
+                egui::Frame::new()
+                    .fill(theme::CARD)
+                    .stroke(egui::Stroke::new(1.0, theme::BORDER))
+                    .corner_radius(egui::CornerRadius::same(R_HERO))
+                    .inner_margin(egui::Margin::symmetric(30, 24))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            let (rect, _) =
+                                ui.allocate_exact_size(egui::vec2(14.0, 2.0), egui::Sense::hover());
+                            ui.painter().rect_filled(rect, 1.0, theme::ACCENT);
+                            ui.add_space(10.0);
+                            ui.label(
+                                egui::RichText::new(main_page::EYEBROW)
+                                    .size(12.0)
+                                    .strong()
+                                    .color(theme::WEAK),
+                            );
+                        });
+                        ui.add_space(12.0);
+                        ui.label(
+                            egui::RichText::new(s.status_not_deployed)
+                                .size(36.0)
+                                .strong()
+                                .color(theme::INK),
+                        );
+                        ui.add_space(20.0);
+                        let _ = styled_button(
+                            ui,
+                            s.btn_apply_and_launch,
+                            ButtonStyle::Primary,
+                            egui::vec2(340.0, 44.0),
+                            true,
+                        );
+                        ui.add_space(12.0);
+                        let _ = styled_button(
+                            ui,
+                            s.settings_btn_patch_update_check,
+                            ButtonStyle::Neutral,
+                            egui::vec2(150.0, 30.0),
+                            true,
+                        );
+                    });
                 h = ui.cursor().top();
             });
         });
