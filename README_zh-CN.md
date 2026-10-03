@@ -25,6 +25,7 @@
 - **深浅主题**：跟随系统或手动切换（Settings → General）
 - **兼容性体检**：对 Steam 核心 DLL 计算哈希并按通道（pattern / IPC）探查上游签名，支持自动/手动预热
 - **Steam 联动窗口**：Steam 启动自动隐藏到托盘、退出后恢复；「最小化时自动隐藏」偏好持久化
+- **单实例**：重复启动不会新开第二个窗口，而是把已经存在的界面（含托盘隐藏中）唤起并带到前台
 - **托盘控制**：左键切换显隐；菜单含「显示」「重启 Steam」「最小化时自动隐藏到托盘」「退出」
 - **便携设计**：设置存 exe 同目录 `config.toml`，补丁存 `dlls/`；整目录拷贝即迁移
 - **中英文界面**：按系统语言自动选择，运行时可切换
@@ -80,6 +81,7 @@ src/
 ├── steam.rs       # 注册表路径检测、steam.exe 启动
 ├── steam_state.rs # 共享 Steam 进程表（alive / group_running / kill）
 ├── process.rs     # Steam 进程监控（2s 轮询缓存、边沿事件）
+├── singleton.rs   # 单实例：互斥体裁决 + 唤醒事件唤起既有窗口（ADR-0017）
 ├── dll.rs         # 目标 DLL 部署/卸载、本地状态
 ├── workflow.rs    # 动作规划与逐步执行（plan/execute）
 ├── busy.rs        # 忙碌门禁：互斥的交互式后台操作（ADR-0007）
@@ -95,4 +97,4 @@ src/
 └── ui.rs          # egui UI（主页面、设置对话框、向导渲染）
 ```
 
-设计决策记录在 `docs/adr/`（ADR-0001–0016）；领域术语定义见 [GLOSSARY.md](GLOSSARY.md)；锁定版 UI 规格与交互原型在 `docs/design/`。
+设计决策记录在 `docs/adr/`（ADR-0001–0017）；领域术语定义见 [GLOSSARY.md](GLOSSARY.md)；锁定版 UI 规格与交互原型在 `docs/design/`。

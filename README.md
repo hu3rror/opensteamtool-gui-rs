@@ -25,6 +25,7 @@ A single-binary Windows tool that manages the OpenSteamTool patch set (three tar
 - **Light / dark themes** — follow the system or pick manually (Settings → General)
 - **Compatibility probe** — hashes Steam's core DLLs and checks upstream signatures (pattern / IPC channels), with auto- and manual precache
 - **Steam-aware window** — auto-hides to the tray when Steam starts, restores on exit; "minimize to tray" preference is persisted
+- **Single instance** — launching the app again never opens a second window; it brings the existing one (even hidden in the tray) back to the foreground
 - **Tray controls** — left-click toggles visibility; menu has Show, Restart Steam, "Minimize to tray automatically", and Quit
 - **Portable by design** — settings live in `config.toml`, patches in `dlls/`, both next to the executable; copy the folder and it just works
 - **Bilingual UI** — Chinese or English, picked from the system locale and switchable at runtime
@@ -80,6 +81,7 @@ src/
 ├── steam.rs       # registry path detection, steam.exe launch
 ├── steam_state.rs # shared Steam process table (alive / group_running / kill)
 ├── process.rs     # Steam process monitor (2s polling cache, edge events)
+├── singleton.rs   # single instance: named-mutex gate + wake event to raise existing window (ADR-0017)
 ├── dll.rs         # target DLL deploy/uninstall, local status
 ├── workflow.rs    # action planning and step execution (plan/execute)
 ├── busy.rs        # busy gate: exclusive interactive background ops (ADR-0007)
@@ -95,4 +97,4 @@ src/
 └── ui.rs          # egui UI (main page, settings dialog, wizard rendering)
 ```
 
-Design decisions are recorded in `docs/adr/` (ADR-0001–0016); domain terms are defined in [GLOSSARY.md](GLOSSARY.md); the locked UI spec and interactive prototype live in `docs/design/`.
+Design decisions are recorded in `docs/adr/` (ADR-0001–0017); domain terms are defined in [GLOSSARY.md](GLOSSARY.md); the locked UI spec and interactive prototype live in `docs/design/`.

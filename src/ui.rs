@@ -18,6 +18,7 @@ use crate::main_page::{
     UpdateKind,
 };
 use crate::process::{self, SteamEvent, SteamMonitor};
+use crate::singleton::Singleton;
 use crate::steam;
 use crate::steam_state::SteamState;
 use crate::theme::{self, ButtonPalette, ButtonStyle, Palette};
@@ -353,6 +354,8 @@ fn health_warning(s: &Strings, summary: CompatSummary) -> Option<&'static str> {
 
 enum Msg {
     Phase(BusyKind),
+    /// 重复启动（另一实例已置位唤醒事件）：把窗口带回前台。
+    ActivateRequested,
     UpdateChecked(Result<OnlineInfo, UpdateError>),
     Downloaded(Result<(), UpdateError>),
     WorkflowDone(Action, Result<(), workflow::WorkflowError>),
@@ -895,10 +898,22 @@ fn auto_tray_policy(event: SteamEvent, window_visible: bool) -> Option<bool> {
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, singleton: Singleton) -> Self {
         install_cjk_font(&cc.egui_ctx);
         install_theme(&cc.egui_ctx);
         let (tx, rx) = mpsc::channel();
+        // 单实例唤醒线程：守卫随线程存活到进程退出——中途 drop 会放开互斥体，多开防护随之失效。
+        {
+            let tx = tx.clone();
+            let ctx = cc.egui_ctx.clone();
+            std::thread::spawn(move || {
+                loop {
+                    singleton.wait_activate();
+                    let _ = tx.send(Msg::ActivateRequested);
+                    ctx.request_repaint();
+                }
+            });
+        }
         // 启动即恢复应用配置（语言偏好 + Steam 路径，见 ADR-0012）：缺失文件 = 默认值；损坏/版本不符 = 类型化错误降级（不 panic）。
         let config = match config::load(&config::config_path()) {
             Ok(cfg) => cfg,
@@ -1087,6 +1102,10 @@ impl App {
         while let Ok(msg) = self.rx.try_recv() {
             match msg {
                 Msg::Phase(kind) => self.gate.replace(kind),
+                Msg::ActivateRequested => {
+                    // 重复启动（含托盘隐藏中的窗口）：恢复显示并聚焦到前台。
+                    self.set_window_visible(true);
+                }
                 Msg::UpdateChecked(res) => {
                     self.gate.clear();
                     self.update_flow.check_done(res); // 结果只存这一份（单一事实源）
