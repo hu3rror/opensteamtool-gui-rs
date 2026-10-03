@@ -2276,8 +2276,8 @@ impl App {
             .flatten()
     }
 
-    /// 状态栏 dock 高度近似（顶线 1 + 上 11 + 行 18 + 下 9 ≈ 39lp；供首帧窗口自适应）。
-    const STATUS_DOCK_H: f32 = 39.0;
+    /// 状态栏 dock 内容高（上 11 + 行 18 + 下 9 = 38lp；分隔线手绘在面板顶不占布局高）。
+    const STATUS_DOCK_H: f32 = 38.0;
 
     /// 返回内容净高（header + 内容列，不含 dock 与弹性留白），供首帧窗口自适应。
     fn main_content(&mut self, ui: &mut egui::Ui) -> f32 {
@@ -2291,6 +2291,9 @@ impl App {
         // 状态栏：窗口底部专用 Dock，横跨全宽、独立于内容列（spec §32）。
         egui::Panel::bottom("status_dock")
             .frame(egui::Frame::new().fill(theme::PANEL))
+            // 首帧即用稳定高度：Panel 首帧 default_outer_size 为 None 时会回退到
+            // interact_size（≈20lp），导致中央面板首帧多 18lp、卡片先偏下一帧再上移（跳动）。
+            .default_size(Self::STATUS_DOCK_H)
             .show_separator_line(false)
             .show(ui, |ui| {
                 // 顶部分隔线横跨全宽（原型 status-dock border-top，不受内容 padding 影响）。
@@ -2322,10 +2325,11 @@ impl App {
             let top0 = ui.cursor().top();
             self.header(ui);
             let header_h = ui.cursor().top() - top0;
-            // 垂直呼吸（spec §39）：上:下 ≈ φ:1；内容净高按最坏态估算（supporting + 健康警告 + 两行 secondary ≈ 445lp），
-            // 保证默认 940×680 下任何状态都不裁底（实测正常态 331lp，重心仍落 §39 的 0.38 区间）。
+            // 垂直呼吸（spec §39）：上:下 ≈ φ:1；内容净高基准取正常态观感与最坏态防裁的
+            // 折中（430lp：正常态 331lp 重心 ≈0.44 略偏下；最坏态 445lp 顶 79 + 列 445 仍
+            // 在可用区 618 内，底部留白被裁亦不伤内容）。
             let avail_h = ui.available_height();
-            let breathing = (avail_h - 460.0).max(0.0);
+            let breathing = (avail_h - 430.0).max(0.0);
             ui.add_space(breathing * 0.618);
             // 内容列 max-width 居中，内部左对齐（Primary CTA / Secondary 行靠左，见原型）。
             let col_w = MAIN_COLUMN_WIDTH.min(ui.available_width());
