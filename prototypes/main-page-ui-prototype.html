@@ -1,8 +1,7 @@
 <!DOCTYPE html>
 <!--
   ⚠️ PROTOTYPE — throwaway visual mockup for the Main Page redesign (Rust + egui target).
-  Question: per docs/design/main-page-ui-reference.md §12, which palette direction
-  holds up — A (Graphite/Steel Blue), B (Deep Navy/Ice Blue), D (Charcoal/Muted Teal)?
+  Palette: B (Deep Navy/Ice Blue, dark, 定稿) + L1/L2/L3 light complements.
   Structure & state mapping are LOCKED by the spec; only the visual execution varies.
   This is NOT production code. The real implementation will be programmatic painting
   in egui (paint_gear pattern), not this HTML/CSS.
@@ -11,7 +10,7 @@
 <html lang="zh">
 <head>
 <meta charset="utf-8" />
-<title>Main Page UI Prototype — A / B / D</title>
+<title>Main Page UI Prototype — B + Light</title>
 <style>
   /* ============ design tokens (per-variant, see bottom) ============ */
   :root {
@@ -19,10 +18,13 @@
     --text: #e7ecf2; --text2: #aab4c0; --muted: #778392;
     --accent: #4d8ccb; --accent-hover: #5a99d4; --accent-ink: #0b1a2a;
     --success: #69a88b; --warn: #c29a58; --err: #c87575; --warnblue: #5a7fa3;
+    --warn-fg: color-mix(in srgb, var(--warn) 82%, white);
+    --busy-ink: color-mix(in srgb, var(--accent) 70%, white);
     --r-hero: 14px; --r-cta: 8px; --r-row: 8px; --r-small: 6px;
     --cta-gradient: none; --cta-inner-hi: transparent; --hero-tint: transparent;
     --spacing-scale: 1; --status-size: 34px; --eyebrow-track: 0.14em;
     --header-h: 52px; --content-max: 600px;
+    --frame-border:#262a30; --titlebar-bg:#0c0f13; --titlebar-stroke:#1c2025;
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -41,7 +43,7 @@
     width: 940px; max-width: 100%;
     height: 680px;
     background: var(--bg);
-    border: 1px solid #262a30;
+    border: 1px solid var(--frame-border);
     border-radius: 10px;
     overflow: hidden;
     box-shadow: 0 24px 60px rgba(0,0,0,.45);
@@ -49,11 +51,11 @@
   }
   .titlebar {
     height: 30px; display: flex; align-items: center; gap: 10px;
-    padding: 0 14px; background: #0c0f13; border-bottom: 1px solid #1c2025;
+    padding: 0 14px; background: var(--titlebar-bg); border-bottom: 1px solid var(--titlebar-stroke);
     font-size: 12px; color: var(--muted);
   }
-  .tb-dot { width: 10px; height: 10px; border-radius: 50%; background: #2b3542; }
-  .tb-note { margin-left: auto; font-size: 11px; color: #56627099; letter-spacing: .02em; }
+  .tb-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--border); }
+  .tb-note { margin-left: auto; font-size: 11px; color: color-mix(in srgb, var(--muted) 70%, transparent); letter-spacing: .02em; }
 
   .app-header {
     height: var(--header-h);
@@ -183,7 +185,7 @@
     padding: 9px 14px; border-radius: var(--r-row);
     border: 1px solid color-mix(in srgb, var(--warn) 32%, transparent);
     background: color-mix(in srgb, var(--warn) 9%, transparent);
-    color: color-mix(in srgb, var(--warn) 82%, white);
+    color: var(--warn-fg);
     font-size: 13px; cursor: pointer;
     transition: background .12s;
   }
@@ -229,7 +231,7 @@
   @keyframes pulse { 50% { opacity: .35; } }
   .sb-item.ok { color: var(--success); }
   .sb-item.fail { color: var(--err); }
-  .sb-item.busy-text { color: color-mix(in srgb, var(--accent) 70%, white); }
+  .sb-item.busy-text { color: var(--busy-ink); }
 
   /* ============ confirm modal ============ */
   .modal-overlay {
@@ -269,7 +271,7 @@
     border-radius: 7px; font: inherit; padding: 5px 9px; cursor: pointer;
   }
   .proto button:hover { background: #2a313c; }
-  .proto .variant-label { font-weight: 600; min-width: 190px; text-align: center; }
+  .proto .variant-label { font-weight: 600; min-width: 240px; text-align: center; }
   .proto .readout { font-size: 11px; color: #7c8794; font-variant-numeric: tabular-nums; }
   .proto .kbd { font-size: 11px; color: #9aa3ad; }
 
@@ -291,18 +293,24 @@
     --hero-hi:rgba(255,255,255,.05);
     --hero-tint:radial-gradient(420px 220px at 18% -20%, rgba(92,145,199,.10), transparent 70%);
   }
-  .variant-d { --bg:#111716; --surface:#18201f; --elevated:#202a29; --border:#303b39;
-    --text:#e6ecea; --text2:#aab8b4; --muted:#778783;
-    --accent:#4f9690; --accent-hover:#5ca29b;
-    --success:#6da38c; --warn:#c29a59; --err:#c67474; --warnblue:#5c7f99;
-    --r-hero:12px; --r-cta:6px; --r-row:6px; --r-small:5px;
-    --status-size:32px; --eyebrow-track:.10em; --spacing-scale:.94;
-    --cta-inner-hi:rgba(255,255,255,.16);
-    --hero-hi:rgba(255,255,255,.03);
+  /* ===== Light Palette（定稿 L1 — Ice Mist）：与 B 互补，供未来 Light Mode；切换功能未实现，仅保留色值 ===== */
+  .variant-l1 { --bg:#f3f6f9; --surface:#ffffff; --elevated:#e8eef5; --border:#d3dce6;
+    --text:#1c2630; --text2:#47566a; --muted:#8494a7;
+    --accent:#3e76ac; --accent-hover:#35689a;
+    --success:#3f8e63; --warn:#a67c2e; --err:#c2554e; --warnblue:#3e6f9e;
+    --warn-fg:color-mix(in srgb, var(--warn) 55%, black);
+    --busy-ink:color-mix(in srgb, var(--accent) 45%, black);
+    --r-hero:18px; --r-cta:10px; --r-row:10px; --r-small:7px;
+    --status-size:36px; --eyebrow-track:.18em; --spacing-scale:1.08;
+    --cta-inner-hi:rgba(255,255,255,.4);
+    --cta-gradient:linear-gradient(180deg, #4f88bd 0%, #3a6ea3 100%);
+    --hero-hi:rgba(255,255,255,.6);
+    --hero-tint:radial-gradient(420px 220px at 18% -20%, rgba(93,145,199,.08), transparent 70%);
+    --frame-border:#c9d2dc; --titlebar-bg:#e8edf2; --titlebar-stroke:#d3dce6;
   }
 </style>
 </head>
-<body class="variant-a" id="root">
+<body class="variant-b" id="root">
 
 <div class="tag">Prototype — throwaway</div>
 
@@ -368,7 +376,7 @@
 <!-- prototype controls -->
 <div class="proto">
   <button id="prev" title="previous variant">◀</button>
-  <span class="variant-label" id="variant-label">A — Graphite / Steel</span>
+  <span class="variant-label" id="variant-label">B — Deep Navy / Ice</span>
   <button id="next" title="next variant">▶</button>
   <span class="sep"></span>
   <select id="scenario"></select>
@@ -442,7 +450,10 @@ const S = {
     },
   },
 };
-const VARIANT_NAMES = { a: "A — Graphite / Steel", b: "B — Deep Navy / Ice", d: "D — Charcoal / Muted Teal" };
+const VARIANT_NAMES = {
+  b: "B — Deep Navy / Ice  (dark) ★",
+  l1: "L1 — Ice Mist  (light) ★",
+};
 
 /* ============================ state ============================ */
 const state = {
@@ -761,7 +772,7 @@ const scenarios = [
 ];
 
 /* ============================ controls ============================ */
-const variants = ["a", "b", "d"];
+const variants = ["b", "l1"];
 let vidx = 0;
 
 function setVariant(v, push = true) {
@@ -811,7 +822,7 @@ document.addEventListener("keydown", e => {
 /* ============================ boot ============================ */
 (function () {
   const q = new URLSearchParams(location.search).get("variant");
-  setVariant(q && variants.includes(q) ? q : "a", false);
+  setVariant(q && variants.includes(q) ? q : "b", false);
   scenarios[0].apply(state);
   render();
 })();

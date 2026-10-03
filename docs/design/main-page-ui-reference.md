@@ -112,12 +112,19 @@ GLOSSARY.md
     ↓
 相关 ADR
     ↓
-本 Main Page UI Reference
+本 Main Page UI Reference（语义 / 状态 / 交互）
+    ↓
+原型渲染效果（视觉呈现基准：prototypes/main-page-ui-prototype.html 的 B / L1 变体）
     ↓
 现有代码事实
     ↓
 Implementation Tuning
 ```
+
+> **视觉实施始终以原型渲染效果为准**，不以 spec 文字想象为准。spec 的文字只能
+> 表达目的大概（色值表、结构、层级、间距意图），无法表达渐变、tint、hairline、
+> 圆角、动效、呼吸感等实际观感；当两者不一致时，原型渲染效果优先，spec 文字
+> 按原型订正（用户裁决）。
 
 ### GLOSSARY.md
 
@@ -159,7 +166,7 @@ Implementation Tuning
 * 术语
 * Primary / Secondary hierarchy
 * Status Bar 职责
-* 品牌色板（§10 定稿 Palette B）
+* 品牌色板（§10 定稿：Dark B + Light L1 两套色值）
 * Patch Version 不渲染
 * Busy 行为
 * 确认框规则
@@ -167,6 +174,11 @@ Implementation Tuning
 * Update Action 归属
 
 未经 ADR / Spec 变更，不自行修改。
+
+> **深浅色切换的状态**：Light Mode 色板（L1）已定稿（§10），但
+> 「切换功能」未实现——无切换入口、无持久化字段、无运行时模式选择。
+> 本次 Main Page 重写只落地 Dark（B），L1 值仅存于 §10，不进代码。
+> 切换功能的实现时机另行立项，届时按 §47/§48 架构接入。
 
 ## Tunable
 
@@ -398,11 +410,51 @@ Warning Blue    → 仅「退出 Steam 并卸载补丁」
 eyebrow       “PATCH”（双语一致，小号大写英文，§14）
 ```
 
+### Light Mode Palette（已定稿）：L1 — Ice Mist
+
+> **状态：切换功能尚未实现，本次 Main Page 重写只落实 Dark（B）。**
+> L1 为未来 Light Mode 的定稿色源（原型定稿，见 §12）；色值已定稿但
+> 不接线、不做切换入口/持久化。实现时仅在 `theme.rs` 预留 `Palette::light()`
+> 数据（§47/§48 架构），等切换功能立项后启用。
+
+### Character
+
+> 与 B 有效互补：同一品牌蓝家族、冷白冰蓝底；Neutral 冷白为主，蓝色作
+> Interaction Accent 出現。B 的「冷深蓝灰」与 L1 的「冷亮白」是同一品牌
+> 的亮面色相，不做暖色/奇异色偏离。
+
+```text
+Background       #F3F6F9
+Surface          #FFFFFF
+Surface Elevated #E8EEF5
+Border           #D3DCE6
+
+Text Primary     #1C2630
+Text Secondary   #47566A
+Text Muted       #8494A7
+
+Accent Blue      #3E76AC
+Accent Hover     #35689A
+
+Success Green    #3F8E63
+Warning Amber    #A67C2E
+Error Red        #C2554E
+
+Warning Blue     #3E6F9E
+```
+
+派生变体（hover / 徽章浅底 / selection）与 Dark 同规则（§11），只是
+在 L1 色源上派生；对比度敏感项（Health Warning 文字、Busy 文字）在浅底
+需混黑调深（原型中 `--warn-fg` / `--busy-ink` 的经验值在该模式内派生）。
+
 ---
 
 # 11. 色彩纪律（Color Discipline）
 
-不混用其他 Palette 方向（A / C / D / E 已评估未选用，见 §12）。
+不混用其他 Palette 方向（A / C / D / E、L2 / L3 已评估未选用，见 §12）。
+
+Dark（B）与 Light（L1）是同一品牌的两套已定稿色源，各自独立存在；
+本次实现只落 Dark。
 
 所有颜色按单一推导链：
 
@@ -457,6 +509,21 @@ A / B / D 三变体），重点观察：
 评估过的其他方向（未选用，禁混用）：A — Graphite / Steel（最专业）、
 C — Gunmetal / Cobalt（最冷峻）、D — Charcoal / Muted Teal（品牌差异）、
 E — Slate / Indigo（现代独立游戏感）。
+
+## Light Mode 定稿（L1 — Ice Mist）
+
+在 B 定稿基础上，原型追加三套与 B 互补的浅色候选（同一品牌蓝家族，
+Neutral 色温不同）：
+
+* **L1 — Ice Mist（冷白冰蓝）**：与 B 最直接的亮色镜像；**已定稿（§10）**
+* L2 — Warm Slate（暖纸灰蓝）：冷暖撞色，未选用
+* L3 — Steel Mist（中性钢蓝灰）：最克制，未选用
+
+选择理由：与 B 同属冷蓝灰家族，亮度翻转后品牌辨识连续；主页面与设置页
+默认未来同一切换，冷白底对长时间使用友好。
+
+> **视觉基准**：本 Spec 的文字描述不完整表达观感（渐变 / tint / hairline /
+> 间距 / 圆角），Main Page 实施的视觉呈现以原型渲染（B 与 L1 变体）为准（§3）。
 
 ---
 
@@ -1730,8 +1797,26 @@ AGENTS 修改 Main Page 时：
 6. 优先复用已有抽象。
 7. 不修改已经确定的业务行为。
 8. 不为视觉重构复制新的业务状态源。
-9. 不引入无关功能。
+9. 不引入无关功能（含深浅色切换：本次不实现，见 §4）。
 10. 不为了视觉效果引入不必要的新依赖。
+
+## 48.1 视觉以原型渲染为准（§3）
+
+Main Page 的视觉呈现以 `prototypes/main-page-ui-prototype.html` 的 B / L1 变体
+渲染效果为准，不得按 spec 文字自行脑补；观感不一致时以原型为准并订正 spec
+（用户裁决）。原型是 throwaway 视觉参考，不是运行时资源。
+
+## 48.2 深浅切换分离（本次只落 Dark）
+
+* `theme.rs` 的语义槽值改为 Dark（B）色值；UI 只消费语义槽/派生函数，
+  不出现内联色值（既有源码扫描守卫测试继续生效）。
+* 本次**不新增**：切换入口、config 字段、运行时模式、`Visuals::dark/light`
+  分支、`theme.rs` 双实例结构（Palette 结构体化）。
+* Light（L1）值以 §10 为准，不进代码；未来切换功能立项后，把语义槽
+  结构体化为 `Palette { dark(), light() }`，UI 引用点因此集中改写一次，
+  不在本次重写中先行铺路（避免撞车）。
+* 若实现中发现 UI 将语义槽硬编码为「当前只可能是一个深色值」的假设，
+  优先改为消费槽名（低成本、无切换功能）即可，不扩大到切换机制。
 
 ---
 
