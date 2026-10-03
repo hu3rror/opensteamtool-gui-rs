@@ -216,8 +216,13 @@ const GITHUB_MARK_PNG: &[u8] = include_bytes!("../assets/github-mark.png");
 fn load_github_mark(ctx: &egui::Context) -> Option<egui::TextureHandle> {
     let mut img = image::load_from_memory(GITHUB_MARK_PNG).ok()?.to_rgba8();
     for p in img.pixels_mut() {
+        // 浅色底 → 透明；黑色 mark → 白（Dark 主题下可见，渲染 tint 不再需要）。
         if p[0] > 240 && p[1] > 240 && p[2] > 240 {
             p[3] = 0;
+        } else if p[3] > 0 {
+            p[0] = 255;
+            p[1] = 255;
+            p[2] = 255;
         }
     }
     let (w, h) = img.dimensions();
@@ -242,8 +247,12 @@ fn card_title(ui: &mut egui::Ui, text: &str) {
 fn status_item(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(7.0, 7.0), egui::Sense::hover());
     ui.painter().circle_filled(rect.center(), 3.5, color);
+    // 行内 spacing 收窄：dot→文字总 8lp（原型 .sb-item gap: 8；item_spacing.x 默认 10lp 会撑到 16）。
+    ui.spacing_mut().item_spacing.x = 2.0;
     ui.add_space(6.0);
     ui.label(egui::RichText::new(text).size(12.5).color(color));
+    // 恢复默认行内 spacing（item 间 10lp，原型 .status-bar gap 22lp 由调用方 add_space 表达）。
+    ui.spacing_mut().item_spacing.x = 10.0;
     ui.add_space(10.0);
 }
 
@@ -1171,63 +1180,75 @@ impl App {
             return;
         }
         let mut close_clicked = false;
-        egui::Modal::new(egui::Id::new("settings_dialog")).show(ctx, |ui| {
-            ui.set_width(SETTINGS_DIALOG_WIDTH);
-            ui.heading(self.strings.settings_title);
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                for (tab, label) in [
-                    (SettingsTab::General, self.strings.settings_tab_general),
-                    (SettingsTab::Steam, self.strings.settings_tab_steam),
-                    (SettingsTab::About, self.strings.settings_tab_about),
-                ] {
-                    let style = if self.settings_tab == tab {
-                        ButtonStyle::Primary
-                    } else {
-                        ButtonStyle::Neutral
-                    };
-                    if styled_button(ui, label, style, egui::vec2(88.0, 28.0), true).clicked()
-                        && self.settings_tab != tab
-                    {
-                        if self.settings_tab == SettingsTab::Steam {
-                            self.commit_settings_steam_path(ctx);
+        // 显式 frame：Modal 默认 menu_margin(6lp) 太贴边，加边缘呼吸（对称 24/20）。
+        let frame = egui::Frame::new()
+            .fill(theme::PANEL)
+            .stroke(egui::Stroke::new(1.0, theme::BORDER))
+            .corner_radius(egui::CornerRadius::same(8))
+            .inner_margin(egui::Margin::symmetric(24, 20));
+        egui::Modal::new(egui::Id::new("settings_dialog"))
+            .frame(frame)
+            .show(ctx, |ui| {
+                ui.set_width(SETTINGS_DIALOG_WIDTH);
+                ui.heading(self.strings.settings_title);
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    for (tab, label) in [
+                        (SettingsTab::General, self.strings.settings_tab_general),
+                        (SettingsTab::Steam, self.strings.settings_tab_steam),
+                        (SettingsTab::About, self.strings.settings_tab_about),
+                    ] {
+                        let style = if self.settings_tab == tab {
+                            ButtonStyle::Primary
+                        } else {
+                            ButtonStyle::Neutral
+                        };
+                        if styled_button(ui, label, style, egui::vec2(88.0, 28.0), true).clicked()
+                            && self.settings_tab != tab
+                        {
+                            if self.settings_tab == SettingsTab::Steam {
+                                self.commit_settings_steam_path(ctx);
+                            }
+                            self.settings_tab = tab;
                         }
-                        self.settings_tab = tab;
-                    }
-                    ui.add_space(4.0);
-                }
-            });
-            ui.add_space(8.0);
-            ui.separator();
-            ui.add_space(8.0);
-            let max_scroll_h = settings_scroll_height(ctx.content_rect().height());
-            egui::ScrollArea::vertical()
-                .auto_shrink([false; 2])
-                .max_height(max_scroll_h)
-                .show(ui, |ui| match self.settings_tab {
-                    SettingsTab::General => self.settings_general(ui),
-                    SettingsTab::About => self.settings_about(ui, ctx),
-                    SettingsTab::Steam => self.settings_steam(ui, ctx),
-                });
-            ui.add_space(12.0);
-            ui.separator();
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if styled_button(
-                        ui,
-                        self.strings.btn_close,
-                        ButtonStyle::Neutral,
-                        egui::vec2(80.0, 30.0),
-                        true,
-                    )
-                    .clicked()
-                    {
-                        close_clicked = true;
+                        ui.add_space(4.0);
                     }
                 });
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(12.0);
+                let max_scroll_h = settings_scroll_height(ctx.content_rect().height());
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false; 2])
+                    .max_height(max_scroll_h)
+                    .show(ui, |ui| {
+                        // 设置内小项间呼吸感：行距略大于全局（10 → 13lp），各页签统一。
+                        ui.spacing_mut().item_spacing.y = 13.0;
+                        match self.settings_tab {
+                            SettingsTab::General => self.settings_general(ui),
+                            SettingsTab::About => self.settings_about(ui, ctx),
+                            SettingsTab::Steam => self.settings_steam(ui, ctx),
+                        }
+                    });
+                ui.add_space(16.0);
+                ui.separator();
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if styled_button(
+                            ui,
+                            self.strings.btn_close,
+                            ButtonStyle::Neutral,
+                            egui::vec2(80.0, 30.0),
+                            true,
+                        )
+                        .clicked()
+                        {
+                            close_clicked = true;
+                        }
+                    });
+                });
             });
-        });
         if close_clicked {
             // 关闭前提交未落地编辑（兜底：无论焦点时序，有效提交都不丢失）；未变更的判定让重复提交是 no-op。
             self.commit_settings_steam_path(ctx);
@@ -1237,7 +1258,7 @@ impl App {
 
     fn settings_general(&mut self, ui: &mut egui::Ui) {
         card_title(ui, self.strings.settings_language_title);
-        ui.add_space(8.0);
+        ui.add_space(10.0);
         let options = self.strings.language_options();
         if let Some(lang) = language_combo(ui, options, self.lang_pref, 220.0, "settings_language")
             && lang != self.lang_pref
@@ -1247,9 +1268,9 @@ impl App {
             self.persist_config();
         }
 
-        ui.add_space(12.0);
+        ui.add_space(16.0);
         card_title(ui, self.strings.settings_tray_title);
-        ui.add_space(8.0);
+        ui.add_space(10.0);
         let mut minimize_to_tray = self.minimize_to_tray;
         if ui
             .checkbox(&mut minimize_to_tray, self.strings.settings_tray_minimize)
@@ -1261,7 +1282,7 @@ impl App {
 
     fn settings_about(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         card_title(ui, self.strings.settings_app_update_title);
-        ui.add_space(8.0);
+        ui.add_space(10.0);
         ui.label(
             egui::RichText::new(format!(
                 "{} v{}",
@@ -1373,7 +1394,7 @@ impl App {
 
     fn settings_steam(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         card_title(ui, self.strings.settings_steam_title);
-        ui.add_space(8.0);
+        ui.add_space(10.0);
         let mut do_commit = false;
         let row = path_edit_row(ui, self.strings, &mut self.settings_steam.buffer);
         if row.changed {
@@ -1516,7 +1537,8 @@ impl App {
         if response.clicked() {
             self.open_settings(SettingsTab::Steam);
         }
-        ui.add_space(12.0);
+        // 与 content 统一 gap（原型 14lp）；无警告时整行不占空间（前面已 return）。
+        ui.add_space(14.0);
     }
 
     fn on_compat_event(&mut self, ctx: &egui::Context, event: compat_flow::Event) {
@@ -1570,7 +1592,7 @@ impl App {
     }
 
     fn compat_section(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(10.0);
+        ui.add_space(12.0);
 
         let v = CompatView::snapshot(self);
 
@@ -1584,7 +1606,7 @@ impl App {
                     .strong(),
             );
         });
-        ui.add_space(8.0);
+        ui.add_space(10.0);
         ui.horizontal(|ui| {
             self.compat_badge(ui, v.summary);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1778,15 +1800,16 @@ impl App {
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 self.hero_eyebrow(ui);
-                ui.add_space(12.0);
+                ui.add_space(8.0);
                 self.hero_status(ui, vm);
-                ui.add_space(14.0);
+                // 状态 → Supporting 或 Primary（原型：eyebrow 8 / status→supporting 10 / status→primary 22）。
+                ui.add_space(if vm.supporting.is_some() { 10.0 } else { 22.0 });
                 self.hero_supporting(ui, vm);
-                ui.add_space(20.0);
+                ui.add_space(if vm.supporting.is_some() { 22.0 } else { 0.0 });
                 if let Some(e) = self.hero_primary(ui, ctx, vm) {
                     event = Some(e);
                 }
-                ui.add_space(12.0);
+                ui.add_space(14.0);
                 if let Some(e) = self.patch_update_check(ui, ctx, vm) {
                     event = Some(e);
                 }
@@ -1893,7 +1916,6 @@ impl App {
                 .color(theme::INK),
         );
         ui.label(egui::RichText::new(body).size(13.5).color(theme::WEAK));
-        ui.add_space(16.0);
     }
 
     /// Primary CTA（spec §18/§19）：Solid Brand Blue，单行 Icon+Label 整体居中；busy 原位阶段化。
@@ -2244,58 +2266,68 @@ impl App {
     /// 状态栏 dock 高度近似（顶线 1 + margin + item ≈ 44lp；用于自适应窗口内高补偿）。
     const STATUS_DOCK_H: f32 = 44.0;
 
-    fn status_dock(&mut self, ui: &mut egui::Ui) {
+    /// 返回内容净高（header + 内容列，不含 dock 与弹性留白），供首帧窗口自适应。
+    fn main_content(&mut self, ui: &mut egui::Ui) -> f32 {
+        let ctx = ui.ctx().clone();
         let items = status_bar_items(
             self.steam_running,
             self.gate.current(),
             self.notice.as_ref(),
             &self.strings,
         );
-        ui.horizontal(|ui| {
-            for (text, color) in items {
-                status_item(ui, &text, color);
-            }
-        });
-    }
-
-    /// 返回内容列净高（供窗口首帧自适应；不含 dock，调用方加 STATUS_DOCK_H）。
-    fn main_content(&mut self, ui: &mut egui::Ui) -> f32 {
-        let ctx = ui.ctx().clone();
-        let mut content_h = 0.0f32;
         // 状态栏：窗口底部专用 Dock，横跨全宽、独立于内容列（spec §32）。
         egui::Panel::bottom("status_dock")
-            .frame(
-                egui::Frame::new()
-                    .fill(theme::PANEL)
-                    .inner_margin(egui::Margin::symmetric(16, 10)),
-            )
+            .frame(egui::Frame::new().fill(theme::PANEL))
             .show_separator_line(false)
             .show(ui, |ui| {
-                let top = ui.max_rect().top();
+                // 顶部分隔线横跨全宽（原型 status-dock border-top，不受内容 padding 影响）。
+                let rect = ui.max_rect();
                 ui.painter().line_segment(
-                    [
-                        egui::pos2(ui.max_rect().left(), top),
-                        egui::pos2(ui.max_rect().right(), top),
-                    ],
+                    [rect.left_top(), rect.right_top()],
                     egui::Stroke::new(1.0, theme::BORDER),
                 );
-                self.status_dock(ui);
+                // 本布局内禁用行间距（否则每次子块 allocate 附加 item_spacing.y，
+                // 内容行会被推偏、上下不对称，实测 +10lp）。
+                ui.spacing_mut().item_spacing.y = 0.0;
+                // 内容行固定高、垂直居中：字形视觉中心在行框内偏上 ~1.5lp
+                // （egui 行框含 descent 空白），故上 11 / 下 9 补偿；左缩进收窄到 16lp。
+                ui.add_space(11.0);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), 18.0),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.add_space(16.0);
+                        for (text, color) in &items {
+                            status_item(ui, text, *color);
+                        }
+                    },
+                );
+                ui.add_space(9.0);
             });
+        let mut content_h = 0.0f32;
         egui::CentralPanel::default().show(ui, |ui| {
+            let top0 = ui.cursor().top();
             self.header(ui);
-            // 垂直呼吸（spec §39）：上:下 ≈ φ:1（0.618/0.382），弹性分配剩余空间；
-            // 内容净高按典型值估算，防 min 窗口时 spacer 挤占内容。
+            let header_h = ui.cursor().top() - top0;
+            // 垂直呼吸（spec §39）：上:下 ≈ φ:1；内容净高按典型值估算（防 min 窗口挤占内容）。
             let avail_h = ui.available_height();
-            let breathing = (avail_h - 300.0).max(0.0);
-            let top_space = breathing * 0.618;
-            let bottom_space = breathing * 0.382;
-            ui.add_space(top_space);
-            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                ui.set_max_width(MAIN_COLUMN_WIDTH.min(ui.available_width()));
-                self.build_main_column(ui, &ctx);
+            let breathing = (avail_h - 340.0).max(0.0);
+            ui.add_space(breathing * 0.618);
+            // 内容列 max-width 居中，内部左对齐（Primary CTA / Secondary 行靠左，见原型）。
+            let col_w = MAIN_COLUMN_WIDTH.min(ui.available_width());
+            let pad = ((ui.available_width() - col_w) / 2.0).max(0.0);
+            let mut col_h = 0.0f32;
+            ui.horizontal(|ui| {
+                ui.add_space(pad);
+                ui.vertical(|ui| {
+                    ui.set_width(col_w);
+                    let c0 = ui.cursor().top();
+                    self.build_main_column(ui, &ctx);
+                    col_h = ui.cursor().top() - c0;
+                });
             });
-            ui.add_space(bottom_space);
-            content_h = ui.cursor().top();
+            ui.add_space(breathing * 0.382);
+            content_h = header_h + col_h;
         });
         content_h
     }
@@ -2322,9 +2354,10 @@ impl App {
         };
         let vm = main_page::derive(&input);
         self.hero_surface(ui, ctx, &vm);
+        // 内容列统一 14 间隙（原型 content gap）：hero→health→secondary。
         ui.add_space(14.0);
         self.health_warning_line(ui);
-        ui.add_space(8.0);
+        ui.add_space(0.0);
         self.secondary_group(ui, ctx, &vm);
     }
 }
@@ -2383,13 +2416,17 @@ impl eframe::App for App {
             }
         });
 
-        // 内容变矮后仍不得低于设置对话框的最小内高（见 autosize_inner_height）。
+        // 首帧自适应：仅在内容放不下时增长窗口，从不缩窗（保持 spec §40 初始 940×680）。
         if self.wizard.is_none() && !self.autosized && content_h > 0.0 {
             self.autosized = true;
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
-                ui.available_width().max(620.0),
-                autosize_inner_height(content_h + Self::STATUS_DOCK_H),
-            )));
+            let need_h = autosize_inner_height(content_h + Self::STATUS_DOCK_H);
+            let cur_h = ctx.input(|i| i.viewport().inner_rect.map_or(0.0, |r| r.height()));
+            if need_h > cur_h + 1.0 {
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                    ui.available_width().max(620.0),
+                    need_h,
+                )));
+            }
         }
 
         if let Some(action) = self.confirm {

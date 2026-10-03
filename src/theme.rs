@@ -44,8 +44,10 @@ pub fn blend(a: Color32, b: Color32, t: f32) -> Color32 {
     Color32::from_rgb(l(a.r(), b.r()), l(a.g(), b.g()), l(a.b(), b.b()))
 }
 
+/// 徽章浅底：向页面背景混（Dark 下语义色淡化 → 深色徽章底，与设置页融洽；
+/// 浅色时代向 WHITE 混的规则随 L1 另行定）。
 pub fn badge_bg(base: Color32) -> Color32 {
-    blend(base, WHITE, 0.9)
+    blend(base, PANEL, 0.85)
 }
 
 pub fn selection_bg() -> Color32 {
@@ -137,7 +139,7 @@ mod tests {
 
     #[test]
     fn derived_helpers_golden_values() {
-        assert_eq!(badge_bg(SUCCESS), Color32::from_rgb(0xF0, 0xF6, 0xF4));
+        assert_eq!(badge_bg(SUCCESS), Color32::from_rgb(0x1D, 0x2B, 0x2D));
         assert_eq!(selection_bg(), Color32::from_rgb(0xE2, 0xEB, 0xF5));
     }
 

@@ -291,14 +291,6 @@ fn arc(p: &Painter, center: Pos2, r: f32, a0_deg: f32, a1_deg: f32, n: usize, st
     seg(p, &pts, stroke.color, stroke.width);
 }
 
-fn arrow_head(p: &Painter, tip: Pos2, dir: egui::Vec2, len: f32, color: Color32, w: f32) {
-    let perp = egui::vec2(-dir.y, dir.x);
-    let a = tip - dir * len + perp * (len * 0.5);
-    let b = tip - dir * len - perp * (len * 0.5);
-    seg(p, &[tip, a], color, w);
-    seg(p, &[tip, b], color, w);
-}
-
 /// 全部图标统一入口：颜色取自语义槽（调用方传 theme 色，本模块不持有色值）。
 pub fn paint_icon(
     painter: &Painter,
@@ -318,29 +310,27 @@ pub fn paint_icon(
             painter.add(Shape::convex_polygon(pts, color, Stroke::NONE));
         }
         IconKind::Restart | IconKind::Refresh => {
-            let c = center + egui::vec2(0.0, -0.2 * size / 20.0);
+            // 原型几何（与 download/uninstall 不同构）：顶部起弧经右侧扫到右下（约 158°），
+            // 弧起点处两条短边构成箭头（对应原型 refresh / restart path）。
             arc(
                 painter,
-                c,
-                7.2 * size / 20.0,
-                205.0,
-                335.0,
+                unit(center, size, 9.5, 10.0),
+                7.3 * size / 20.0,
+                270.0,
+                428.0,
                 14,
                 Stroke::new(ICON_STROKE, color),
             );
-            let tip = unit(center, size, 9.4, 2.6);
-            let dir = egui::vec2(0.75, 0.66).normalized();
+            let tip = unit(center, size, 9.5, 2.7);
             seg(
                 painter,
-                &[tip, tip + dir * 3.6 * size / 20.0],
+                &[tip, unit(center, size, 13.0, 6.1)],
                 color,
                 ICON_STROKE,
             );
-            arrow_head(
+            seg(
                 painter,
-                tip + dir * 3.6 * size / 20.0,
-                dir,
-                1.9 * size / 20.0,
+                &[tip, unit(center, size, 13.4, 0.8)],
                 color,
                 ICON_STROKE,
             );
