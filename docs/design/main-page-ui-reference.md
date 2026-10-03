@@ -1286,6 +1286,11 @@ Dock 形态：
 * Dock 独立于内容列：内容列（Hero / Secondary）宽度由自身 max-width 决定，
   不受 Dock 影响（原型修正 1 确认）
 
+> **验收微调（用户签核，覆盖原型 26lp）**：状态项横向起点采用 16lp 左缩进
+> （整体更靠左），dot↔文字间距 8lp（原型 .sb-item gap），状态项之间 ≈20lp；
+> 内容行垂直 dead-center：上 11 / 下 9 lp（egui 字形在行框内偏上 ~1.5lp，
+> 反向补偿后文字距分割线与距窗底等距）。实现见 ui.rs `status_dock`。
+
 可以容纳：
 
 ```text
@@ -1522,6 +1527,16 @@ Small UI
   效果上 Hero 组视觉重心落在内容区约 0.38–0.42 高度（略偏上）
 * 不依赖固定窗口像素位置维持布局
 
+> **验收微调（用户签核）**：
+> * 内容净高估算基准 460lp（最坏态 = supporting + 健康警告 + 两行 secondary ≈
+>   445lp），保证默认 940×680 下任何状态都不裁底；实测正常态 331lp，重心仍落
+>   0.38 区间。基准属 Tunable，与滚动态无关。
+> * Hero 内部节奏：eyebrow→status 8 / status→primary 22 lp；supporting 显示时
+>   status→supporting 10、supporting→primary 22 lp；primary→patch-update 14 lp。
+> * 内容列统一 gap 14 lp（hero→health→secondary）。
+> * 内容列 max-width 居中，列内**左对齐**（Primary CTA / Secondary 行靠左，
+>   对齐原型渲染；覆盖早期“居中 CTA”解读）。
+
 ---
 
 # 40. Window Resize
@@ -1552,6 +1567,10 @@ Hero：
 
 注：首帧自适应（`autosize_inner_height` 下限）与 Dock 形态属既定行为，缩放窗口时
 内容列宽度与垂直黄金比呼吸保持不变。
+
+> **验收微调（用户签核）**：首帧自适应改为**只涨不缩**——初始窗口保持 940×680
+> （spec 首帧参考），仅在内容超高时增长；绝不因内容变矮而缩窗（旧行为会把窗口
+> 从 680 撑到 ~716，导致弹性留白重新分配、内容整体下坠）。
 
 ---
 

@@ -47,6 +47,11 @@
   覆盖；窗口维持首帧自适应（#32 的 `autosize_inner_height` 下限不变）。
 - 向导步骤 1 语言下拉选中即本地化但不推进，点「下一步」才进步骤 2
   （`LanguageSubmitted` 事件）。
+- **设置对话框间距（用户验收微调，覆盖早期默认）**：Modal 显式 frame（内边距
+  24/20 lp + 1px 边框；egui 默认 menu_margin 6lp 太贴边）；内容区行距 13lp
+  （全局默认 10lp），页签/分割线/页脚段间距 12–16lp。`SETTINGS_DIALOG_SKELETON_H`
+  随 frame 内边距上调同步（208 → 236），首帧自适应下限随之提升，设置页脚在最小
+  自适应窗口内仍可见（有守卫测试）。
 - 发布流程补版本同步：`tools/build-release.ps1` 打包前把 Cargo.toml 的 version
   字段改为发布版本（修 0.2.4 陈旧版本号 + 应用更新检查永远报新版的问题）。
 

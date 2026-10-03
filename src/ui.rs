@@ -33,7 +33,9 @@ const WIZARD_CARD_WIDTH: f32 = 430.0;
 
 const SETTINGS_DIALOG_WIDTH: f32 = 580.0;
 
-const SETTINGS_DIALOG_SKELETON_H: f32 = 208.0;
+/// 设置对话框固定骨架高（heading + 页签 + 分割线 + 页脚；含 24/20 frame margin，
+/// 旧 6/6 menu_margin 时代为 208，settings_dialog_frame 内边距上调后 +28）。
+const SETTINGS_DIALOG_SKELETON_H: f32 = 236.0;
 const SETTINGS_SCROLL_MIN_H: f32 = 200.0;
 
 /// 主页面内容列最大宽度（spec §40 Tunable 基线：Hero max-width 600 lp）。
@@ -87,6 +89,15 @@ fn install_theme(ctx: &egui::Context) {
         s.spacing.window_margin = egui::Margin::symmetric(16, 18);
         s.spacing.button_padding = egui::vec2(14.0, 7.0);
     });
+}
+
+/// 设置对话框 Modal frame（生产与测试共用：内边距 24/20 + 1px border；测试布局须与生产同源）。
+fn settings_dialog_frame() -> egui::Frame {
+    egui::Frame::new()
+        .fill(theme::PANEL)
+        .stroke(egui::Stroke::new(1.0, theme::BORDER))
+        .corner_radius(egui::CornerRadius::same(8))
+        .inner_margin(egui::Margin::symmetric(24, 20))
 }
 
 fn card_frame() -> Frame {
@@ -217,6 +228,7 @@ fn load_github_mark(ctx: &egui::Context) -> Option<egui::TextureHandle> {
     let mut img = image::load_from_memory(GITHUB_MARK_PNG).ok()?.to_rgba8();
     for p in img.pixels_mut() {
         // 浅色底 → 透明；黑色 mark → 白（Dark 主题下可见，渲染 tint 不再需要）。
+        // 浅色主题（L1 另行立项）落地时按浅色派生规则重载，见 ADR-0010 派生变体。
         if p[0] > 240 && p[1] > 240 && p[2] > 240 {
             p[3] = 0;
         } else if p[3] > 0 {
@@ -247,12 +259,12 @@ fn card_title(ui: &mut egui::Ui, text: &str) {
 fn status_item(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(7.0, 7.0), egui::Sense::hover());
     ui.painter().circle_filled(rect.center(), 3.5, color);
-    // 行内 spacing 收窄：dot→文字总 8lp（原型 .sb-item gap: 8；item_spacing.x 默认 10lp 会撑到 16）。
+    // 行内 spacing 收窄：dot→文字总 8lp（原型 .sb-item gap: 8；默认 item_spacing.x 10lp 会撑到 16）。
+    let orig_x = ui.spacing().item_spacing.x;
     ui.spacing_mut().item_spacing.x = 2.0;
     ui.add_space(6.0);
     ui.label(egui::RichText::new(text).size(12.5).color(color));
-    // 恢复默认行内 spacing（item 间 10lp，原型 .status-bar gap 22lp 由调用方 add_space 表达）。
-    ui.spacing_mut().item_spacing.x = 10.0;
+    ui.spacing_mut().item_spacing.x = orig_x;
     ui.add_space(10.0);
 }
 
@@ -1181,13 +1193,9 @@ impl App {
         }
         let mut close_clicked = false;
         // 显式 frame：Modal 默认 menu_margin(6lp) 太贴边，加边缘呼吸（对称 24/20）。
-        let frame = egui::Frame::new()
-            .fill(theme::PANEL)
-            .stroke(egui::Stroke::new(1.0, theme::BORDER))
-            .corner_radius(egui::CornerRadius::same(8))
-            .inner_margin(egui::Margin::symmetric(24, 20));
+        // 测试须复用同一 frame（settings_dialog_frame），否则布局测量与生产不一致。
         egui::Modal::new(egui::Id::new("settings_dialog"))
-            .frame(frame)
+            .frame(settings_dialog_frame())
             .show(ctx, |ui| {
                 ui.set_width(SETTINGS_DIALOG_WIDTH);
                 ui.heading(self.strings.settings_title);
@@ -1802,10 +1810,15 @@ impl App {
                 self.hero_eyebrow(ui);
                 ui.add_space(8.0);
                 self.hero_status(ui, vm);
-                // 状态 → Supporting 或 Primary（原型：eyebrow 8 / status→supporting 10 / status→primary 22）。
-                ui.add_space(if vm.supporting.is_some() { 10.0 } else { 22.0 });
+                // 状态 → Supporting / Primary（原型节奏：status→primary 22，有 supporting 时 10 + 22）。
+                let (gap_to_sup, gap_after_sup) = if vm.supporting.is_some() {
+                    (10.0, 22.0)
+                } else {
+                    (22.0, 0.0)
+                };
+                ui.add_space(gap_to_sup);
                 self.hero_supporting(ui, vm);
-                ui.add_space(if vm.supporting.is_some() { 22.0 } else { 0.0 });
+                ui.add_space(gap_after_sup);
                 if let Some(e) = self.hero_primary(ui, ctx, vm) {
                     event = Some(e);
                 }
@@ -2263,8 +2276,8 @@ impl App {
             .flatten()
     }
 
-    /// 状态栏 dock 高度近似（顶线 1 + margin + item ≈ 44lp；用于自适应窗口内高补偿）。
-    const STATUS_DOCK_H: f32 = 44.0;
+    /// 状态栏 dock 高度近似（顶线 1 + 上 11 + 行 18 + 下 9 ≈ 39lp；供首帧窗口自适应）。
+    const STATUS_DOCK_H: f32 = 39.0;
 
     /// 返回内容净高（header + 内容列，不含 dock 与弹性留白），供首帧窗口自适应。
     fn main_content(&mut self, ui: &mut egui::Ui) -> f32 {
@@ -2309,9 +2322,10 @@ impl App {
             let top0 = ui.cursor().top();
             self.header(ui);
             let header_h = ui.cursor().top() - top0;
-            // 垂直呼吸（spec §39）：上:下 ≈ φ:1；内容净高按典型值估算（防 min 窗口挤占内容）。
+            // 垂直呼吸（spec §39）：上:下 ≈ φ:1；内容净高按最坏态估算（supporting + 健康警告 + 两行 secondary ≈ 445lp），
+            // 保证默认 940×680 下任何状态都不裁底（实测正常态 331lp，重心仍落 §39 的 0.38 区间）。
             let avail_h = ui.available_height();
-            let breathing = (avail_h - 340.0).max(0.0);
+            let breathing = (avail_h - 460.0).max(0.0);
             ui.add_space(breathing * 0.618);
             // 内容列 max-width 居中，内部左对齐（Primary CTA / Secondary 行靠左，见原型）。
             let col_w = MAIN_COLUMN_WIDTH.min(ui.available_width());
@@ -2357,7 +2371,6 @@ impl App {
         // 内容列统一 14 间隙（原型 content gap）：hero→health→secondary。
         ui.add_space(14.0);
         self.health_warning_line(ui);
-        ui.add_space(0.0);
         self.secondary_group(ui, ctx, &vm);
     }
 }
@@ -3067,66 +3080,68 @@ mod tests {
             ..Default::default()
         };
         let mut full = ctx.run_ui(raw, |ui| {
-            egui::Modal::new(egui::Id::new("settings_dialog_repro")).show(ui, |ui| {
-                let s = Strings::new(lang);
-                modal_top = ui.cursor().top();
-                ui.set_width(SETTINGS_DIALOG_WIDTH);
-                ui.heading(s.settings_title);
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    let _ = styled_button(
-                        ui,
-                        s.settings_tab_general,
-                        ButtonStyle::Primary,
-                        egui::vec2(88.0, 28.0),
-                        true,
-                    );
-                    ui.add_space(4.0);
-                    let _ = styled_button(
-                        ui,
-                        s.settings_tab_steam,
-                        ButtonStyle::Neutral,
-                        egui::vec2(88.0, 28.0),
-                        true,
-                    );
-                    ui.add_space(4.0);
-                    let _ = styled_button(
-                        ui,
-                        s.settings_tab_about,
-                        ButtonStyle::Neutral,
-                        egui::vec2(88.0, 28.0),
-                        true,
-                    );
-                });
-                ui.add_space(8.0);
-                ui.separator();
-                ui.add_space(8.0);
-                let max_scroll_h = settings_scroll_height(inner_h);
-                let scroll_resp = egui::ScrollArea::vertical()
-                    .auto_shrink([false; 2])
-                    .max_height(max_scroll_h)
-                    .show(ui, |ui| {
-                        for i in 0..12 {
-                            ui.label(format!("settings section line {i}"));
-                        }
-                    });
-                scroll_bottom = scroll_resp.inner_rect.bottom();
-                ui.add_space(12.0);
-                ui.separator();
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let r = styled_button(
+            egui::Modal::new(egui::Id::new("settings_dialog_repro"))
+                .frame(settings_dialog_frame())
+                .show(ui, |ui| {
+                    let s = Strings::new(lang);
+                    modal_top = ui.cursor().top();
+                    ui.set_width(SETTINGS_DIALOG_WIDTH);
+                    ui.heading(s.settings_title);
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        let _ = styled_button(
                             ui,
-                            s.btn_close,
-                            ButtonStyle::Neutral,
-                            egui::vec2(80.0, 30.0),
+                            s.settings_tab_general,
+                            ButtonStyle::Primary,
+                            egui::vec2(88.0, 28.0),
                             true,
                         );
-                        footer = r.rect.bottom();
+                        ui.add_space(4.0);
+                        let _ = styled_button(
+                            ui,
+                            s.settings_tab_steam,
+                            ButtonStyle::Neutral,
+                            egui::vec2(88.0, 28.0),
+                            true,
+                        );
+                        ui.add_space(4.0);
+                        let _ = styled_button(
+                            ui,
+                            s.settings_tab_about,
+                            ButtonStyle::Neutral,
+                            egui::vec2(88.0, 28.0),
+                            true,
+                        );
+                    });
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.add_space(8.0);
+                    let max_scroll_h = settings_scroll_height(inner_h);
+                    let scroll_resp = egui::ScrollArea::vertical()
+                        .auto_shrink([false; 2])
+                        .max_height(max_scroll_h)
+                        .show(ui, |ui| {
+                            for i in 0..12 {
+                                ui.label(format!("settings section line {i}"));
+                            }
+                        });
+                    scroll_bottom = scroll_resp.inner_rect.bottom();
+                    ui.add_space(12.0);
+                    ui.separator();
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let r = styled_button(
+                                ui,
+                                s.btn_close,
+                                ButtonStyle::Neutral,
+                                egui::vec2(80.0, 30.0),
+                                true,
+                            );
+                            footer = r.rect.bottom();
+                        });
                     });
                 });
-            });
         });
         full.textures_delta.clear();
         (modal_top, scroll_bottom, footer)
@@ -3221,8 +3236,8 @@ mod tests {
         assert_eq!(settings_scroll_height(100.0), 200.0);
         assert_eq!(settings_scroll_height(251.0), 200.0);
         assert_eq!(settings_scroll_height(408.0), 200.0);
-        assert_eq!(settings_scroll_height(416.0), 208.0);
-        assert_eq!(settings_scroll_height(628.0), 420.0);
+        assert_eq!(settings_scroll_height(444.0), 208.0);
+        assert_eq!(settings_scroll_height(656.0), 420.0);
         assert_eq!(settings_scroll_height(1000.0), 420.0);
     }
 }
