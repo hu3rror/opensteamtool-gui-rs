@@ -93,12 +93,15 @@ impl SteamState {
 
     /// 进程组内是否有本目录的 `steam.exe` 本体在运行（路径过滤；孤儿 webhelper 不算）。
     /// 优雅信号只发给在运行的实例——无实例时 `-shutdown` 可能意外启动本目录 Steam（他处安装不算）。
+    /// exe 路径不可解析的实例不算：无路径无法证明属于本目录，名字回退会把他处安装误判为本目录实例。
     pub fn steam_exe_running(&self, dir: &Path) -> bool {
         let dir = std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf());
         let mut sys = self.sys.lock().unwrap();
         refresh(&mut sys);
         sys.processes().values().any(|p| {
-            p.name().eq_ignore_ascii_case(STEAM_PROC) && is_group_member(p.name(), p.exe(), &dir)
+            p.name().eq_ignore_ascii_case(STEAM_PROC)
+                && p.exe()
+                    .is_some_and(|path| is_group_member(p.name(), Some(path), &dir))
         })
     }
 }

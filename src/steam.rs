@@ -150,13 +150,19 @@ mod tests {
         let steam = SteamState::new();
         assert!(steam.alive(), "前置：系统内确有 steam.exe（在 dir_b）");
         assert!(steam.group_running(&dir_a), "前置：dir_a 有孤儿进程在跑");
+        // spawn 后 exe 路径可能瞬时不可解析（sysinfo 快照）：steam_exe_running 不做名字回退，
+        // 先轮询直到 dir_b 的 steam.exe 本体可被路径识别，再做跨目录判定。
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !steam.steam_exe_running(&dir_b) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "dir_b 的 steam.exe 应在窗口内被识别"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
         assert!(
             !steam.steam_exe_running(&dir_a),
             "dir_a 无自己的 steam.exe 实例"
-        );
-        assert!(
-            steam.steam_exe_running(&dir_b),
-            "dir_b 有自己的 steam.exe 实例"
         );
         let _ = child_b.kill();
         let _ = child_a.kill();
