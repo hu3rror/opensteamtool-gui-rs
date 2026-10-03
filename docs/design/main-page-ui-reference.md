@@ -3,79 +3,88 @@
 ## Main Page UI Reference & Design Specification
 
 **Target:** Rust + egui / Windows Native Desktop GUI
-**Scope:** 主页面（Main Page）
+**Scope:** Main Page
 **Languages:** `zh` / `en`
-**Theme:** Dark only（当前阶段不设计 Light Mode）
+**Theme:** Dark only
 
 ---
 
 # 1. 产品定位
 
-OpenSteamTool Manager 是一个 Windows 原生 Steam Patch 管理工具。
+OpenSteamTool Manager 是 Windows 原生桌面工具，用于管理 Steam Patch 的部署、卸载与在线更新。
 
-主页面的产品体验定位为：
+主页面定位为：
 
 > **Premium Game Launcher × Focused Utility**
 
-即：
+希望用户感受到：
 
-* 有明显的游戏产品感
-* 高级、克制
-* 稍微带有 Steam 式的深色游戏软件气质
-* 以“当前最重要的动作”为核心
-* 不呈现为 Dashboard
-* 不呈现为开发者 / 运维工具
-* 不追求电竞、Neon、Glow 等强烈视觉效果
+* 高级
+* 克制
+* 专业
+* 有游戏产品气质
+* 略带 Steam 式深色蓝灰氛围
+* 操作直接
+* 信息低密度
 
-### 核心体验原则
+但不要呈现为：
 
-用户打开主页面后，应快速理解：
+* Steam Clone
+* Dashboard
+* Mod Manager
+* Developer Tool
+* DevOps / Admin Console
+* 电竞 RGB UI
+* Neon Game UI
 
-> **现在 Patch 是什么状态 → 现在最重要的动作是什么 → 如果不能操作，为什么 → Steam 当前是否运行 → 最近一次操作结果是什么。**
+核心目标：
+
+> **像一个认真设计过的、面向玩家的 Windows Launcher。**
 
 ---
 
-# 2. 设计原则
+# 2. 核心交互原则
 
 ## 2.1 Action-first
 
-主页面任何稳定状态下，都应存在：
+主页面任何稳定状态都应存在一个唯一的：
 
-> **一个唯一的 Primary CTA**
+> **Primary CTA**
 
-Primary CTA 根据当前业务状态动态变化。
+Primary CTA 由当前业务状态派生。
 
 ---
 
 ## 2.2 Single Source of Truth
 
-同一事实只在主页面呈现一次。
+同一个事实只在首页显示一次。
 
-禁止重复：
+特别是：
 
-* Patch 版本
-* Steam 运行状态
-* 同一错误
-* 同一更新结论
+> **Patch Version 永远不渲染。**
 
-尤其：
+禁止出现：
 
-> **Patch Version 永不渲染。**
+```text
+v1.4.2
+Patch Version
+Current Version
+Latest Version
+Online Version
+```
 
-本地版本与线上版本仅供 `update_flow` 内部比较。
+本地版本 / 线上版本只属于 `update_flow` 内部逻辑。
 
 ---
 
 ## 2.3 职责分离
 
-主页面中的几个区域必须保持明确边界：
-
 ```text
 Deploy Status
-    → Patch 当前部署事实
+    → Patch 是否已应用
 
 Primary CTA
-    → 当前最重要的动作
+    → 当前最重要的操作
 
 Secondary Actions
     → 备用路径 / 维护操作
@@ -87,16 +96,99 @@ Patch Update Check
     → Patch 在线维护
 
 Status Bar
-    → Steam 持续状态 + Busy + 最近操作结果
+    → Steam State + Busy + Recent Operation Result
 ```
 
-不得让某个区域逐渐承担其他区域的职责。
+任何组件不得越权承担其他组件的业务事实。
 
 ---
 
-# 3. 页面总体结构
+# 3. Source of Truth
 
-主页面采用单列、垂直节奏：
+本 UI Spec 的约束层级：
+
+```text
+GLOSSARY.md
+    ↓
+相关 ADR
+    ↓
+本 Main Page UI Reference
+    ↓
+现有代码事实
+    ↓
+Implementation Tuning
+```
+
+### GLOSSARY.md
+
+负责：
+
+> 领域术语、状态定义、事实来源和不可违反的业务语义。
+
+### ADR
+
+负责：
+
+> 已经裁决的产品 / 架构行为。
+
+### Main Page UI Reference
+
+负责：
+
+> Main Page 的视觉、布局和交互呈现。
+
+### Existing Code
+
+负责：
+
+> 当前实际实现，需要审查，不自动视为目标设计。
+
+---
+
+# 4. Specification Status
+
+本规格中的内容分两类。
+
+## Locked
+
+包括：
+
+* 产品定位
+* 信息架构
+* 状态映射
+* 术语
+* Primary / Secondary hierarchy
+* Status Bar 职责
+* 品牌色板（§10 定稿 Palette B）
+* Patch Version 不渲染
+* Busy 行为
+* 确认框规则
+* Health Warning 位置
+* Update Action 归属
+
+未经 ADR / Spec 变更，不自行修改。
+
+## Tunable
+
+包括：
+
+* 具体字号
+* 具体 spacing
+* 具体 radius（§38 层级固定，数值可调）
+* Window recommended size（首帧参考见 §40）
+* Hero max width
+* 语义色的派生变体（hover / 徽章浅底 / selection 的混合比例）
+* 微调 hover transition
+* Icon 细节（尺寸 / 笔宽微调；构型已定稿，见 §36）
+* egui implementation detail
+
+这些可以在实际原型 / 渲染测试中调整。
+
+色板基础槽位值（§10）属于 Locked，不在 Tunable 内。
+
+---
+
+# 5. 总体页面结构
 
 ```text
 Windows Native Title Bar
@@ -104,30 +196,22 @@ Windows Native Title Bar
 Application Header
         ↓
 Hero Surface
+    ├── Patch Eyebrow
+    ├── Deploy Status
+    ├── Supporting Text（必要时）
+    ├── Primary CTA
+    └── Patch Update Check
         ↓
-Health Warning（仅必要时）
+Health Warning（仅特定状态）
         ↓
 Secondary Action Group
         ↓
 Status Bar
 ```
 
-其中：
-
-```text
-Hero Surface
-├── Patch Eyebrow
-├── Deploy Status
-├── Supporting Text（必要时）
-├── Primary CTA
-└── Patch Update Check
-```
-
 ---
 
-# 4. Windows Window Chrome
-
-## Locked
+# 6. Window Chrome
 
 使用：
 
@@ -135,297 +219,279 @@ Hero Surface
 
 不实现自定义 Window Chrome。
 
-Windows 原生标题栏承担：
+原生标题栏负责：
 
 * Window identity
 * Minimize
 * Maximize
 * Close
-* Windows 原生窗口行为
+* Native window behavior
 
-不要为了视觉风格自行接管：
-
-* 标题栏拖拽
-* 双击标题栏行为
-* 最小化
-* 最大化
-* 关闭
-* 系统窗口控制
+不得为了视觉设计接管上述行为。
 
 ---
 
-# 5. Application Header
+# 7. Application Header
 
-Header 采用：
+Header：
 
 ```text
 [Logo + App Name]                         [Settings]
 ```
 
-## Locked
-
 左侧：
 
-> 完整横向 Logo（Icon + App Name）
+> 完整横向 Logo
 
 右侧：
 
 > Settings Icon
 
-Header 不负责：
+Header 不显示：
 
-* 页面标题
-* Hero 状态
-* Steam State
+* Home
+* Launcher
+* Steam Patch
+* Page Title
 * Patch Version
+* Steam State
 
-### 禁止
+Header 的职责：
 
-不要额外出现：
-
-* `Home`
-* `Launcher`
-* `Steam Patch`
-* `OpenSteamTool Manager` 页面标题
-
-Windows Title Bar 和 Application Header 已经足够承担应用身份。
+> **品牌识别 + Settings 入口。**
 
 ---
 
-# 6. Visual Direction
+# 8. Visual Direction
 
-## 6.1 Overall Character
+总体：
 
-最终视觉方向：
+> **Dark / Premium / Calm / Professional / Game-aware**
 
-> **Dark / Premium / Calm / Game-aware / Action-first**
-
-关键词：
-
-* Deep Blue-Gray
-* Low visual density
-* Moderate contrast
-* Strong Primary CTA
-* Subtle Surface hierarchy
-* Subtle game atmosphere
-
----
-
-## 6.2 Steam-like Reference
-
-允许借鉴的是：
-
-* 深色蓝灰氛围
-* 游戏产品的整体亲和感
-* 克制而实用的交互
-
-禁止直接复制：
-
-* Steam 导航结构
-* Steam 卡片结构
-* Steam 按钮样式
-* Steam UI 组件
-* Steam 品牌装饰
-
-目标是：
-
-> **“让人感觉像游戏生态里的成熟产品”，而不是“Steam Clone”。**
-
----
-
-# 7. Surface System
-
-视觉材质采用：
-
-> **Light Layering + Subtle Game Atmosphere**
-
-页面需要有：
+视觉组合：
 
 ```text
-Page Background
-    ↓
-Hero Surface
-    ↓
-Primary CTA
+Neutral Dark Foundation
+        ↓
+Cool / Blue-Gray Surface
+        ↓
+Restrained Brand Accent
+        ↓
+Strong Primary CTA
 ```
 
-## Hero Surface
+游戏感来自：
 
-Hero 与 Background 有低强度亮度层次。
+* 比例
+* 留白
+* CTA
+* Icon
+* Surface depth
+* Brand accent
 
-使用：
+而不是：
 
-* 低对比 Surface
-* 1px 左右的低对比 Border
-* 极弱品牌氛围
-
-不使用：
-
-* Glassmorphism
-* 强阴影
-* Neon
 * Glow
-* 大面积 Gradient
-* 发光边框
-
-### Border
-
-Hero 默认使用极细、中性的 Border。
-
-Border 的职责是：
-
-> **定义 Surface 边界**
-
-不是：
-
-> **作为状态动画。**
+* Neon
+* 强 Gradient
+* 粒子
+* 巨型标题
+* 电竞风发光边框
 
 ---
 
-# 8. Color System
+# 9. Color Direction
 
-采用项目已有的 `Semantic Palette` 作为唯一色彩来源。
+## 9.1 当前问题诊断
 
-至少包括：
+如果原型视觉感觉“憨”，优先检查：
+
+1. Accent Blue 是否饱和度过高。
+2. Background 与 Surface 是否都偏蓝，导致整体像“蓝色玩具 UI”。
+3. Primary CTA 是否过于鲜艳。
+4. 圆角、蓝色 Surface、按钮填充是否同时过强。
+5. Neutral Gray 是否不足，导致整个页面缺乏专业的中性骨架。
+
+新的颜色策略：
+
+> **降低蓝色面积和饱和度，提高中性深灰的占比。**
+
+页面不是：
+
+```text
+Blue UI
+```
+
+而是：
+
+```text
+Professional Dark UI
++
+Blue Interaction Accent
+```
+
+---
+
+# 10. 品牌色板（已定稿）：Palette B — Deep Navy / Ice Blue
+
+> 经交互原型对比后定稿。候选评估与其他方向（A / C / D / E）的记录见 §12。
+> 本节为基础槽位值，全部派生色（hover / 徽章浅底 / selection）由 §11 规则从
+> 本表派生，不新增独立色值。
+
+### Character
+
+> 更接近 Steam 的蓝灰生态，但比 Steam 更干净。Neutral 深灰占主导，蓝色
+> 仅作为 Interaction Accent 出現，不做大面积染色（§9.1 诊断持续生效）。
+
+```text
+Background       #0F151C
+Surface          #151E28
+Surface Elevated #1C2835
+Border           #293746
+
+Text Primary     #E8EDF3
+Text Secondary   #A9B5C3
+Text Muted       #778596
+
+Accent Blue      #5C91C7
+Accent Hover     #6A9FD1
+
+Success Green    #6BA88F
+Warning Amber    #C39A5B
+Error Red        #C97979
+
+Warning Blue     #587A9D
+```
+
+### 语义槽（与 ADR-0010 槽位对齐）
+
+```text
+Background      → 窗口页面底
+Surface         → Hero 底
+Surface Elevated → 卡片/悬浮底、禁用态底
+Border          → 分隔线、hairline
+Text Primary    → 正文/大标题
+Text Secondary  → 次级文案
+Text Muted      → 弱化/禁用文案、灰色状态
+Accent Blue     → 交互蓝（Primary CTA / hover / selection）
+Accent Hover    → 交互蓝悬停/激活
+Success Green   → 成功、Steam 运行状态点
+Warning Amber   → 健康风险警示、警告徽章
+Error Red       → 错误文案/失败状态
+Warning Blue    → 仅「退出 Steam 并卸载补丁」
+```
+
+特点：
+
+* Steam 感最明显，但比纯 Steam 风更现代、更干净、更克制
+* Neutral 深灰占主导，蓝灰统一，Accent 面积受限
+* 「已应用」的 Hero 状态：大字号中性主文字 + 绿色 ✓ 点缀，不整块染绿（§37）
+* Hero / Surface 不做蓝底、不大面积染色
+
+### 参考 Design Token（数值 Tunable，随渲染测试微调）
+
+```text
+窗口首帧参考   940 × 680 lp（§40）
+内容列 max-width  600 lp
+圆角层级（§38）  Hero 18 / CTA 10 / Row 10 / Small 7 lp
+垂直呼吸（§39）  上留白 : 下留白 ≈ φ : 1（弹性分配）
+eyebrow       “PATCH”（双语一致，小号大写英文，§14）
+```
+
+---
+
+# 11. 色彩纪律（Color Discipline）
+
+不混用其他 Palette 方向（A / C / D / E 已评估未选用，见 §12）。
+
+所有颜色按单一推导链：
 
 ```text
 Background
+↓
 Surface
-Surface Elevated
-Border
-
-Text Primary
-Text Secondary
-Text Muted
-
-Accent Blue
-Success Green
-Warning Amber
-Error Red
-
-Warning Secondary Blue
+↓
+Text
+↓
+Accent
+↓
+Semantic
 ```
 
-## Brand Blue
+全部从该 Palette 派生。
 
-采用：
+尤其：
 
-> **明显但克制的 Brand Blue**
+> **Accent Blue 不应该同时成为 Background、Surface 和 CTA 的主色。**
 
-主要用于：
+Accent 是：
 
-* Primary CTA
-* Interactive
-* Active / Hover 等派生状态
+> **Interaction Color**
 
-不用于：
+不是：
 
-* 大面积背景
-* 整块 Hero 染色
-* 大面积装饰
+> **UI Base Color**
 
 ---
 
-## 特殊警戒色
+# 12. 原型决策记录（Palette 定稿）
 
-严格遵循 Glossary：
+设计探索阶段以交互原型对比候选方向（`prototypes/main-page-ui-prototype.html`，
+A / B / D 三变体），重点观察：
 
-> `Warning Secondary Blue`
+* Primary CTA 是否更专业
+* Hero 是否仍然有游戏感
+* Update Action 是否足够安静
+* Warning 是否能够从 Neutral 中脱离
+* 整体是否还像 Steam 周边工具，而不是独立产品
 
-**唯一用于：**
+**结论：定稿 B — Deep Navy / Ice Blue（§10）。**
 
-> `退出 Steam 并卸载补丁`
+选择理由：Steam 蓝灰生态的亲近感 + 比 Steam 更现代的干净程度；Neutral 深灰
+占主导、Accent 克制，长期使用不腻、不产生“蓝色玩具 UI”感（§9.1）。
 
-不得扩展给其他按钮。
+随原型确认的呈现细节（已并入 §10 / §14 / §32 / §36 / §38 / §39 / §40）：
+底部状态栏 dock、黄金比垂直呼吸、eyebrow 用大写英文 PATCH（双语一致）、
+设置齿轮构型（圆环 + 8 圆齿 + 中心点）。
 
----
-
-# 9. Typography
-
-不引入额外品牌字体。
-
-使用：
-
-> **系统字体 / 现有 egui font fallback**
-
-品牌感主要来自：
-
-* Logo
-* Color
-* Layout
-* Surface
-* Typography hierarchy
-* Icon system
+评估过的其他方向（未选用，禁混用）：A — Graphite / Steel（最专业）、
+C — Gunmetal / Cobalt（最冷峻）、D — Charcoal / Muted Teal（品牌差异）、
+E — Slate / Indigo（现代独立游戏感）。
 
 ---
 
-## Typography Hierarchy
+# 13. Hero Surface
 
-层级：
+Hero 是主页面唯一真正意义上的核心 Surface。
+
+职责：
 
 ```text
-Hero Status
-    ↓
-App Name / Primary Action
-    ↓
+Patch
++
+Deploy Status
++
 Supporting Text
-    ↓
-Secondary Action
-    ↓
-Status Bar
++
+Primary CTA
++
+Patch Update Check
 ```
 
-### Hero Status
+视觉：
 
-例如：
-
-```text
-Patch
-
-已应用
-```
-
-`已应用 / 未应用` 是 Hero 的主要文字。
+* 比 Background 略亮
+* 低对比 Border
+* 极弱层次
+* 不做明显阴影
+* 不做 Glass
+* 不做 Glow
 
 ---
 
-## 状态文字的视觉原则
+# 14. Hero Content Hierarchy
 
-正常状态：
-
-> 大字号、中性色为主、语义色只做点缀。
-
-例如：
-
-```text
-Patch
-
-✓ 已应用
-```
-
-不应做成整块高饱和绿色。
-
-异常 / Busy：
-
-> 根据语义提高视觉权重，但不把整个 Surface 染成状态色。
-
----
-
-# 10. Hero Surface
-
-Hero 是主页面视觉核心。
-
-它不是传统 Dashboard Card。
-
-Hero 的职责：
-
-> **Patch Deploy Status + Primary CTA + Patch Update Check**
-
----
-
-## Hero 内部结构
-
-固定信息顺序：
+顺序：
 
 ```text
 Patch
@@ -439,18 +505,31 @@ Primary CTA
 Patch Update Check
 ```
 
+`Patch`：
+
+> eyebrow / muted，**文案定稿为英文大写 “PATCH”**（双语一致，小号、次级色、
+> 字距拉开；前缀 14px accent 短条）。不在中文界面显示“补丁”二字（突兀，原型修正）。
+
+`已应用 / 未应用`：
+
+> Hero Status
+
+Primary：
+
+> 第二级视觉焦点
+
 ---
 
-# 11. Deploy Status
+# 15. Deploy Status
 
-严格使用项目 Glossary 的用户术语：
+严格使用：
 
 ```text
 已应用
 未应用
 ```
 
-禁止自行创造：
+禁止：
 
 ```text
 Installed
@@ -462,45 +541,31 @@ Patched
 
 ---
 
-## Path Invalid
+# 16. Patch Version
 
-Steam Path Invalid：
+硬规则：
 
-> **不是新的第三种 Deploy Status**
+> **Patch Version 永远不渲染。**
 
-业务上仍：
+主页面：
 
-```text
-Deploy Status = 未应用
-```
+* Hero 不显示
+* Update 不显示
+* Status Bar 不显示
+* Health Warning 不显示
+* Secondary 不显示
 
-同时可以显示：
-
-```text
-Steam 路径无效
-```
-
-以及：
-
-```text
-前往设置修复
-```
-
-不得把 Path Invalid 单独定义为：
-
-```text
-Deploy Status = Path Invalid
-```
+本地版本 / 线上版本仅作为更新流程内部数据。
 
 ---
 
-# 12. Supporting Text
+# 17. Supporting Text
 
-Supporting Text 默认隐藏。
+默认不显示。
 
-只在：
+只有在：
 
-> 用户需要理解当前状态，或者 Primary CTA 当前不可用
+> 用户需要理解当前状态 / 当前 Primary 不可用
 
 时显示。
 
@@ -515,74 +580,59 @@ Patch
 请点击「检查补丁更新」下载新版本
 ```
 
-Supporting Text 的职责：
+Supporting Text 只：
 
-> **解释**
+> 解释
 
-而不是：
+不：
 
-> **新增操作入口**
-
-因此：
-
-> 不在 Supporting Text 内再次创建 Download Button。
-
-真正操作仍由：
-
-> `检查补丁更新`
-
-负责。
+> 新增操作入口
 
 ---
 
-# 13. Primary CTA
+# 18. Primary CTA
 
-Primary CTA 是首页最强交互元素。
+Primary CTA 是页面视觉重点。
 
-视觉方案：
+视觉：
 
-> **Solid Brand Blue + Very Subtle Game Atmosphere**
+> **Solid Brand Accent + Very Subtle Depth**
 
 允许：
 
-* 非常轻的渐变
-* Hover 亮度变化
-* Press slight sink
+* 轻微色阶
+* Hover brightness
+* Press downshift
 * Focus ring
-* Subtle depth
 
 禁止：
 
 * Neon
 * Glow
 * 强阴影
-* 发光边框
-* 大范围动画
+* 发光 Border
+* 大面积 Gradient
 
 ---
 
-## CTA Geometry
+## 18.1 Primary Geometry
 
-Primary CTA：
+Primary：
 
-* 固定高度体系
 * 稳定 Action Width
+* 固定高度体系
 * 单行
 * Icon + Label 整体居中
 
-不允许因中英文变化产生剧烈几何变化。
-
-不要：
+不允许：
 
 * 自动换行
-* 通过缩小字号硬塞
-* 通过 ellipsis 截断核心文案
+* 省略号截断核心文案
+* 因英文过长而极端缩小字体
 
 ---
 
-# 14. Primary CTA State Mapping
-
-这是主页面的核心状态映射：
+# 19. Primary CTA Mapping
 
 | Deploy Status            | Steam State | Primary CTA   |
 | ------------------------ | ----------- | ------------- |
@@ -590,11 +640,182 @@ Primary CTA：
 | 已应用                      | 未运行         | 启动 Steam      |
 | 已应用                      | 运行中         | 重启 Steam      |
 | 未应用 + Steam Path Invalid | —           | 前往设置修复        |
-| 任意交互操作                   | Busy        | Busy Stage    |
+| Busy                     | 任意          | Busy Stage    |
 
 ---
 
-# 15. “未应用”状态
+# 20. Action Safety
+
+原则：
+
+> **用户明确点击动作后，默认直接执行。**
+
+原则层面不增加确认弹窗。
+
+适用：
+
+* 卸载补丁
+* 重启 Steam
+* 退出 Steam 并卸载补丁
+* 卸载补丁并重启 Steam
+
+但是，存在一个已经由 **ADR-0007 / #36** 确认的例外。
+
+---
+
+## 20.1 Confirm Dialog Exception
+
+以下规则优先于“默认直接执行”：
+
+> **仅「退出 Steam 并卸载补丁」和「卸载补丁并重启 Steam」在 Steam 正在运行时弹出“关闭确认”框。**
+
+即：
+
+```text
+Steam Running
+    ↓
+退出 Steam 并卸载补丁
+    → Confirm Dialog
+
+Steam Running
+    ↓
+卸载补丁并重启 Steam
+    → Confirm Dialog
+```
+
+确认框是：
+
+> **关闭确认**
+
+其职责是告知用户：
+
+> 当前 Steam 正在运行，此操作会先关闭 Steam。
+
+---
+
+## 20.2 Explicit No-Confirm Actions
+
+以下操作不得出现确认框：
+
+### 应用补丁并启动 Steam
+
+Steam 正在运行时：
+
+> 直接放行。
+
+`kill_first` 由运行态派生。
+
+### 重启 Steam
+
+始终：
+
+> 不弹确认框。
+
+因为：
+
+> `重启 Steam` 的按钮语义已经包含“关闭并重新启动”，再次确认属于冗余打扰。
+
+### 卸载补丁
+
+仅在：
+
+> Steam 未运行的可用路径
+
+直接执行。
+
+### 其他状态
+
+遵循具体状态矩阵。
+
+---
+
+## 20.3 Confirm Dialog Boundary
+
+确认框只阻断：
+
+> `退出 Steam 并卸载补丁`
+> `卸载补丁并重启 Steam`
+
+且仅在：
+
+> Steam 正在运行
+
+时出现。
+
+确认框不得扩散到：
+
+* Primary CTA
+* Update Action
+* 重启 Steam
+* Steam 未运行时的卸载补丁
+* 正常启动 Steam
+
+---
+
+# 21. Secondary Action
+
+Secondary：
+
+> Inline Action
+
+例如：
+
+```text
+[Icon] 卸载补丁
+```
+
+默认无完整 Button Surface。
+
+Hover：
+
+```text
+╭────────────────────────────╮
+│ [Icon] 卸载补丁              │
+╰────────────────────────────╯
+```
+
+---
+
+# 22. Secondary Hit Area
+
+视觉上：
+
+> Inline
+
+实际点击：
+
+> **整行**
+
+因此：
+
+```text
+Visual Weight = Low
+Hit Area = Full Row
+```
+
+---
+
+# 23. Secondary Action Group
+
+Secondary：
+
+> 纵向排列
+
+不横向排列。
+
+Group 使用：
+
+> 间距 + 极轻分隔线
+
+不创建完整 Card。
+
+---
+
+## 23.1 未应用
+
+```text
+[Play] 正常启动 Steam
+```
 
 Primary：
 
@@ -602,412 +823,148 @@ Primary：
 [Play] 应用补丁并启动 Steam
 ```
 
-Secondary：
-
-```text
-[Play] 正常启动 Steam
-```
-
-### 视觉层级
-
-```text
-Primary
-████████████████████
-
-Secondary
-        [Play] 正常启动 Steam
-```
-
-`正常启动 Steam` 是：
-
-> **备用启动路径**
-
-不是第二个 Primary。
-
 ---
 
-## 补丁文件缺失
-
-根据 Glossary：
-
-```text
-应用补丁并启动 Steam
-```
-
-必须 disabled。
-
-同时 Hero 显示：
-
-```text
-未应用
-
-补丁未下载
-请点击「检查补丁更新」下载新版本
-```
-
-而：
-
-```text
-正常启动 Steam
-```
-
-仍保持可用。
-
----
-
-# 16. “已应用 + Steam 未运行”
-
-Primary：
-
-```text
-[Play] 启动 Steam
-```
-
-Secondary：
+## 23.2 已应用 + Steam 未运行
 
 ```text
 [Uninstall] 卸载补丁
 [Uninstall] 卸载补丁并重启 Steam
 ```
 
-Primary 是唯一核心动作。
-
 ---
 
-# 17. “已应用 + Steam 运行中”
-
-Primary：
-
-```text
-[Restart] 重启 Steam
-```
-
-Secondary：
+## 23.3 已应用 + Steam 运行中
 
 ```text
 [Exit + Uninstall] 退出 Steam 并卸载补丁
 [Uninstall + Restart] 卸载补丁并重启 Steam
 ```
 
-排序：
+第一项：
+
+> 使用 `Warning Secondary Blue`
+
+但不使用：
+
+> Error Red
+
+---
+
+# 24. Health Warning
+
+只在 Health Summary：
 
 ```text
-重启 Steam
-    ↓
-退出 Steam 并卸载补丁
-    ↓
-卸载补丁并重启 Steam
+上游尚未适配
+未找到核心 DLL
 ```
 
-其中：
-
-> `退出 Steam 并卸载补丁`
-
-使用 `Warning Secondary Blue`。
+时出现。
 
 ---
 
-# 18. Secondary Action System
-
-Secondary 采用：
-
-> **Inline Action**
-
-默认：
+## 24.1 Position
 
 ```text
-[Icon]  卸载补丁
+Hero
+↓
+Health Warning
+↓
+Secondary
 ```
 
-不是完整按钮。
+正常状态不占空间。
 
 ---
 
-## Hit Area
+## 24.2 Visual
 
-实际点击区域：
+统一：
 
-> **整行可点击**
-
-但默认背景透明。
-
-Hover：
-
-```text
-╭────────────────────────────╮
-│ [Icon]  卸载补丁            │
-╰────────────────────────────╯
-```
-
-因此：
-
-> **Visual Weight Low / Hit Area Large**
-
----
-
-# 19. Secondary Action Group
-
-Secondary 固定：
-
-> **纵向排列**
-
-不横向并排。
-
-原因：
-
-* 中文 / English 长度不同
-* 避免操作竞争
-* 保持 Launcher 的单列节奏
-* 降低布局复杂度
-
-Group 使用：
-
-> **Spacing + Very Subtle Divider**
-
-不是 Card。
-
----
-
-# 20. Action Safety
-
-根据已确认的产品交互原则：
-
-> **明确点击即直接执行。**
-
-原则层面不增加确认弹窗，包括：
-
-* 卸载补丁
-* 重启 Steam
-* 退出 Steam 并卸载补丁
-* 卸载补丁并重启 Steam
-
-### 20.1 裁决：关闭确认框的既有例外（按 ADR-0007 #36 修订执行）
-
-上述原则有一个既有例外，落地时保持 ADR-0007 现状、不因本规格撤销：
-
-> **仅「退出 Steam 并卸载补丁」/「卸载补丁并重启 Steam」在 Steam 运行中弹「关闭确认」框**；
-> 「应用补丁并启动 Steam」（Steam 运行中直接放行，`kill_first` 由运行态派生）与
-> 「重启 Steam」恒不经确认框（按钮语义本身即「关闭并重启」，再确认是冗余打扰）。
-
-即「卸载补丁并重启 Steam」「退出 Steam 并卸载补丁」在 Steam 运行中仍保留关闭确认框；
-「卸载补丁」（Steam 未运行时路径）与「重启 Steam」「应用补丁并启动 Steam」确认框不出现。
-
----
-
-# 21. Busy System
-
-Busy 与 `Busy Gate` 对齐。
-
-当任何交互类 Action / Update Action 执行时：
-
-```text
-Action / Update Action
-        ↓
-Busy Gate
-        ↓
-Main UI Busy
-```
-
-同一时间只允许一个交互类后台操作。
-
----
-
-## Busy Presentation
-
-页面结构保持不变。
-
-Hero 原位进入：
-
-> **Stage-driven Busy State**
+> Warning Amber + Warning Icon
 
 例如：
 
 ```text
-Patch
-
-正在应用补丁…
+╎ [Warning] 当前 Steam 尚未适配        设置 →
 ```
 
-下一阶段：
+或：
 
 ```text
-Patch
-
-正在启动 Steam…
+╎ [Warning] 未找到 Steam 核心文件      设置 →
 ```
 
-而不是：
+整行点击：
 
-```text
-正在执行“应用补丁并启动 Steam”
-```
-
-Busy 文案表达：
-
-> **当前阶段**
+> Settings → Steam
 
 ---
 
-## Busy During Interaction
+## 24.3 Health vs Deploy
 
-交互类控制：
-
-```text
-Primary       disabled
-Secondary     disabled
-Update        disabled
-```
-
-UI 不应出现多个并行可点击 Action。
-
----
-
-# 22. Progress
-
-只有存在可靠进度值时才显示 Progress Bar。
-
-### 无真实进度
-
-```text
-正在启动 Steam…
-```
-
-### 有真实进度
-
-```text
-正在下载补丁…
-
-██████████████░░░░░░ 68%
-```
-
-### 解压等无可靠进度阶段
-
-```text
-正在解压补丁…
-```
-
-禁止伪造：
-
-```text
-正在启动 Steam… 67%
-```
-
----
-
-# 23. Error System
-
-错误不统一做成大红色 Error Page。
-
-采用：
-
-> **Error UI 权重由“下一步需要做什么”决定。**
-
----
-
-## 操作失败
-
-例如：
-
-```text
-补丁应用失败
-
-[Retry] 重试
-```
-
-Hero 可以接管。
-
----
-
-## 环境阻塞
-
-例如：
-
-```text
-未应用
-
-Steam 路径无效
-
-[Settings] 前往设置修复
-```
-
-Hero 接管。
-
----
-
-## Update 链路失败
-
-错误停留在 Update Action 所属区域：
-
-```text
-[Refresh] 检查补丁更新
-检查失败
-```
-
-不要把 Update Error 同时复制到：
-
-* Hero
-* Status Bar
-* Update
-
-多个地方。
-
----
-
-# 24. Success System
-
-不创建独立 Success Hero。
-
-成功后：
-
-> **直接进入新的稳定状态**
-
-例如：
-
-```text
-未应用
-    ↓
-正在应用补丁…
-    ↓
-已应用
-```
-
-不是：
-
-```text
-未应用
-    ↓
-正在应用补丁…
-    ↓
-✓ 应用成功
-    ↓
-已应用
-```
-
-成功事实由：
+严格区分：
 
 ```text
 Deploy Status
-+
-Status Bar Recent Result
+├── 已应用
+└── 未应用
 ```
 
-承担。
+和：
+
+```text
+Health Summary
+├── 上游尚未适配
+└── 未找到核心 DLL
+```
+
+Health Warning 不改变 Deploy Status 的术语。
 
 ---
 
-# 25. Patch Update Check
+# 25. Steam Path Invalid
 
-`Patch Update Check` 属于：
+Steam Path Invalid：
 
-> **Hero / Deploy Status 区域内部的 Patch Maintenance**
+> 不作为第三种 Deploy Status。
 
-它与 App Update Check 完全独立。
+正确：
+
+```text
+Deploy Status = 未应用
+```
+
+附加：
+
+```text
+Steam 路径无效
+```
+
+Primary：
+
+```text
+[Settings] 前往设置修复
+```
+
+原 Operation Actions：
+
+> disabled
 
 ---
 
-## Normal State
+# 26. Patch Update Check
 
-轻量 Inline Action：
+位置：
+
+> Hero / Deploy Status 区域内部
+
+它不是 Status Bar 功能。
+
+---
+
+## 26.1 Normal
 
 ```text
 [Refresh] 检查补丁更新
@@ -1015,7 +972,7 @@ Status Bar Recent Result
 
 ---
 
-## Checking
+## 26.2 Checking
 
 同一按钮位：
 
@@ -1023,11 +980,13 @@ Status Bar Recent Result
 [Progress] 检查中…
 ```
 
-检查中不进入 Status Bar。
+检查中状态：
+
+> 不进入 Status Bar。
 
 ---
 
-## No Update
+## 26.3 No Update
 
 恢复：
 
@@ -1035,15 +994,15 @@ Status Bar Recent Result
 [Refresh] 检查补丁更新
 ```
 
-必要时在该区域附近提供简短结果提示。
+必要的检查结论可在同一区域内联表达。
 
-**不得显示 Patch Version。**
+不得显示版本。
 
 ---
 
-## Update Available
+## 26.4 Update Available
 
-该按钮位视觉升级：
+同一按钮位视觉升级：
 
 ```text
 ╭────────────────────────────────╮
@@ -1051,31 +1010,33 @@ Status Bar Recent Result
 ╰────────────────────────────────╯
 ```
 
-这是一个视觉升级事件，但：
+这是 Update Action 的视觉升级。
 
-> **仍然不能抢过 Primary CTA。**
+仍然：
+
+> 不超过 Primary CTA 的视觉权重。
 
 ---
 
-## Download / Extract
+## 26.5 Downloading
 
 ```text
-正在下载补丁…
-```
-
-如果有真实下载进度，则显示 Progress Bar。
-
-之后：
-
-```text
-正在解压补丁…
+[Progress] 正在下载补丁…
 ```
 
 ---
 
-## Failure
+## 26.6 Extracting
 
-恢复 Update Action，并在其附近表达失败：
+```text
+[Progress] 正在解压补丁…
+```
+
+---
+
+## 26.7 Failure
+
+在 Update Action 附近表达：
 
 ```text
 [Refresh] 检查补丁更新
@@ -1091,127 +1052,174 @@ Status Bar Recent Result
 
 ---
 
-# 26. Patch Version Rule
+# 27. Busy
 
-这是硬性约束：
+Busy 由：
 
-> **Patch Version 永远不渲染。**
+> `Busy Gate`
 
-主页面任何位置禁止出现：
+控制。
 
-* 本地 Patch Version
-* Online Version
-* Current Version
-* Latest Version
-* Version Number
+页面整体结构保持稳定。
 
-因此不要出现：
+Hero 进入：
 
-```text
-Patch · v1.4.2
-v1.4.2 → v1.5.0
-```
-
-版本只属于：
-
-```text
-update_flow
-```
-
-内部。
-
----
-
-# 27. Health Warning
-
-主页面只显示 Glossary 定义的两类 Health Risk：
-
-```text
-上游尚未适配
-未找到核心 DLL
-```
-
-其他健康度：
-
-* 检查中
-* 网络不可用
-* 上游已适配（未缓存）
-* 完美兼容
-
-不在主页面显示风险警示。
-
----
-
-## Position
-
-位于：
-
-```text
-Hero
-↓
-Health Warning
-↓
-Secondary
-```
-
-正常状态不存在该区域。
-
----
-
-## Visual
-
-统一使用：
-
-> **Warning Amber + Warning Icon**
+> Stage-driven Busy State
 
 例如：
 
 ```text
-╎ [Warning] 当前 Steam 尚未适配              设置 →
+Patch
+
+正在应用补丁…
 ```
 
-或：
+然后：
 
 ```text
-╎ [Warning] 未找到 Steam 核心文件            设置 →
+Patch
+
+正在启动 Steam…
 ```
 
-两种状态：
+Busy 文案描述：
 
-* 同一个组件
-* 同一个视觉语义
-* 不使用 Error Red
-* 整行可点击
+> **当前阶段**
 
-点击：
-
-> `Settings → Steam`
+不是原始按钮名称。
 
 ---
 
-# 28. Status Bar
+# 28. Busy Interaction
 
-Status Bar 位于主页面底部。
-
-采用：
-
-> **极轻量信息栏**
-
-而不是独立 Card。
-
-形式：
+交互类 Busy 期间：
 
 ```text
-────────────────────────────────────────────
-
-● Steam 正在运行       ✓ 最近操作成功
+Primary       disabled
+Secondary     disabled
+Update        disabled
 ```
+
+任何时刻只有一个：
+
+> Action / Update Action
+
+进入 Busy。
 
 ---
 
-# 29. Status Bar Data Model
+# 29. Progress
 
-根据 Glossary，Status Bar 可以包含：
+只有可靠进度时显示 Progress Bar。
+
+### 不确定进度
+
+```text
+正在启动 Steam…
+```
+
+### 真实进度
+
+```text
+正在下载补丁…
+
+██████████████░░░░░░ 68%
+```
+
+不得伪造百分比。
+
+---
+
+# 30. Error
+
+错误按：
+
+> **用户下一步需要做什么**
+
+进行分层。
+
+## Operation Failure
+
+Hero：
+
+```text
+补丁应用失败
+
+[Retry] 重试
+```
+
+## Environment Block
+
+Hero：
+
+```text
+未应用
+
+Steam 路径无效
+
+[Settings] 前往设置修复
+```
+
+## Update Failure
+
+Update Action 区域处理。
+
+不同时复制到：
+
+* Hero
+* Status Bar
+* Update Action
+
+多个位置。
+
+---
+
+# 31. Success
+
+不创建独立 Success Hero。
+
+成功后：
+
+> 直接进入新的稳定状态。
+
+例如：
+
+```text
+未应用
+    ↓
+正在应用补丁…
+    ↓
+已应用
+```
+
+反馈由：
+
+```text
+Deploy Status
++
+Recent Operation Result
+```
+
+共同完成。
+
+---
+
+# 32. Status Bar
+
+Status Bar：
+
+> **窗口底部专用 Dock（定稿形态）**
+
+不做独立 Card。
+
+Dock 形态：
+
+* 位于窗口最底部、横跨全宽，顶部 1px 分隔线与 Header 底部分隔线一致
+* 背景与页面 Background 同色，横向 padding 与 Header 对齐
+* Dock 独立于内容列：内容列（Hero / Secondary）宽度由自身 max-width 决定，
+  不受 Dock 影响（原型修正 1 确认）
+
+可以容纳：
 
 ```text
 Steam State
@@ -1219,17 +1227,15 @@ Busy
 Recent Operation Result
 ```
 
-但是：
+但：
 
-> **Patch Update Check 的检查中 / 结果不进入 Status Bar。**
-
-它们仍然内联在 Update Action 附近。
+> Patch Update Check 的检查中 / 检查结果不占 Status Bar。
 
 ---
 
-# 30. Steam State
+# 33. Steam State
 
-Steam State 恒显示。
+恒显：
 
 ```text
 ● Steam 正在运行
@@ -1244,19 +1250,44 @@ Steam State 恒显示。
 语义：
 
 ```text
-Running      → Success Green
-Not Running  → Neutral Gray
+Running
+    → Success Green
+
+Not Running
+    → Neutral Gray
 ```
 
 Steam State 不在 Hero 重复显示。
 
 ---
 
-# 31. Recent Operation Result
+# 34. Busy in Status Bar
 
-Recent Result 是：
+根据 Glossary：
 
-> **最近一次相关操作的结果**
+> Status Bar 可以拥有 Busy Item。
+
+但 Busy Item 的业务含义与 Hero 的 Busy Stage 不同：
+
+```text
+Hero
+    → 当前详细阶段
+
+Status Bar
+    → Busy 作为持续状态条目
+```
+
+Update Check 的检查中 / 结果：
+
+> 不通过 Busy Item 取代 Update Action 的局部结果。
+
+---
+
+# 35. Recent Operation Result
+
+Status Bar 保存：
+
+> 最近操作结果
 
 直到新的相关结果覆盖。
 
@@ -1270,25 +1301,23 @@ Recent Result 是：
 
 ## Steam Start / Restart Success
 
-严格遵循 Glossary：
-
-Steam 后续退出后：
+若 Steam 后续退出：
 
 ```text
 ● Steam 未运行
 ```
 
-不要继续显示：
+不得继续显示：
 
 ```text
 ✓ Steam 已重启
 ```
 
-避免产生过期语义。
+避免过期事实冲突。
 
 ---
 
-## Patch Operation Success
+## Patch Operation Result
 
 例如：
 
@@ -1302,19 +1331,31 @@ Steam 后续退出后：
 ● Steam 未运行       ✓ 补丁已卸载
 ```
 
-这类结果不因 Steam 运行状态改变而强制失效。
+这类结果不因为 Steam State 改变而强制失效。
 
 ---
 
-# 32. Icon System
+# 36. Icon System
 
-使用统一的：
+使用统一：
 
 > **Icon Component**
 
-禁止直接依赖 Unicode / Emoji 作为 UI 图标。
+禁止直接把 Unicode / Emoji 当最终 UI 图标。
 
-例如不要：
+例如最终应使用：
+
+```text
+[PlayIcon]
+[RestartIcon]
+[SettingsIcon]
+[WarningIcon]
+[UninstallIcon]
+[RefreshIcon]
+[ProgressIcon]
+```
+
+而不是让各按钮自行使用：
 
 ```text
 ▶
@@ -1324,71 +1365,162 @@ Steam 后续退出后：
 ⏏
 ```
 
-作为最终 UI 图标实现。
+具体 Icon Family：
 
-应该使用：
+> **定稿：程序化几何绘制（egui painter），不引入图标库 / icon font 依赖。**
 
-```text
-[PlayIcon]
-[RestartIcon]
-[SettingsIcon]
-[WarningIcon]
-[UninstallIcon]
-```
+Icon 族：Play / Restart / Uninstall / Exit / Settings / Download / Refresh /
+Warning / Progress（spinner）。
 
----
+Implementaion 约定：
 
-## Icon Rules
+* 统一 stroke 笔宽、线帽与 logical 尺寸；颜色取自语义色槽（§11）
+* 设置齿轮定稿构型：圆环 + 8 圆齿 + 中心点（现有 `paint_gear` 同构，ADR-0015 最初版式）
+* 图标绘制收敛到单一 icon 模块（`paint_*` 函数），不在各组件手写 SVG / 自行绘制
 
-Icon：
+仍然禁止：Unicode / Emoji 作为最终 UI 图标（▶ ↻ ⚙ ⚠ ⏏）。
 
-* 使用统一 icon family
-* 尺寸采用 logical points
-* 保持一致的视觉 weight
-* 颜色来自 Semantic Palette
-* 不允许各组件自行决定图标风格
-
-具体 icon family：
-
-> **待结合现有项目依赖确定**
-
-不在本策划书中强制引入某一个图标库。
+不要为了视觉需要自行绘制一套散落在组件里的 hand-rolled SVG。
 
 ---
 
-# 33. Icon + Label
+# 37. Typography
 
-Primary CTA：
+使用系统字体。
 
-> **Icon + Label 作为一个整体居中**
+不额外引入品牌字体。
 
-例如：
-
-```text
-┌────────────────────────────────┐
-│        [Play] 启动 Steam       │
-└────────────────────────────────┘
-```
-
-英文：
+层级：
 
 ```text
-┌────────────────────────────────┐
-│       [Play] Launch Steam      │
-└────────────────────────────────┘
+Hero Status
+    ↓
+App / Primary
+    ↓
+Supporting
+    ↓
+Secondary
+    ↓
+Status Bar
 ```
 
-Icon 不固定占据按钮最左侧。
+Hero Status：
+
+> 页面最明显的文字层级。
+
+正常状态不依赖高饱和色突出。
 
 ---
 
-# 34. Localization
+# 38. Corner Radius
 
-中英文都是正式产品需求。
+采用：
+
+> **Balanced hierarchy**
+
+圆角遵循：
+
+```text
+Hero Surface
+    ↓
+Primary CTA
+    ↓
+Secondary Row
+    ↓
+Small UI
+```
+
+外层更柔和，内部交互控件逐渐更利落。
+
+具体数值：
+
+> Tunable（基线：Hero 18 / CTA 10 / Row 10 / Small 7 lp，见 §10）
+
+不要所有 UI 使用同一个圆角。
+
+---
+
+# 39. Spacing
+
+采用：
+
+> **Adaptive Breathing**
 
 原则：
 
-> **先优化 wording，再用宽度适配。**
+* 使用稳定 spacing token
+* 保留最小结构间距
+* 窗口增加的空间优先转化为留白
+* 垂直呼吸：上留白 : 下留白 ≈ φ : 1（黄金比例，弹性 spacer 分配，不写死像素）。
+  效果上 Hero 组视觉重心落在内容区约 0.38–0.42 高度（略偏上）
+* 不依赖固定窗口像素位置维持布局
+
+---
+
+# 40. Window Resize
+
+窗口：
+
+> 可 Resize
+
+内容区域：
+
+> 有舒适 max-width
+
+Hero：
+
+> 有舒适 max-width
+
+窗口放大：
+
+> 不无限拉伸 Hero / CTA。
+
+额外空间：
+
+> 转化为空白。
+
+具体 Window Size / Max Width：
+
+> Tunable（首帧参考 940 × 680 lp，Hero max-width 600 lp；随后续渲染测试微调）
+
+注：首帧自适应（`autosize_inner_height` 下限）与 Dock 形态属既定行为，缩放窗口时
+内容列宽度与垂直黄金比呼吸保持不变。
+
+---
+
+# 41. DPI
+
+全部 Design Token 使用：
+
+> logical points
+
+不要针对：
+
+```text
+100%
+125%
+150%
+175%
+200%
+```
+
+写专门的 layout branch。
+
+DPI Scaling 由：
+
+> egui / rendering layer
+
+负责。
+
+---
+
+# 42. Localization
+
+中英文均为正式产品能力。
+
+原则：
+
+> **先优化 wording，再通过宽度适配。**
 
 ---
 
@@ -1404,194 +1536,106 @@ Icon 不固定占据按钮最左侧。
 
 ## Secondary
 
-优先保持：
+优先：
 
 * 单行
-* 足够宽的点击区域
-* 不通过缩小字号解决英文过长
+* 大点击区域
+* 不极端缩小字体
 
 ---
 
 ## Update
 
-Update Action 比 Primary 更灵活，但仍应优先通过 wording 控制长度。
-
----
-
-# 35. Layout / Resize
-
-窗口：
-
-> **允许 Resize**
-
-内容区域：
-
-> **存在合理 max-width**
-
-Hero：
-
-> **存在舒适 max-width**
+允许比普通 Secondary 更宽。
 
 但：
 
-> **具体数值属于 implementation tuning，不作为当前 Locked Product Requirement。**
-
-窗口放大时：
-
-```text
-不要无限拉宽 Hero
-不要无限拉宽 Primary CTA
-```
-
-额外空间优先成为：
-
-> **Whitespace / Breathing Room**
+> 不显示版本号。
 
 ---
 
-# 36. Vertical Rhythm
+# 43. Motion
 
-采用：
+整体：
 
-> **Adaptive Breathing**
-
-固定的是：
-
-> 各层之间的最小间距和 hierarchy
-
-不是：
-
-> 整个窗口的绝对像素位置
-
-额外高度主要用于：
-
-> Hero 周边的留白
-
----
-
-# 37. Hero Position
-
-Hero：
-
-> **略微偏上**
-
-而不是严格数学中心。
-
-原因：
-
-下方存在：
-
-* Health Warning
-* Secondary Actions
-* Update
-* Status Bar
-
-视觉重量更大。
-
-因此 Hero 需要稍微上移，以保持整体视觉平衡。
-
----
-
-# 38. Corner Radius
-
-采用 Balanced hierarchy。
-
-规则：
-
-```text
-Hero Surface
-    ↓
-Primary CTA
-    ↓
-Secondary Row
-    ↓
-Small UI
-```
-
-圆角随层级逐步减小。
-
-不允许整个 UI：
-
-> 所有组件全部使用同一个圆角。
-
-具体数值：
-
-> **属于 Design Token tuning，而非本文的硬编码要求。**
-
----
-
-# 39. Interaction Motion
-
-整体 Motion：
-
-> **Low / Subtle**
+> Low / Subtle
 
 允许：
 
 ### Hover
 
-轻微：
-
-* Brightness
-* Surface
-* Accent
+* brightness
+* subtle surface
 
 ### Press
 
-轻微：
-
-* Downshift
-* Depth change
+* slight downshift
 
 ### Busy
 
-允许：
-
-* Spinner
-* Determinate Progress
+* spinner
+* real progress
 
 ### State Transition
 
-允许：
+* short opacity / color transition
 
-* Short opacity / color transition
+禁止：
 
----
-
-## 禁止
-
-* Page entrance choreography
-* Magnetic Button
 * 大范围飞入
-* Background animation
-* Particle effects
-* Glow pulse
-* 无意义装饰动画
+* background animation
+* particle
+* magnetic button
+* glow pulse
+* decorative choreography
 
-原则：
+Motion 只说明：
 
-> **Motion 只说明状态变化，不承担视觉炫技。**
+> **状态变化**
 
----
+而不是证明：
 
-# 40. Main Page State Matrix
-
-| UI State           | Hero Status      | Primary             | Secondary                      | Health Warning   | Update              | Status Bar                         |
-| ------------------ | ---------------- | ------------------- | ------------------------------ | ---------------- | ------------------- | ---------------------------------- |
-| 未应用 + Steam 未运行    | 未应用              | 应用补丁并启动 Steam       | 正常启动 Steam                     | 按 Health Summary | 检查补丁更新              | Steam 未运行                          |
-| 已应用 + Steam 未运行    | 已应用              | 启动 Steam            | 卸载补丁 / 卸载补丁并重启 Steam           | 按 Health Summary | 检查补丁更新              | Steam 未运行                          |
-| 已应用 + Steam 运行中    | 已应用              | 重启 Steam            | 退出 Steam 并卸载补丁 / 卸载补丁并重启 Steam | 按 Health Summary | 检查补丁更新              | Steam 正在运行                         |
-| 未应用 + 补丁文件缺失       | 未应用              | 应用按钮 disabled       | 正常启动 Steam 可用                  | 按 Health Summary | 下载并解压新版本可用          | 当前 Steam State                     |
-| Steam Path Invalid | 未应用              | 前往设置修复              | Operation disabled             | 按 Health Summary | 依据 Update Flow      | 当前 Steam State                     |
-| Busy               | 当前 Deploy Status | Busy Stage          | Disabled                       | 保持规则             | Disabled            | Steam State + Busy / Recent Result |
-| 操作失败               | 当前 Deploy Status | Retry / Remediation | 视情况                            | 视 Health Summary | 按业务归属               | Recent Result                      |
-| Update Available   | 原 Deploy Status  | 原 Primary           | 原 Secondary                    | 视 Health Summary | 升级为 Download Action | Steam State + Recent Result        |
+> **“这是游戏软件”。**
 
 ---
 
-# 41. Component Boundary
+# 44. Main Page State Matrix
 
-推荐将主页面 UI 组件拆分为：
+| Deploy Status      | Steam State | Hero / Primary         | Secondary                      | Health Warning   | Update         | Status Bar                  |
+| ------------------ | ----------- | ---------------------- | ------------------------------ | ---------------- | -------------- | --------------------------- |
+| 未应用                | 未运行         | 应用补丁并启动 Steam          | 正常启动 Steam                     | 按 Health Summary | 检查补丁更新         | Steam 未运行                   |
+| 已应用                | 未运行         | 启动 Steam               | 卸载补丁 / 卸载补丁并重启 Steam           | 按 Health Summary | 检查补丁更新         | Steam 未运行                   |
+| 已应用                | 运行中         | 重启 Steam               | 退出 Steam 并卸载补丁 / 卸载补丁并重启 Steam | 按 Health Summary | 检查补丁更新         | Steam 正在运行                  |
+| 未应用 + 补丁文件缺失       | 任意          | 应用补丁并启动 Steam disabled | 正常启动 Steam 可用                  | 按 Health Summary | 下载并解压新版本       | 当前 Steam State              |
+| Steam Path Invalid | —           | 前往设置修复                 | Operation disabled             | 按 Health Summary | 依据 Update Flow | 当前 Steam State              |
+| Busy               | 任意          | Busy Stage             | Disabled                       | 保持已有规则           | Disabled       | Steam State + Busy / Result |
+| Operation Failure  | 任意          | Retry / Remediation    | 视情况                            | 视 Health Summary | 按业务归属          | Recent Result               |
+| Update Available   | 任意          | 原 Primary              | 原 Secondary                    | 视 Health Summary | 下载并解压新版本       | Steam State + Result        |
+
+---
+
+# 45. Action Confirmation Matrix
+
+确认行为必须以此矩阵为准：
+
+| Action         | Steam State | Confirm |
+| -------------- | ----------- | ------- |
+| 应用补丁并启动 Steam  | 未运行         | No      |
+| 应用补丁并启动 Steam  | 运行中         | **No**  |
+| 正常启动 Steam     | 未运行         | No      |
+| 启动 Steam       | 未运行         | No      |
+| 重启 Steam       | 运行中         | **No**  |
+| 卸载补丁           | Steam 未运行   | **No**  |
+| 退出 Steam 并卸载补丁 | Steam 运行中   | **Yes** |
+| 卸载补丁并重启 Steam  | Steam 运行中   | **Yes** |
+
+其他确认行为不得自行增加。
+
+---
+
+# 46. Component Boundary
+
+建议：
 
 ```text
 MainPage
@@ -1616,20 +1660,37 @@ MainPage
     └── RecentOperationItem
 ```
 
+Confirm Dialog：
+
+```text
+ConfirmCloseSteamDialog
+```
+
+只由两个允许确认的 Action 进入：
+
+```text
+Exit Steam + Uninstall
+Uninstall + Restart
+```
+
+并且：
+
+> 只有 Steam Running 时进入。
+
 ---
 
-# 42. Presentation Architecture
+# 47. Presentation Architecture
 
-UI 不应自行推导业务状态。
+UI 不自行复制业务判断。
 
-推荐：
+建议：
 
 ```text
 Business State
       ↓
 Presentation / View Model
       ↓
-MainPage UI
+Main Page Components
 ```
 
 例如：
@@ -1645,289 +1706,248 @@ MainPageViewModel
 └── status_bar
 ```
 
-其中：
+UI 不直接复制：
 
 ```text
-deploy_status
-    ← deployment facts
-
-primary_action
-    ← deployment + Steam state + available operation
-
-health_warning
-    ← Health Summary
-
-patch_update_action
-    ← update_flow
-
-status_bar
-    ← Steam State + Busy + Recent Operation
+if steam_running
+if patch_applied
+if update_available
 ```
+
+到多个组件中。
 
 ---
 
-# 43. Terminology Compliance
+# 48. Implementation Rules
 
-UI 文案必须服从 `GLOSSARY.md`。
+AGENTS 修改 Main Page 时：
 
-使用：
-
-```text
-应用
-部署
-已应用
-未应用
-卸载
-重启
-检查补丁更新
-下载并解压新版本
-```
-
-严格区分：
-
-```text
-Operation
-≠
-Update Action
-```
-
-以及：
-
-```text
-Steam State
-≠
-Deploy Status
-≠
-Health Summary
-```
-
-禁止混用：
-
-```text
-安装
-移除
-升级
-Mod
-注入物
-Active
-Installed
-Ready
-```
+1. 优先阅读 `GLOSSARY.md` 与相关 ADR。
+2. 阅读本文件。
+3. 检查现有 Theme / Semantic Palette / Font / Icon。
+4. 检查 Main Page 当前实现。
+5. 检查 Busy Gate / Steam State / Update Flow / Health Summary 的真实来源。
+6. 优先复用已有抽象。
+7. 不修改已经确定的业务行为。
+8. 不为视觉重构复制新的业务状态源。
+9. 不引入无关功能。
+10. 不为了视觉效果引入不必要的新依赖。
 
 ---
 
-# 44. Explicit Non-Goals
+# 49. Visual Review Checklist
 
-主页面当前不承担：
+## Information
 
-* Patch Version 展示
-* Release Notes
-* Steam Path 明细
-* Compatibility Details
-* DLL SHA-256
-* Verified Cache 信息
-* App Version
-* App Update Check
-* Logs / Console
-* Statistics
-* Dashboard
-* 高级监控
+* [ ] Patch Version 不存在于 Main Page
+* [ ] Steam State 只由 Status Bar 表达
+* [ ] Deploy Status 只使用「已应用 / 未应用」
+* [ ] Health Summary 与 Deploy Status 分离
+* [ ] Update Action 属于 Hero / Deploy Status
 
-这些功能存在于：
+## Hierarchy
 
-> Settings / About / Steam / 其他既有模块
+* [ ] 只有一个 Primary CTA
+* [ ] Primary 明显高于 Secondary
+* [ ] Secondary 明显高于 Status Bar
+* [ ] Hero 是核心 Surface
+* [ ] Update 默认低权重
 
-而不是 Main Page。
+## Color
+
+* [ ] Neutral Dark Foundation 占主体
+* [ ] Accent 仅服务交互
+* [ ] Accent 不过饱和
+* [ ] Warning 使用 Amber
+* [ ] Error 使用 Red
+* [ ] Warning Secondary Blue 仅用于指定动作
+* [ ] 没有 Neon
+* [ ] 没有 Glow
+* [ ] 没有纯黑 Background
+* [ ] 没有随机临时色值
+
+## Interaction
+
+* [ ] Secondary 整行可点击
+* [ ] 普通卸载在 Steam 未运行时不确认
+* [ ] 重启 Steam 不确认
+* [ ] 应用补丁并启动 Steam 不确认
+* [ ] 退出 Steam 并卸载在 Steam 运行时确认
+* [ ] 卸载补丁并重启在 Steam 运行时确认
+* [ ] Busy 正确锁定交互类操作
+
+## Localization
+
+* [ ] zh 可用
+* [ ] en 可用
+* [ ] Primary 不换行
+* [ ] Icon + Label 整体居中
+* [ ] English 不通过极端缩小字号解决
+* [ ] Layout 在两种语言下保持稳定
 
 ---
 
-# 45. Implementation Priority
+# 50. Final Design Read
 
-AGENTS 实现时应按以下顺序完成：
+OpenSteamTool Manager Main Page 的最终设计方向：
+
+> **Professional Dark Desktop UI with Premium Game Launcher Character**
+
+核心关系：
+
+```text
+Neutral Dark Foundation
+        ↓
+Lightweight Hero Surface
+        ↓
+Strong Brand CTA
+        ↓
+Low-Weight Maintenance Actions
+        ↓
+Quiet Update Control
+        ↓
+Persistent Status Feedback
+```
+
+核心心理路径：
+
+```text
+当前 Patch 怎么样？
+        ↓
+现在应该做什么？
+        ↓
+为什么不能做？
+        ↓
+需要维护时怎么办？
+        ↓
+刚才发生了什么？
+```
+
+设计不应追求：
+
+> “第一眼很炫。”
+
+而应该追求：
+
+> **“第一眼很成熟，而且用户马上知道下一步怎么做。”**
+
+品牌感来自：
+
+* Logo
+* Color discipline
+* Surface hierarchy
+* Typography
+* Spacing
+* Icon consistency
+* CTA treatment
+
+而不是：
+
+* Neon
+* Glow
+* 大面积蓝色
+* 装饰动画
+* 复杂卡片
+* 假 Dashboard
+
+---
+
+# 51. Implementation Priority
 
 ## Phase 1 — Structure
 
-先实现：
+实现：
 
 ```text
 Header
 Hero
 Health Warning
 Secondary
-Update
 Status Bar
 ```
 
-确保各区域边界正确。
-
----
-
 ## Phase 2 — State Mapping
 
-实现所有主状态：
+验证：
 
 ```text
 未应用
-已应用 + 未运行
-已应用 + 运行中
+已应用 + Steam 未运行
+已应用 + Steam 运行中
 Path Invalid
 Busy
 Error
 Update Available
 ```
 
-确保 UI 只消费 Presentation State。
+## Phase 3 — Interaction
 
----
+完成：
 
-## Phase 3 — Visual System
+```text
+Primary
+Secondary
+Confirm Dialog Exception
+Update Action
+Busy
+Progress
+Error
+Success
+```
 
-实现：
+## Phase 4 — Visual
 
-* Semantic Palette
-* Typography hierarchy
-* Surface hierarchy
-* Radius hierarchy
-* Icon system
-* Primary / Secondary hierarchy
+完成：
 
----
+```text
+Palette
+Typography
+Surface
+Border
+Radius
+Icon
+Motion
+```
 
-## Phase 4 — Localization
+> 已完成：原型对比 A / B / D 后品牌色定稿 **Palette B（§10）**；Typography /
+> Surface / Border / Radius / Icon 基线见 §37 / §13 / §38 / §36。
+>
+> 后续实现直接以 Palette B 为唯一色源，不再重复 Palette 选型。
 
-检查：
+## Phase 5 — Localization / DPI
+
+验证：
 
 ```text
 zh
 en
+Windows DPI scaling
+Resize
 ```
-
-确保：
-
-* Primary 单行
-* Secondary 可用
-* Update 可用
-* 状态切换不导致结构崩坏
 
 ---
 
-## Phase 5 — Interaction / Motion
+# 52. Final Acceptance Criteria
 
-最后实现：
+主页面只有在以下条件全部满足后，才视为完成：
 
-* Hover
-* Press
-* Busy
-* Progress
-* Error
-* Success transition
-
-不要先做动画。
-
----
-
-# 46. Acceptance Criteria
-
-主页面完成后，至少满足：
-
-### Information
-
-* [ ] Patch Version 在首页完全不存在
-* [ ] Steam State 只由 Status Bar 表达
-* [ ] Deploy Status 只使用「已应用 / 未应用」
-* [ ] Health Summary 未与 Deploy Status 混合
-* [ ] Update Action 不进入 Status Bar
-
-### Hierarchy
-
-* [ ] 页面只有一个 Primary CTA
-* [ ] Primary 明显强于 Secondary
-* [ ] Secondary 明显强于 Status Bar
-* [ ] Hero 是主视觉 Surface
-* [ ] Update 默认低权重
-
-### State
-
-* [ ] 未应用 → 应用补丁并启动 Steam
-* [ ] 已应用 + 未运行 → 启动 Steam
-* [ ] 已应用 + 运行中 → 重启 Steam
-* [ ] Path Invalid → Hero 提供前往设置修复
-* [ ] Busy → 页面结构稳定
-* [ ] Real progress → 才显示 Progress Bar
-* [ ] Error → 按错误性质决定展示位置
-* [ ] Success → 回到新的稳定状态
-
-### Interaction
-
-* [ ] Secondary 点击区域覆盖整行
-* [ ] 卸载不弹确认
-* [ ] 重启不弹确认
-* [ ] 关闭并卸载不弹确认
-* [ ] Busy Gate 正确限制交互类操作
-* [ ] Update Check / Download 共用按钮位
-
-### Visual
-
-* [ ] Deep Blue-Gray
-* [ ] Brand Blue
-* [ ] Low-density
-* [ ] Lightweight Surface hierarchy
-* [ ] No Neon
-* [ ] No Glow
-* [ ] No Glassmorphism
-* [ ] No Dashboard Card stacking
-* [ ] No arbitrary colors
-
-### Localization
-
-* [ ] 中文可用
-* [ ] 英文可用
-* [ ] Primary 不换行
-* [ ] Icon + Label 整体居中
-* [ ] 英文不会通过极端缩小字号解决空间问题
-
----
-
-# 47. Final Design Principle
-
-整个主页面最终应遵循：
-
-```text
-Brand
-  ↓
-Patch Deploy State
-  ↓
-Current Primary Action
-  ↓
-Health / Remediation when needed
-  ↓
-Maintenance / Secondary
-  ↓
-Patch Update
-  ↓
-Persistent Steam / Recent Feedback
-```
-
-从用户心理路径来看：
-
-```text
-现在是什么状态？
-        ↓
-我现在该做什么？
-        ↓
-为什么不能做？
-        ↓
-如果我要维护怎么办？
-        ↓
-刚才发生了什么？
-```
-
-产品最终应该让用户感觉：
-
-> **这是一个成熟、安静、有游戏产品质感的 Windows Launcher。**
-
-而不是：
-
-> 一个把 Steam、Patch、Compatibility、Update 等内部系统全部堆在首页上的管理面板。
-
-**最终判断标准不是“首页信息多不多”，而是“用户是否能在最短路径内知道当前状态和下一步动作”。**
+* [ ] 产品视觉不再表现为 Dashboard
+* [ ] Hero 是视觉中心
+* [ ] Primary CTA 清晰
+* [ ] Secondary 不抢 Primary
+* [ ] Patch Version 完全不渲染
+* [ ] Steam State 只位于 Status Bar
+* [ ] Health Warning 与 Deploy Status 分离
+* [ ] Update Action 位于 Hero / Deploy Status
+* [ ] Busy 保持结构稳定
+* [ ] 有真实进度才显示 Progress
+* [ ] Success 不制造额外 Hero
+* [ ] Operation Error 按用户下一步分级
+* [ ] Confirm Dialog 只出现在 ADR-0007 规定的两个 Steam-running 场景
+* [ ] 中文 / English 都保持稳定布局
+* [ ] Accent Blue 没有过度饱和
+* [ ] 页面整体以 Neutral Dark 为主
+* [ ] 无 Neon / Glow / Glassmorphism
+* [ ] Icon 使用统一系统
+* [ ] 不存在重复信息
+* [ ] 不存在与 `GLOSSARY.md` 冲突的 UI 术语
