@@ -96,7 +96,7 @@ _Avoid_: 关闭成功（易与 spawn 成功混淆）
 _Avoid_: 通知栏、状态栏（与 Windows 任务栏混淆）
 
 **应用配置（App Config）**:
-exe 同目录 `config.toml`（`config` 模块）持久化的便携设置：`version`（格式版本，预留迁移）/ `steam_path`（空 = 未设置，启动回退注册表检测）/ `language`（三态）/ `minimize_to_tray`（最小化隐身偏好，布尔；缺省启用，老配置缺字段不迁移不 bump 版本）。随目录拷贝即迁移设置，不落 `%APPDATA%`；写入恒走原子写，损坏/版本不符时启动降级默认值不崩溃。只存用户选择，不存派生状态（补丁是否已下载是文件系统事实，见 ADR-0011 与 ADR-0012）；最小化隐身是用户选择（#37），不是由窗口状态派生的值。
+exe 同目录 `config.toml`（`config` 模块）持久化的便携设置：`version`（格式版本，预留迁移）/ `steam_path`（空 = 未设置，启动回退注册表检测）/ `language`（三态）/ `minimize_to_tray`（最小化隐身偏好，布尔；缺省启用，老配置缺字段不迁移不 bump 版本）/ `theme`（主题偏好，三态；缺省跟随系统，老配置缺字段不迁移不 bump 版本，ADR-0016）。随目录拷贝即迁移设置，不落 `%APPDATA%`；写入恒走原子写，损坏/版本不符时启动降级默认值不崩溃。只存用户选择，不存派生状态（补丁是否已下载是文件系统事实，见 ADR-0011 与 ADR-0012）；最小化隐身是用户选择（#37），不是由窗口状态派生的值。
 _Avoid_: 配置文件、设置文件
 
 **语言偏好（Language Preference）**:
@@ -164,8 +164,12 @@ _Avoid_: 详情列表、探针明细
 _Avoid_: 验证记录、信任列表
 
 **语义色板（Semantic Palette）**:
-界面全部颜色收敛成的固定语义槽集合（accent 蓝 / 成功绿 / 警告琥珀 / 错误红 / 文字三档 / 面板与卡片底 / 边框与描边）；hover、徽章浅底、selection 一律由槽派生，不写死新色值；唯一例外是「警戒组」第二蓝，仅「退出 Steam 并卸载补丁」使用（ADR-0010）。
+界面全部颜色收敛成的固定语义槽集合（accent 蓝 / 成功绿 / 警告琥珀 / 错误红 / 文字三档 / 面板与卡片底 / 边框与描边），双色源并存（`Palette::dark()` = Dark B 定稿、`Palette::light()` = L1 — Ice Mist 定稿，spec §10）；hover、徽章浅底、selection 一律由槽派生，不写死新色值；唯一例外是「警戒组」第二蓝，仅「退出 Steam 并卸载补丁」使用（ADR-0010）。L1 的 accent hover 是定稿槽值（非 darken 可派生，ADR-0016）；对比度敏感项（Health Warning / Busy 文字）按模式派生。UI 层只消费当前 Palette 实例，不写内联色值（源码扫描守卫）。
 _Avoid_: 主题颜色、调色板
+
+**主题偏好（Theme Preference）**:
+`config.toml` 的 `theme` 三态（system / dark / light）：`system` 跟随系统深浅（系统检测与运行时监听由 egui/winit 承担，OS 切深浅 UI 自动跟随，原生标题栏联动）；`dark`/`light` 固定。修改入口为设置对话框「通用」页签「主题」小节三态下拉，即选即存、即时生效，重启后恢复；缺省跟随系统（浅色 OS 老用户升级后首次启动变浅色，属有意的行为差异，ADR-0016）。
+_Avoid_: 外观设置、界面主题
 
 ## Rules
 

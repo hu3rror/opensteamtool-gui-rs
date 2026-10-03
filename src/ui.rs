@@ -10,7 +10,7 @@ use egui::Frame;
 use crate::busy::{BusyGate, BusyKind};
 use crate::compat;
 use crate::compat_flow::{self, CompatFlow, CompatSummary};
-use crate::config::{self, Config, Language};
+use crate::config::{self, Config, Language, ThemePreference};
 use crate::dll::{self, DeployStatus};
 use crate::i18n::{Lang, Strings};
 use crate::main_page::{
@@ -20,7 +20,7 @@ use crate::main_page::{
 use crate::process::{self, SteamEvent, SteamMonitor};
 use crate::steam;
 use crate::steam_state::SteamState;
-use crate::theme::{self, ButtonPalette, ButtonStyle};
+use crate::theme::{self, ButtonPalette, ButtonStyle, Palette};
 use crate::tray::{Tray, TrayAction};
 use crate::update_flow::UpdateFlow;
 use crate::updater::{self, OnlineInfo, UpdateError};
@@ -55,16 +55,41 @@ fn autosize_inner_height(content_h: f32) -> f32 {
     (content_h + 36.0).max(SETTINGS_DIALOG_SKELETON_H + SETTINGS_SCROLL_MIN_H)
 }
 
+/// 装配深浅两套 egui Style（spec §48.2 / ADR-0016）：dark/light 各一套语义槽覆盖的 visuals，
+/// 主题切换与弹出层恒用装配值、不落回 egui 默认；spacing 与主题无关，统一设置。
 fn install_theme(ctx: &egui::Context) {
-    // Dark（B）唯一基线（spec §48.2：不做深浅切换；egui 内建控件用深色语义）。
-    let mut visuals = egui::Visuals::dark();
-    visuals.panel_fill = theme::PANEL;
-    visuals.window_fill = theme::PANEL;
-    visuals.faint_bg_color = theme::PANEL;
-    visuals.extreme_bg_color = theme::ENTRY; // TextEdit 底（控件层次槽）
-    visuals.widgets.inactive.weak_bg_fill = theme::ENTRY;
-    visuals.widgets.open.weak_bg_fill = theme::ENTRY;
-    visuals.override_text_color = Some(theme::INK);
+    let dark = build_visuals(Palette::dark());
+    let light = build_visuals(Palette::light());
+    ctx.options_mut(|o| {
+        use std::sync::Arc;
+        let mut s = (*o.dark_style).clone();
+        s.visuals = dark;
+        o.dark_style = Arc::new(s);
+        let mut s = (*o.light_style).clone();
+        s.visuals = light;
+        o.light_style = Arc::new(s);
+    });
+    ctx.all_styles_mut(|s| {
+        s.spacing.item_spacing = egui::vec2(10.0, 10.0);
+        s.spacing.window_margin = egui::Margin::symmetric(16, 18);
+        s.spacing.button_padding = egui::vec2(14.0, 7.0);
+    });
+}
+
+/// 由 palette 装配 egui 控件层 visuals（基线 Visuals::dark/light + 语义槽覆盖）。
+fn build_visuals(p: Palette) -> egui::Visuals {
+    let mut visuals = if p.dark_mode {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
+    visuals.panel_fill = p.panel;
+    visuals.window_fill = p.panel;
+    visuals.faint_bg_color = p.panel;
+    visuals.extreme_bg_color = p.entry; // TextEdit 底（控件层次槽）
+    visuals.widgets.inactive.weak_bg_fill = p.entry;
+    visuals.widgets.open.weak_bg_fill = p.entry;
+    visuals.override_text_color = Some(p.ink);
     let radius = egui::CornerRadius::same(8);
     for w in [
         &mut visuals.widgets.noninteractive,
@@ -74,36 +99,30 @@ fn install_theme(ctx: &egui::Context) {
     ] {
         w.corner_radius = radius;
     }
-    visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, theme::ENTRY);
-    visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, theme::ENTRY);
-    visuals.widgets.inactive.bg_fill = theme::CARD;
-    visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, theme::ACCENT);
-    visuals.widgets.hovered.bg_fill = theme::ENTRY;
-    visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, theme::accent_hover());
-    visuals.selection.bg_fill = theme::selection_bg();
-    visuals.selection.stroke = egui::Stroke::new(1.0, theme::ACCENT);
-
-    ctx.set_visuals(visuals);
-    ctx.all_styles_mut(|s| {
-        s.spacing.item_spacing = egui::vec2(10.0, 10.0);
-        s.spacing.window_margin = egui::Margin::symmetric(16, 18);
-        s.spacing.button_padding = egui::vec2(14.0, 7.0);
-    });
+    visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, p.entry);
+    visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, p.entry);
+    visuals.widgets.inactive.bg_fill = p.card;
+    visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, p.accent);
+    visuals.widgets.hovered.bg_fill = p.entry;
+    visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, p.accent_hover);
+    visuals.selection.bg_fill = p.selection_bg();
+    visuals.selection.stroke = egui::Stroke::new(1.0, p.accent);
+    visuals
 }
 
 /// 设置对话框 Modal frame（生产与测试共用：内边距 24/20 + 1px border；测试布局须与生产同源）。
-fn settings_dialog_frame() -> egui::Frame {
+fn settings_dialog_frame(palette: Palette) -> egui::Frame {
     egui::Frame::new()
-        .fill(theme::PANEL)
-        .stroke(egui::Stroke::new(1.0, theme::BORDER))
+        .fill(palette.panel)
+        .stroke(egui::Stroke::new(1.0, palette.border))
         .corner_radius(egui::CornerRadius::same(8))
         .inner_margin(egui::Margin::symmetric(24, 20))
 }
 
-fn card_frame() -> Frame {
+fn card_frame(palette: Palette) -> Frame {
     Frame::new()
-        .fill(theme::CARD)
-        .stroke(egui::Stroke::new(1.0, theme::BORDER))
+        .fill(palette.card)
+        .stroke(egui::Stroke::new(1.0, palette.border))
         .corner_radius(egui::CornerRadius::same(10))
         .inner_margin(egui::Margin::symmetric(18, 16))
 }
@@ -121,11 +140,12 @@ fn styled_button(
     style: ButtonStyle,
     size: egui::Vec2,
     enabled: bool,
+    palette: Palette,
 ) -> egui::Response {
     let font_size = if size.y >= 40.0 { 14.0 } else { 13.0 };
-    let palette = style.palette();
+    let button = style.palette(palette);
     let font_id = egui::FontId::proportional(font_size);
-    let text_w = text_width(ui, text, &font_id, palette.fg);
+    let text_w = text_width(ui, text, &font_id, button.fg);
     let size = egui::vec2(size.x.max(text_w + 28.0), size.y);
     let sense = if enabled {
         egui::Sense::click()
@@ -134,8 +154,8 @@ fn styled_button(
     };
     let (rect, response) = ui.allocate_exact_size(size, sense);
     if ui.is_rect_visible(rect) {
-        paint_button_chrome(ui, rect, enabled && response.hovered(), palette);
-        let color = if enabled { palette.fg } else { theme::WEAK };
+        paint_button_chrome(ui, rect, enabled && response.hovered(), button);
+        let color = if enabled { button.fg } else { palette.weak };
         ui.painter().text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
@@ -161,14 +181,14 @@ fn paint_button_chrome(ui: &mut egui::Ui, rect: egui::Rect, hovered: bool, palet
     );
 }
 
-fn gear_button(ui: &mut egui::Ui, tooltip: &str) -> egui::Response {
-    let palette = ButtonStyle::Neutral.palette();
+fn gear_button(ui: &mut egui::Ui, tooltip: &str, palette: Palette) -> egui::Response {
+    let button = ButtonStyle::Neutral.palette(palette);
     let (rect, response) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::click());
     let response = response.on_hover_text(tooltip);
     if ui.is_rect_visible(rect) {
         let hovered = response.hovered();
-        paint_button_chrome(ui, rect, hovered, palette);
-        let color = if hovered { theme::ACCENT } else { palette.fg };
+        paint_button_chrome(ui, rect, hovered, button);
+        let color = if hovered { palette.accent } else { button.fg };
         main_page::paint_icon(
             ui.painter(),
             IconKind::Settings,
@@ -186,17 +206,18 @@ fn github_link_button(
     mark: Option<&egui::TextureHandle>,
     label: &str,
     tooltip: &str,
+    palette: Palette,
 ) -> egui::Response {
-    let palette = ButtonStyle::Neutral.palette();
+    let button = ButtonStyle::Neutral.palette(palette);
     let font_id = egui::FontId::proportional(13.0);
-    let text_w = text_width(ui, label, &font_id, palette.fg);
+    let text_w = text_width(ui, label, &font_id, button.fg);
     let icon_w = if mark.is_some() { 16.0 + 8.0 } else { 0.0 };
     let size = egui::vec2((text_w + 28.0 + icon_w).max(200.0), 32.0);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     let response = response.on_hover_text(tooltip);
     if ui.is_rect_visible(rect) {
         let hovered = response.hovered();
-        paint_button_chrome(ui, rect, hovered, palette);
+        paint_button_chrome(ui, rect, hovered, button);
         let group_w = icon_w + text_w;
         let left = rect.left() + (rect.width() - group_w) / 2.0;
         if let Some(tex) = mark {
@@ -208,7 +229,7 @@ fn github_link_button(
                 tex.id(),
                 icon_rect,
                 egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                theme::WHITE,
+                palette.white,
             );
         }
         ui.painter().text(
@@ -216,7 +237,7 @@ fn github_link_button(
             egui::Align2::LEFT_CENTER,
             label,
             font_id,
-            palette.fg,
+            button.fg,
         );
     }
     response
@@ -224,14 +245,13 @@ fn github_link_button(
 
 const GITHUB_MARK_PNG: &[u8] = include_bytes!("../assets/github-mark.png");
 
-fn load_github_mark(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+/// 加载 GitHub mark：白底→透明；深色像素按主题模式处理——Dark 烤白、L1 保留黑 mark（ADR-0016 图片双态）。
+fn load_github_mark(ctx: &egui::Context, palette: Palette) -> Option<egui::TextureHandle> {
     let mut img = image::load_from_memory(GITHUB_MARK_PNG).ok()?.to_rgba8();
     for p in img.pixels_mut() {
-        // 浅色底 → 透明；黑色 mark → 白（Dark 主题下可见，渲染 tint 不再需要）。
-        // 浅色主题（L1 另行立项）落地时按浅色派生规则重载，见 ADR-0010 派生变体。
         if p[0] > 240 && p[1] > 240 && p[2] > 240 {
             p[3] = 0;
-        } else if p[3] > 0 {
+        } else if palette.dark_mode && p[3] > 0 {
             p[0] = 255;
             p[1] = 255;
             p[2] = 255;
@@ -242,16 +262,16 @@ fn load_github_mark(ctx: &egui::Context) -> Option<egui::TextureHandle> {
     Some(ctx.load_texture("github-mark", color, egui::TextureOptions::LINEAR))
 }
 
-fn card_title(ui: &mut egui::Ui, text: &str) {
+fn card_title(ui: &mut egui::Ui, text: &str, palette: Palette) {
     ui.horizontal(|ui| {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(3.0, 13.0), egui::Sense::hover());
-        ui.painter().rect_filled(rect, 0.0, theme::ACCENT);
+        ui.painter().rect_filled(rect, 0.0, palette.accent);
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new(text)
                 .size(13.5)
                 .strong()
-                .color(theme::INK),
+                .color(palette.ink),
         );
     });
 }
@@ -280,17 +300,18 @@ fn status_bar_items(
     busy: Option<BusyKind>,
     notice: Option<&Notice>,
     strings: &Strings,
+    palette: Palette,
 ) -> Vec<(String, egui::Color32)> {
     let mut items = Vec::new();
     if steam_running {
-        items.push((strings.status_steam_running.to_string(), theme::SUCCESS));
+        items.push((strings.status_steam_running.to_string(), palette.success));
     } else {
-        items.push((strings.status_steam_stopped.to_string(), theme::WEAK));
+        items.push((strings.status_steam_stopped.to_string(), palette.weak));
     }
     if let Some(kind) = busy
         && kind != BusyKind::Checking
     {
-        items.push((strings.busy_label(kind).to_string(), theme::ACCENT));
+        items.push((strings.busy_label(kind).to_string(), palette.busy_ink()));
     }
     if let Some(n) = notice
         && !matches!(n, Notice::UpdateChecked)
@@ -302,7 +323,7 @@ fn status_bar_items(
         );
         if !launch_success_needs_running || steam_running {
             let (ok, text) = render_notice(strings, n);
-            items.push((text, if ok { theme::SUCCESS } else { theme::DANGER }));
+            items.push((text, if ok { palette.success } else { palette.danger }));
         }
     }
     items
@@ -471,6 +492,12 @@ pub struct App {
     autosized: bool,
     pending_focus: bool,
     minimize_to_tray: bool,
+    /// 深浅主题偏好（config.theme 镜像；唯一写入点 `set_theme`，ADR-0016）。
+    theme_pref: ThemePreference,
+    /// 当前生效色板（每帧从 `ctx.theme()` 同步；System 模式 OS 切深浅即跟随）。
+    palette: Palette,
+    /// GitHub mark 的加载模式（dark/light）；palette 模式变化时重载（ADR-0016 图片双态）。
+    mark_dark: bool,
     was_minimized: bool,
 
     settings_open: bool,
@@ -531,7 +558,12 @@ struct PathEditRow {
     commit: bool,
 }
 
-fn path_edit_row(ui: &mut egui::Ui, strings: Strings, buffer: &mut String) -> PathEditRow {
+fn path_edit_row(
+    ui: &mut egui::Ui,
+    strings: Strings,
+    buffer: &mut String,
+    palette: Palette,
+) -> PathEditRow {
     let mut row = PathEditRow::default();
     ui.horizontal(|ui| {
         let edit_width = (ui.available_width() - 92.0).max(120.0);
@@ -553,6 +585,7 @@ fn path_edit_row(ui: &mut egui::Ui, strings: Strings, buffer: &mut String) -> Pa
             ButtonStyle::Neutral,
             egui::vec2(82.0, 34.0),
             true,
+            palette,
         )
         .clicked()
             && let Some(dir) = rfd::FileDialog::new().pick_folder()
@@ -565,16 +598,17 @@ fn path_edit_row(ui: &mut egui::Ui, strings: Strings, buffer: &mut String) -> Pa
     row
 }
 
-fn language_combo(
+/// 三态下拉共用实现（语言 / 主题；设置页与向导同一形态，ADR-0016）。
+fn tri_state_combo<T: Copy + PartialEq>(
     ui: &mut egui::Ui,
-    options: [(Language, &'static str); 3],
-    selected: Language,
+    options: [(T, &'static str); 3],
+    selected: T,
     width: f32,
     salt: &'static str,
-) -> Option<Language> {
+) -> Option<T> {
     let current = options
         .iter()
-        .find(|(lang, _)| *lang == selected)
+        .find(|(v, _)| *v == selected)
         .map(|(_, label)| *label)
         .unwrap_or_default();
     let mut chosen = None;
@@ -582,13 +616,43 @@ fn language_combo(
         .selected_text(current)
         .width(width)
         .show_ui(ui, |ui| {
-            for (lang, label) in options {
-                if ui.selectable_label(selected == lang, label).clicked() {
-                    chosen = Some(lang);
+            for (v, label) in options {
+                if ui.selectable_label(selected == v, label).clicked() {
+                    chosen = Some(v);
                 }
             }
         });
     chosen
+}
+
+fn language_combo(
+    ui: &mut egui::Ui,
+    options: [(Language, &'static str); 3],
+    selected: Language,
+    width: f32,
+    salt: &'static str,
+) -> Option<Language> {
+    tri_state_combo(ui, options, selected, width, salt)
+}
+
+/// 主题偏好 → egui 偏好（System/Dark/Light 三态一一对应，ADR-0016）。
+fn to_egui_theme_pref(pref: ThemePreference) -> egui::ThemePreference {
+    match pref {
+        ThemePreference::System => egui::ThemePreference::System,
+        ThemePreference::Dark => egui::ThemePreference::Dark,
+        ThemePreference::Light => egui::ThemePreference::Light,
+    }
+}
+
+/// 主题三态下拉（ADR-0016）：选项表来自 `Strings::theme_options`。
+fn theme_combo(
+    ui: &mut egui::Ui,
+    options: [(ThemePreference, &'static str); 3],
+    selected: ThemePreference,
+    width: f32,
+    salt: &'static str,
+) -> Option<ThemePreference> {
+    tri_state_combo(ui, options, selected, width, salt)
 }
 
 fn wizard_download() -> Result<(), UpdateError> {
@@ -649,24 +713,25 @@ fn wizard_steps_ui(
     ui: &mut egui::Ui,
     strings: Strings,
     view: &wizard::View,
+    palette: Palette,
 ) -> (Option<wizard::Event>, egui::Rect) {
     let mut event: Option<wizard::Event> = None;
     let mut card_rect = egui::Rect::NOTHING;
 
     ui.add_space(24.0);
-    let card_w = WIZARD_CARD_WIDTH + card_frame().total_margin().sum().x;
+    let card_w = WIZARD_CARD_WIDTH + card_frame(palette).total_margin().sum().x;
     ui.vertical_centered(|ui| {
         ui.allocate_ui_with_layout(
             egui::vec2(card_w, ui.available_height()),
             egui::Layout::top_down(egui::Align::Center),
             |ui| {
-                let resp = card_frame().show(ui, |ui| {
+                let resp = card_frame(palette).show(ui, |ui| {
                     ui.set_width(WIZARD_CARD_WIDTH);
                     ui.label(
                         egui::RichText::new(strings.wizard_title)
                             .size(16.0)
                             .strong()
-                            .color(theme::INK),
+                            .color(palette.ink),
                     );
                     ui.add_space(4.0);
                     let n = match view.step {
@@ -677,7 +742,7 @@ fn wizard_steps_ui(
                     ui.label(
                         egui::RichText::new(strings.wizard_step_of.replace("{n}", &n.to_string()))
                             .size(12.0)
-                            .color(theme::WEAK),
+                            .color(palette.weak),
                     );
                     ui.add_space(18.0);
 
@@ -700,6 +765,7 @@ fn wizard_steps_ui(
                                 ButtonStyle::Primary,
                                 egui::vec2(140.0, 34.0),
                                 true,
+                                palette,
                             )
                             .clicked()
                             {
@@ -710,7 +776,7 @@ fn wizard_steps_ui(
                             ui.label(egui::RichText::new(strings.wizard_path_prompt).size(13.0));
                             ui.add_space(12.0);
                             let mut buf = view.steam_path.clone();
-                            let row = path_edit_row(ui, strings, &mut buf);
+                            let row = path_edit_row(ui, strings, &mut buf, palette);
                             if row.changed {
                                 event = Some(wizard::Event::PathEdited(buf.clone()));
                             }
@@ -719,7 +785,7 @@ fn wizard_steps_ui(
                                 ui.label(
                                     egui::RichText::new(strings.wizard_path_invalid)
                                         .size(12.0)
-                                        .color(theme::DANGER),
+                                        .color(palette.danger),
                                 );
                             }
                             ui.add_space(14.0);
@@ -729,6 +795,7 @@ fn wizard_steps_ui(
                                 ButtonStyle::Primary,
                                 egui::vec2(140.0, 34.0),
                                 view.path_valid,
+                                palette,
                             )
                             .clicked()
                             {
@@ -739,7 +806,7 @@ fn wizard_steps_ui(
                             let content = wizard_step3_content(&strings, &view.download);
                             let prompt = egui::RichText::new(content.prompt.as_str()).size(13.0);
                             let prompt = if content.danger {
-                                prompt.color(theme::DANGER)
+                                prompt.color(palette.danger)
                             } else {
                                 prompt
                             };
@@ -767,6 +834,7 @@ fn wizard_steps_ui(
                                         ButtonStyle::Primary,
                                         egui::vec2(140.0, 34.0),
                                         true,
+                                        palette,
                                     )
                                     .clicked()
                                 {
@@ -779,6 +847,7 @@ fn wizard_steps_ui(
                                         ButtonStyle::Neutral,
                                         egui::vec2(120.0, 34.0),
                                         true,
+                                        palette,
                                     )
                                     .clicked()
                                 {
@@ -852,6 +921,19 @@ impl App {
         let flow = CompatFlow::new();
 
         let minimize_to_tray = config.minimize_to_tray;
+        let theme_pref = config.theme;
+        let palette = match theme_pref {
+            ThemePreference::Dark => Palette::dark(),
+            ThemePreference::Light => Palette::light(),
+            ThemePreference::System => match cc.egui_ctx.system_theme() {
+                Some(egui::Theme::Light) => Palette::light(),
+                Some(egui::Theme::Dark) | None => Palette::dark(), // 检测缺失回退 Dark（与 egui fallback 同值）
+            },
+        };
+        let mark_dark = palette.dark_mode;
+        // 启动即应用持久化主题偏好（ADR-0016）：egui 默认 ThemePreference::System，
+        // 不显式设置则固定 Dark/Light 会在首帧被 OS 主题覆盖，重启后恢复失效。
+        cc.egui_ctx.set_theme(to_egui_theme_pref(theme_pref));
         let mut app = Self {
             config,
             lang_pref,
@@ -875,6 +957,9 @@ impl App {
             autosized: false,
             pending_focus: false,
             minimize_to_tray,
+            theme_pref,
+            palette,
+            mark_dark,
             was_minimized: false,
             settings_open: false,
             settings_tab: SettingsTab::General,
@@ -885,7 +970,7 @@ impl App {
             flow,
             compat_details_open: false,
             compat_scroll_pending: false,
-            github_mark: load_github_mark(&cc.egui_ctx),
+            github_mark: load_github_mark(&cc.egui_ctx, palette),
         };
         app.sync_tray_restart_enabled();
         // 启动即喂首次路径：产出首次快速体检效果（初始 checking 骨架态，零白屏）。
@@ -941,6 +1026,14 @@ impl App {
         if let Some(tray) = &self.tray {
             tray.set_minimize_to_tray(checked);
         }
+    }
+
+    /// 深浅主题偏好的唯一写入点（ADR-0016）：镜像 + egui 偏好（含原生标题栏联动）+ 持久化。
+    fn set_theme(&mut self, pref: ThemePreference) {
+        self.theme_pref = pref;
+        self.config.theme = pref;
+        self.ctx.set_theme(to_egui_theme_pref(pref));
+        self.persist_config();
     }
     fn handle_tray_events(&mut self) {
         let Some(tray) = &self.tray else { return };
@@ -1141,7 +1234,7 @@ impl App {
             return;
         };
         let strings = self.strings; // Copy：渲染期自由借用 self。
-        let (event, _) = wizard_steps_ui(ui, strings, &view);
+        let (event, _) = wizard_steps_ui(ui, strings, &view, self.palette);
         if let Some(event) = event {
             self.wizard_event(ctx, event);
         }
@@ -1195,7 +1288,7 @@ impl App {
         // 显式 frame：Modal 默认 menu_margin(6lp) 太贴边，加边缘呼吸（对称 24/20）。
         // 测试须复用同一 frame（settings_dialog_frame），否则布局测量与生产不一致。
         egui::Modal::new(egui::Id::new("settings_dialog"))
-            .frame(settings_dialog_frame())
+            .frame(settings_dialog_frame(self.palette))
             .show(ctx, |ui| {
                 ui.set_width(SETTINGS_DIALOG_WIDTH);
                 ui.heading(self.strings.settings_title);
@@ -1211,7 +1304,15 @@ impl App {
                         } else {
                             ButtonStyle::Neutral
                         };
-                        if styled_button(ui, label, style, egui::vec2(88.0, 28.0), true).clicked()
+                        if styled_button(
+                            ui,
+                            label,
+                            style,
+                            egui::vec2(88.0, 28.0),
+                            true,
+                            self.palette,
+                        )
+                        .clicked()
                             && self.settings_tab != tab
                         {
                             if self.settings_tab == SettingsTab::Steam {
@@ -1249,6 +1350,7 @@ impl App {
                             ButtonStyle::Neutral,
                             egui::vec2(80.0, 30.0),
                             true,
+                            self.palette,
                         )
                         .clicked()
                         {
@@ -1265,7 +1367,7 @@ impl App {
     }
 
     fn settings_general(&mut self, ui: &mut egui::Ui) {
-        card_title(ui, self.strings.settings_language_title);
+        card_title(ui, self.strings.settings_language_title, self.palette);
         ui.add_space(10.0);
         let options = self.strings.language_options();
         if let Some(lang) = language_combo(ui, options, self.lang_pref, 220.0, "settings_language")
@@ -1277,7 +1379,17 @@ impl App {
         }
 
         ui.add_space(16.0);
-        card_title(ui, self.strings.settings_tray_title);
+        card_title(ui, self.strings.settings_theme_title, self.palette);
+        ui.add_space(10.0);
+        let options = self.strings.theme_options();
+        if let Some(theme) = theme_combo(ui, options, self.theme_pref, 220.0, "settings_theme")
+            && theme != self.theme_pref
+        {
+            self.set_theme(theme);
+        }
+
+        ui.add_space(16.0);
+        card_title(ui, self.strings.settings_tray_title, self.palette);
         ui.add_space(10.0);
         let mut minimize_to_tray = self.minimize_to_tray;
         if ui
@@ -1289,7 +1401,7 @@ impl App {
     }
 
     fn settings_about(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        card_title(ui, self.strings.settings_app_update_title);
+        card_title(ui, self.strings.settings_app_update_title, self.palette);
         ui.add_space(10.0);
         ui.label(
             egui::RichText::new(format!(
@@ -1298,7 +1410,7 @@ impl App {
                 env!("CARGO_PKG_VERSION")
             ))
             .size(13.0)
-            .color(theme::SUB),
+            .color(self.palette.sub),
         );
         ui.add_space(8.0);
         let mut do_app_check = false;
@@ -1309,6 +1421,7 @@ impl App {
                 ButtonStyle::Neutral,
                 egui::vec2(150.0, 28.0),
                 !self.app_update_checking,
+                self.palette,
             )
             .clicked()
             {
@@ -1319,7 +1432,7 @@ impl App {
                     ui.label(
                         egui::RichText::new(self.strings.settings_app_update_checking)
                             .size(12.5)
-                            .color(theme::WEAK),
+                            .color(self.palette.weak),
                     );
                 }
                 (Some(Ok(r)), false) if r.newer => {
@@ -1329,7 +1442,7 @@ impl App {
                             self.strings.settings_app_update_new_version, r.latest_version
                         ))
                         .size(12.5)
-                        .color(theme::INK),
+                        .color(self.palette.ink),
                     );
                     if styled_button(
                         ui,
@@ -1337,6 +1450,7 @@ impl App {
                         ButtonStyle::Primary,
                         egui::vec2(120.0, 28.0),
                         true,
+                        self.palette,
                     )
                     .clicked()
                     {
@@ -1347,14 +1461,14 @@ impl App {
                     ui.label(
                         egui::RichText::new(self.strings.settings_app_update_up_to_date)
                             .size(12.5)
-                            .color(theme::INK),
+                            .color(self.palette.ink),
                     );
                 }
                 (Some(Err(e)), false) => {
                     ui.label(
                         egui::RichText::new(self.strings.update_error(e))
                             .size(12.5)
-                            .color(theme::DANGER),
+                            .color(self.palette.danger),
                     );
                 }
                 (None, false) => {}
@@ -1365,13 +1479,14 @@ impl App {
         }
         ui.add_space(12.0);
 
-        card_title(ui, self.strings.settings_github_title);
+        card_title(ui, self.strings.settings_github_title, self.palette);
         ui.add_space(8.0);
         if github_link_button(
             ui,
             self.github_mark.as_ref(),
             self.strings.settings_github_label,
             updater::APP_REPO_PAGE,
+            self.palette,
         )
         .clicked()
         {
@@ -1379,12 +1494,12 @@ impl App {
         }
         ui.add_space(12.0);
 
-        card_title(ui, self.strings.settings_wizard_title);
+        card_title(ui, self.strings.settings_wizard_title, self.palette);
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new(self.strings.settings_rerun_wizard_hint)
                 .size(12.0)
-                .color(theme::WEAK),
+                .color(self.palette.weak),
         );
         ui.add_space(8.0);
         if styled_button(
@@ -1393,6 +1508,7 @@ impl App {
             ButtonStyle::Neutral,
             egui::vec2(160.0, 32.0),
             !self.gate.is_busy(),
+            self.palette,
         )
         .clicked()
         {
@@ -1401,10 +1517,15 @@ impl App {
     }
 
     fn settings_steam(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        card_title(ui, self.strings.settings_steam_title);
+        card_title(ui, self.strings.settings_steam_title, self.palette);
         ui.add_space(10.0);
         let mut do_commit = false;
-        let row = path_edit_row(ui, self.strings, &mut self.settings_steam.buffer);
+        let row = path_edit_row(
+            ui,
+            self.strings,
+            &mut self.settings_steam.buffer,
+            self.palette,
+        );
         if row.changed {
             self.settings_steam.invalid = false;
         }
@@ -1419,7 +1540,7 @@ impl App {
             ui.label(
                 egui::RichText::new(self.strings.settings_steam_path_invalid)
                     .size(12.0)
-                    .color(theme::DANGER),
+                    .color(self.palette.danger),
             );
         }
         self.compat_section(ui);
@@ -1455,7 +1576,7 @@ impl App {
                 painter.rect(
                     rect,
                     egui::CornerRadius::same(R_SMALL),
-                    theme::ACCENT,
+                    self.palette.accent,
                     egui::Stroke::NONE,
                     egui::StrokeKind::Inside,
                 );
@@ -1463,7 +1584,7 @@ impl App {
                     painter,
                     IconKind::Play,
                     rect.center() + egui::vec2(-3.0, 0.0),
-                    theme::WHITE,
+                    self.palette.white,
                     11.0,
                     0.0,
                 );
@@ -1471,7 +1592,7 @@ impl App {
                 painter.circle_stroke(
                     rect.center() + egui::vec2(8.5, 8.5),
                     3.4,
-                    egui::Stroke::new(1.6, theme::WHITE),
+                    egui::Stroke::new(1.6, self.palette.white),
                 );
             }
             ui.add_space(11.0);
@@ -1479,10 +1600,10 @@ impl App {
                 egui::RichText::new(self.strings.app_title)
                     .size(15.0)
                     .strong()
-                    .color(theme::INK),
+                    .color(self.palette.ink),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if gear_button(ui, self.strings.settings_gear_tooltip).clicked() {
+                if gear_button(ui, self.strings.settings_gear_tooltip, self.palette).clicked() {
                     self.open_settings(self.settings_tab);
                 }
             });
@@ -1494,7 +1615,7 @@ impl App {
                 egui::pos2(ui.min_rect().left(), y),
                 egui::pos2(ui.min_rect().left() + ui.available_width(), y),
             ],
-            egui::Stroke::new(1.0, theme::BORDER),
+            egui::Stroke::new(1.0, self.palette.border),
         );
         ui.add_space(12.0);
     }
@@ -1509,9 +1630,9 @@ impl App {
             ui.allocate_exact_size(egui::vec2(ui.available_width(), 38.0), egui::Sense::click());
         if ui.is_rect_visible(rect) {
             let painter = ui.painter();
-            let bg = theme::blend(theme::WARN, theme::PANEL, 0.86);
-            let border_color = theme::blend(theme::WARN, theme::PANEL, 0.6);
-            let fg = theme::blend(theme::WARN, theme::WHITE, 0.2);
+            let bg = self.palette.health_warning_bg();
+            let border_color = self.palette.health_warning_border();
+            let fg = self.palette.warn_fg();
             painter.rect(
                 rect,
                 egui::CornerRadius::same(R_ROW),
@@ -1539,7 +1660,7 @@ impl App {
                 egui::Align2::RIGHT_CENTER,
                 self.strings.health_go,
                 egui::FontId::proportional(12.5),
-                theme::WEAK,
+                self.palette.weak,
             );
         }
         if response.clicked() {
@@ -1606,7 +1727,7 @@ impl App {
 
         ui.horizontal(|ui| {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(3.0, 13.0), egui::Sense::hover());
-            ui.painter().rect_filled(rect, 0.0, theme::ACCENT);
+            ui.painter().rect_filled(rect, 0.0, self.palette.accent);
             ui.add_space(8.0);
             ui.label(
                 egui::RichText::new(self.strings.compat_title)
@@ -1625,6 +1746,7 @@ impl App {
                         ButtonStyle::Neutral,
                         egui::vec2(88.0, 26.0),
                         true,
+                        self.palette,
                     )
                     .clicked()
                 {
@@ -1644,6 +1766,7 @@ impl App {
                         ButtonStyle::Neutral,
                         egui::vec2(132.0, 26.0),
                         !v.precaching,
+                        self.palette,
                     )
                     .clicked()
                     {
@@ -1657,13 +1780,17 @@ impl App {
             self.compat_details(ui, report, v.summary);
         }
         if let Some(text) = &v.precache_error {
-            ui.label(egui::RichText::new(text).size(12.0).color(theme::DANGER));
+            ui.label(
+                egui::RichText::new(text)
+                    .size(12.0)
+                    .color(self.palette.danger),
+            );
         }
         if v.precache_done {
             ui.label(
                 egui::RichText::new(self.strings.compat_precache_done)
                     .size(12.0)
-                    .color(theme::SUCCESS),
+                    .color(self.palette.success),
             );
         }
     }
@@ -1673,38 +1800,38 @@ impl App {
             CompatSummary::Checking => (
                 "○",
                 self.strings.compat_checking,
-                theme::WEAK,
-                theme::BORDER,
+                self.palette.weak,
+                self.palette.border,
             ),
             CompatSummary::Ready => (
                 "✔",
                 self.strings.compat_status_ready,
-                theme::SUCCESS,
-                theme::badge_bg(theme::SUCCESS),
+                self.palette.success,
+                self.palette.badge_bg(self.palette.success),
             ),
             CompatSummary::Online => (
                 "●",
                 self.strings.compat_status_online,
-                theme::WARN,
-                theme::badge_bg(theme::WARN),
+                self.palette.warn,
+                self.palette.badge_bg(self.palette.warn),
             ),
             CompatSummary::Pending => (
                 "▲",
                 self.strings.compat_status_pending,
-                theme::DANGER,
-                theme::badge_bg(theme::DANGER),
+                self.palette.danger,
+                self.palette.badge_bg(self.palette.danger),
             ),
             CompatSummary::Missing => (
                 "?",
                 self.strings.compat_status_missing,
-                theme::WEAK,
-                theme::BORDER,
+                self.palette.weak,
+                self.palette.border,
             ),
             CompatSummary::Network => (
                 "?",
                 self.strings.compat_status_network,
-                theme::WEAK,
-                theme::BORDER,
+                self.palette.weak,
+                self.palette.border,
             ),
         };
         egui::Frame::new()
@@ -1723,13 +1850,17 @@ impl App {
     fn compat_status_of(&self, status: &compat::ProbeStatus) -> (&'static str, egui::Color32) {
         use compat::ProbeStatus::*;
         match status {
-            Checking => (self.strings.compat_checking, theme::WEAK),
-            RemoteAvailable { cached: true } => (self.strings.compat_status_ready, theme::SUCCESS),
-            RemoteAvailable { cached: false } => (self.strings.compat_status_online, theme::WARN),
-            CompatibleOffline => (self.strings.compat_status_offline, theme::SUCCESS),
-            IncompatiblePending => (self.strings.compat_status_pending, theme::DANGER),
-            NetworkError(_) => (self.strings.compat_status_network, theme::WEAK),
-            FileNotFound => (self.strings.compat_status_missing, theme::WEAK),
+            Checking => (self.strings.compat_checking, self.palette.weak),
+            RemoteAvailable { cached: true } => {
+                (self.strings.compat_status_ready, self.palette.success)
+            }
+            RemoteAvailable { cached: false } => {
+                (self.strings.compat_status_online, self.palette.warn)
+            }
+            CompatibleOffline => (self.strings.compat_status_offline, self.palette.success),
+            IncompatiblePending => (self.strings.compat_status_pending, self.palette.danger),
+            NetworkError(_) => (self.strings.compat_status_network, self.palette.weak),
+            FileNotFound => (self.strings.compat_status_missing, self.palette.weak),
         }
     }
 
@@ -1754,7 +1885,7 @@ impl App {
                 CompatSummary::Network => self.strings.compat_tip_network,
                 CompatSummary::Checking => "",
             };
-            ui.label(egui::RichText::new(tip).size(11.5).color(theme::WEAK));
+            ui.label(egui::RichText::new(tip).size(11.5).color(self.palette.weak));
             ui.add_space(6.0);
         }
         for (probe, kind) in [
@@ -1774,8 +1905,8 @@ impl App {
                 .unwrap_or("—");
             let (stext, scolor) = self.compat_status_of(&probe.status);
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(row).size(12.5).color(theme::SUB));
-                ui.monospace(egui::RichText::new(sha).size(12.0).color(theme::WEAK));
+                ui.label(egui::RichText::new(row).size(12.5).color(self.palette.sub));
+                ui.monospace(egui::RichText::new(sha).size(12.0).color(self.palette.weak));
                 status_line(ui, stext, scolor);
             });
         }
@@ -1789,6 +1920,7 @@ impl App {
                 ButtonStyle::Neutral,
                 egui::vec2(150.0, 26.0),
                 true,
+                self.palette,
             )
             .clicked()
             {
@@ -1801,8 +1933,8 @@ impl App {
     fn hero_surface(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, vm: &MainPageVm) {
         let mut event: Option<MainEvent> = None;
         egui::Frame::new()
-            .fill(theme::CARD)
-            .stroke(egui::Stroke::new(1.0, theme::BORDER))
+            .fill(self.palette.card)
+            .stroke(egui::Stroke::new(1.0, self.palette.border))
             .corner_radius(egui::CornerRadius::same(R_HERO))
             .inner_margin(egui::Margin::symmetric(30, 24))
             .show(ui, |ui| {
@@ -1840,13 +1972,13 @@ impl App {
     fn hero_eyebrow(&self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 2.0), egui::Sense::hover());
-            ui.painter().rect_filled(rect, 1.0, theme::ACCENT);
+            ui.painter().rect_filled(rect, 1.0, self.palette.accent);
             ui.add_space(10.0);
             ui.label(
                 egui::RichText::new(main_page::EYEBROW)
                     .size(12.0)
                     .strong()
-                    .color(theme::WEAK),
+                    .color(self.palette.weak),
             );
         });
     }
@@ -1863,7 +1995,7 @@ impl App {
                         ui.painter(),
                         IconKind::Check,
                         rect.center(),
-                        theme::SUCCESS,
+                        self.palette.success,
                         17.0,
                         0.0,
                     );
@@ -1872,7 +2004,7 @@ impl App {
                         egui::RichText::new(self.strings.status_deployed)
                             .size(36.0)
                             .strong()
-                            .color(theme::INK),
+                            .color(self.palette.ink),
                     );
                 });
             }
@@ -1881,7 +2013,7 @@ impl App {
                     egui::RichText::new(self.strings.status_not_deployed)
                         .size(36.0)
                         .strong()
-                        .color(theme::INK),
+                        .color(self.palette.ink),
                 );
             }
             Busy => {
@@ -1889,7 +2021,7 @@ impl App {
                     egui::RichText::new(self.busy_stage_text())
                         .size(36.0)
                         .strong()
-                        .color(theme::SUB),
+                        .color(self.palette.sub),
                 );
             }
             Failed => {
@@ -1897,7 +2029,7 @@ impl App {
                     egui::RichText::new(self.strings.op_failed)
                         .size(36.0)
                         .strong()
-                        .color(theme::DANGER),
+                        .color(self.palette.danger),
                 );
             }
         }
@@ -1926,9 +2058,13 @@ impl App {
             egui::RichText::new(title)
                 .size(13.5)
                 .strong()
-                .color(theme::INK),
+                .color(self.palette.ink),
         );
-        ui.label(egui::RichText::new(body).size(13.5).color(theme::WEAK));
+        ui.label(
+            egui::RichText::new(body)
+                .size(13.5)
+                .color(self.palette.weak),
+        );
     }
 
     /// Primary CTA（spec §18/§19）：Solid Brand Blue，单行 Icon+Label 整体居中；busy 原位阶段化。
@@ -1977,13 +2113,17 @@ impl App {
         if ui.is_rect_visible(rect) {
             let hovered = enabled && response.hovered();
             let fill = if !enabled {
-                theme::ENTRY
+                self.palette.entry
             } else if hovered {
-                theme::accent_hover()
+                self.palette.accent_hover
             } else {
-                theme::ACCENT
+                self.palette.accent
             };
-            let fg = if enabled { theme::WHITE } else { theme::WEAK };
+            let fg = if enabled {
+                self.palette.white
+            } else {
+                self.palette.weak
+            };
             let painter = ui.painter();
             painter.rect(
                 rect,
@@ -2062,7 +2202,7 @@ impl App {
             let font = egui::FontId::proportional(13.0);
             let enabled = vm.update.enabled;
             let icon_w = 16.0;
-            let tw = text_width(ui, label, &font, theme::SUB);
+            let tw = text_width(ui, label, &font, self.palette.sub);
             let width = (tw + icon_w + 26.0).max(130.0);
             let (rect, response) = ui.allocate_exact_size(
                 egui::vec2(width, 30.0),
@@ -2078,17 +2218,17 @@ impl App {
                     ui.painter().rect(
                         rect,
                         egui::CornerRadius::same(R_SMALL),
-                        theme::ENTRY,
-                        egui::Stroke::new(1.0, theme::BORDER),
+                        self.palette.entry,
+                        egui::Stroke::new(1.0, self.palette.border),
                         egui::StrokeKind::Inside,
                     );
                 }
                 let fg = if !enabled {
-                    theme::WEAK
+                    self.palette.weak
                 } else if hovered {
-                    theme::INK
+                    self.palette.ink
                 } else {
-                    theme::SUB
+                    self.palette.sub
                 };
                 let phase = if spin {
                     ctx.input(|i| i.time) as f32
@@ -2133,14 +2273,14 @@ impl App {
                         ui.label(
                             egui::RichText::new(self.strings.settings_patch_up_to_date)
                                 .size(12.5)
-                                .color(theme::SUCCESS),
+                                .color(self.palette.success),
                         );
                     }
                     UpdateConclusion::NewVersion => {
                         ui.label(
                             egui::RichText::new(self.strings.settings_patch_new_version)
                                 .size(12.5)
-                                .color(theme::SUCCESS),
+                                .color(self.palette.success),
                         );
                     }
                     UpdateConclusion::CheckFailed => {
@@ -2159,7 +2299,7 @@ impl App {
                         ui.label(
                             egui::RichText::new(self.strings.up_check_failed)
                                 .size(12.5)
-                                .color(theme::DANGER),
+                                .color(self.palette.danger),
                         )
                         .on_hover_text(detail);
                     }
@@ -2190,9 +2330,9 @@ impl App {
                 SecondaryAction::ExitAndUninstall => IconKind::Exit,
             };
             let base_fg = if row.warn_blue {
-                theme::CAUTION_FG
+                self.palette.caution.fg
             } else {
-                theme::SUB
+                self.palette.sub
             };
             let size = egui::vec2(ui.available_width().max(0.0), 40.0);
             let (rect, response) = ui.allocate_exact_size(
@@ -2207,7 +2347,7 @@ impl App {
                 let painter = ui.painter();
                 // 行间极轻分隔线（spec §23 不建完整 Card）。
                 if i > 0 {
-                    let line_color = theme::blend(theme::BORDER, theme::PANEL, 0.55);
+                    let line_color = theme::blend(self.palette.border, self.palette.panel, 0.55);
                     painter.line_segment(
                         [
                             egui::pos2(rect.left() + 12.0, rect.top()),
@@ -2221,15 +2361,15 @@ impl App {
                     painter.rect(
                         rect,
                         egui::CornerRadius::same(R_ROW),
-                        theme::ENTRY,
+                        self.palette.entry,
                         egui::Stroke::NONE,
                         egui::StrokeKind::Inside,
                     );
                 }
                 let fg = if !row.enabled {
-                    theme::WEAK
+                    self.palette.weak
                 } else if hovered {
-                    theme::INK
+                    self.palette.ink
                 } else {
                     base_fg
                 };
@@ -2287,10 +2427,11 @@ impl App {
             self.gate.current(),
             self.notice.as_ref(),
             &self.strings,
+            self.palette,
         );
         // 状态栏：窗口底部专用 Dock，横跨全宽、独立于内容列（spec §32）。
         egui::Panel::bottom("status_dock")
-            .frame(egui::Frame::new().fill(theme::PANEL))
+            .frame(egui::Frame::new().fill(self.palette.panel))
             // 首帧即用稳定高度：Panel 首帧 default_outer_size 为 None 时会回退到
             // interact_size（≈20lp），导致中央面板首帧多 18lp、卡片先偏下一帧再上移（跳动）。
             .default_size(Self::STATUS_DOCK_H)
@@ -2300,7 +2441,7 @@ impl App {
                 let rect = ui.max_rect();
                 ui.painter().line_segment(
                     [rect.left_top(), rect.right_top()],
-                    egui::Stroke::new(1.0, theme::BORDER),
+                    egui::Stroke::new(1.0, self.palette.border),
                 );
                 // 本布局内禁用行间距（否则每次子块 allocate 附加 item_spacing.y，
                 // 内容行会被推偏、上下不对称，实测 +10lp）。
@@ -2423,6 +2564,20 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
+        // 每帧同步当前色板：System 模式下 OS 切深浅由 egui 解析（ctx.theme()），UI 引用点随之换色；
+        // mark 按模式重载（Dark 烤白 / L1 保留黑 mark）。
+        let palette = match ctx.theme() {
+            egui::Theme::Dark => Palette::dark(),
+            egui::Theme::Light => Palette::light(),
+        };
+        if palette != self.palette {
+            self.palette = palette;
+            if palette.dark_mode != self.mark_dark {
+                self.mark_dark = palette.dark_mode;
+                self.github_mark = load_github_mark(&ctx, palette);
+            }
+        }
+
         let mut content_h = 0.0f32;
         egui::CentralPanel::default().show(ui, |ui| {
             if self.wizard.is_some() {
@@ -2462,6 +2617,7 @@ impl eframe::App for App {
                         ButtonStyle::Primary,
                         egui::vec2(72.0, 30.0),
                         true,
+                        self.palette,
                     )
                     .clicked()
                     {
@@ -2474,6 +2630,7 @@ impl eframe::App for App {
                         ButtonStyle::Neutral,
                         egui::vec2(72.0, 30.0),
                         true,
+                        self.palette,
                     )
                     .clicked()
                     {
@@ -2542,7 +2699,7 @@ mod tests {
             let galley = view.layout(
                 text.to_owned(),
                 egui::FontId::proportional(14.0),
-                theme::WHITE,
+                Palette::dark().white,
                 f32::INFINITY,
             );
             galley
@@ -2650,7 +2807,7 @@ mod tests {
     fn status_bar_drops_launch_success_when_steam_stopped() {
         let zh = Strings::new(Lang::Zh);
         let texts = |running: bool, n: &Notice| -> Vec<String> {
-            status_bar_items(running, None, Some(n), &zh)
+            status_bar_items(running, None, Some(n), &zh, Palette::dark())
                 .iter()
                 .map(|(t, _)| t.clone())
                 .collect()
@@ -2693,7 +2850,7 @@ mod tests {
                 let font = egui::FontId::proportional(15.0);
                 let s = Strings::new(Lang::En);
                 let text = s.btn_apply_and_launch;
-                w = text_width(ui, text, &font, theme::WHITE) + 19.0 + 8.0;
+                w = text_width(ui, text, &font, Palette::dark().white) + 19.0 + 8.0;
             });
         });
         full.textures_delta.clear();
@@ -2722,6 +2879,7 @@ mod tests {
                     ButtonStyle::Neutral,
                     egui::vec2(96.0, 32.0),
                     true,
+                    Palette::dark(),
                 )
                 .rect
                 .width();
@@ -2731,6 +2889,7 @@ mod tests {
                     ButtonStyle::Primary,
                     egui::vec2(150.0, 32.0),
                     true,
+                    Palette::dark(),
                 )
                 .rect
                 .width();
@@ -2740,6 +2899,7 @@ mod tests {
                     ButtonStyle::Neutral,
                     egui::vec2(96.0, 32.0),
                     true,
+                    Palette::dark(),
                 )
                 .rect
                 .width();
@@ -2845,6 +3005,7 @@ mod tests {
                                 ButtonStyle::Neutral,
                                 egui::vec2(88.0, 26.0),
                                 true,
+                                Palette::dark(),
                             );
                             let precache = styled_button(
                                 ui,
@@ -2852,6 +3013,7 @@ mod tests {
                                 ButtonStyle::Neutral,
                                 egui::vec2(132.0, 26.0),
                                 true,
+                                Palette::dark(),
                             );
                             if precache.rect.left() + 0.5 < block_left {
                                 violations.push(format!(
@@ -2898,7 +3060,7 @@ mod tests {
                     path_valid: false,
                     download: wizard::DownloadState::Idle,
                 };
-                let (_, rect) = wizard_steps_ui(ui, Strings::new(Lang::Zh), &view);
+                let (_, rect) = wizard_steps_ui(ui, Strings::new(Lang::Zh), &view, Palette::dark());
                 card = Some(rect);
             });
         });
@@ -2909,7 +3071,7 @@ mod tests {
             "卡片应水平居中，center.x={}，期望 320",
             rect.center().x
         );
-        let card_w = WIZARD_CARD_WIDTH + card_frame().total_margin().sum().x;
+        let card_w = WIZARD_CARD_WIDTH + card_frame(Palette::dark()).total_margin().sum().x;
         assert!(
             (rect.width() - card_w).abs() < 1.0,
             "卡片宽应≈{card_w}，实际 {}",
@@ -3003,10 +3165,10 @@ mod tests {
                         egui::RichText::new(s.app_title)
                             .size(15.0)
                             .strong()
-                            .color(theme::INK),
+                            .color(Palette::dark().ink),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let _ = gear_button(ui, s.settings_gear_tooltip);
+                        let _ = gear_button(ui, s.settings_gear_tooltip, Palette::dark());
                     });
                 });
                 let y = ui.cursor().top();
@@ -3015,13 +3177,13 @@ mod tests {
                         egui::pos2(ui.min_rect().left(), y),
                         egui::pos2(ui.min_rect().left() + ui.available_width(), y),
                     ],
-                    egui::Stroke::new(1.0, theme::BORDER),
+                    egui::Stroke::new(1.0, Palette::dark().border),
                 );
                 ui.add_space(12.0);
                 // Hero 最简形态
                 egui::Frame::new()
-                    .fill(theme::CARD)
-                    .stroke(egui::Stroke::new(1.0, theme::BORDER))
+                    .fill(Palette::dark().card)
+                    .stroke(egui::Stroke::new(1.0, Palette::dark().border))
                     .corner_radius(egui::CornerRadius::same(R_HERO))
                     .inner_margin(egui::Margin::symmetric(30, 24))
                     .show(ui, |ui| {
@@ -3029,13 +3191,13 @@ mod tests {
                         ui.horizontal(|ui| {
                             let (rect, _) =
                                 ui.allocate_exact_size(egui::vec2(14.0, 2.0), egui::Sense::hover());
-                            ui.painter().rect_filled(rect, 1.0, theme::ACCENT);
+                            ui.painter().rect_filled(rect, 1.0, Palette::dark().accent);
                             ui.add_space(10.0);
                             ui.label(
                                 egui::RichText::new(main_page::EYEBROW)
                                     .size(12.0)
                                     .strong()
-                                    .color(theme::WEAK),
+                                    .color(Palette::dark().weak),
                             );
                         });
                         ui.add_space(12.0);
@@ -3043,7 +3205,7 @@ mod tests {
                             egui::RichText::new(s.status_not_deployed)
                                 .size(36.0)
                                 .strong()
-                                .color(theme::INK),
+                                .color(Palette::dark().ink),
                         );
                         ui.add_space(20.0);
                         let _ = styled_button(
@@ -3052,6 +3214,7 @@ mod tests {
                             ButtonStyle::Primary,
                             egui::vec2(340.0, 44.0),
                             true,
+                            Palette::dark(),
                         );
                         ui.add_space(12.0);
                         let _ = styled_button(
@@ -3060,6 +3223,7 @@ mod tests {
                             ButtonStyle::Neutral,
                             egui::vec2(150.0, 30.0),
                             true,
+                            Palette::dark(),
                         );
                     });
                 h = ui.cursor().top();
@@ -3085,7 +3249,7 @@ mod tests {
         };
         let mut full = ctx.run_ui(raw, |ui| {
             egui::Modal::new(egui::Id::new("settings_dialog_repro"))
-                .frame(settings_dialog_frame())
+                .frame(settings_dialog_frame(Palette::dark()))
                 .show(ui, |ui| {
                     let s = Strings::new(lang);
                     modal_top = ui.cursor().top();
@@ -3099,6 +3263,7 @@ mod tests {
                             ButtonStyle::Primary,
                             egui::vec2(88.0, 28.0),
                             true,
+                            Palette::dark(),
                         );
                         ui.add_space(4.0);
                         let _ = styled_button(
@@ -3107,6 +3272,7 @@ mod tests {
                             ButtonStyle::Neutral,
                             egui::vec2(88.0, 28.0),
                             true,
+                            Palette::dark(),
                         );
                         ui.add_space(4.0);
                         let _ = styled_button(
@@ -3115,6 +3281,7 @@ mod tests {
                             ButtonStyle::Neutral,
                             egui::vec2(88.0, 28.0),
                             true,
+                            Palette::dark(),
                         );
                     });
                     ui.add_space(8.0);
@@ -3141,6 +3308,7 @@ mod tests {
                                 ButtonStyle::Neutral,
                                 egui::vec2(80.0, 30.0),
                                 true,
+                                Palette::dark(),
                             );
                             footer = r.rect.bottom();
                         });
@@ -3214,6 +3382,7 @@ mod tests {
                                 ButtonStyle::Neutral,
                                 egui::vec2(88.0, 28.0),
                                 true,
+                                Palette::dark(),
                             );
                             last_tab_right = r.rect.right();
                             ui.add_space(4.0);

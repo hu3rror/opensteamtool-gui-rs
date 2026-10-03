@@ -748,7 +748,14 @@ mod tests {
                 IconKind::Check,
                 IconKind::Spinner,
             ] {
-                paint_icon(&painter.clone(), kind, c, crate::theme::WHITE, 15.0, 0.0);
+                paint_icon(
+                    &painter.clone(),
+                    kind,
+                    c,
+                    crate::theme::Palette::dark().white,
+                    15.0,
+                    0.0,
+                );
             }
         });
         full.textures_delta.clear();

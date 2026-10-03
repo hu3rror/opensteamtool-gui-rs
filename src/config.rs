@@ -47,6 +47,34 @@ impl Language {
     }
 }
 
+/// 深浅主题偏好：`system` 跟随系统（实际深浅解析由 egui 承担，见 ADR-0016）；
+/// 本枚举只负责 config.toml 的持久化与三态映射，不复制系统检测逻辑。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ThemePreference {
+    System,
+    Dark,
+    Light,
+}
+
+impl ThemePreference {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "system" => Some(ThemePreference::System),
+            "dark" => Some(ThemePreference::Dark),
+            "light" => Some(ThemePreference::Light),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ThemePreference::System => "system",
+            ThemePreference::Dark => "dark",
+            ThemePreference::Light => "light",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum ConfigError {
     /// 文件系统错误（缺文件除外——缺文件是「未配置」的合法形态，走默认值）。
@@ -73,6 +101,8 @@ pub struct Config {
     pub language: Language,
     /// 最小化时是否自动隐藏到托盘（缺省启用；字段缺失 = true，老配置无迁移）。
     pub minimize_to_tray: bool,
+    /// 深浅主题偏好（缺省跟随系统；字段缺失/非法 = System，老配置无迁移，ADR-0016）。
+    pub theme: ThemePreference,
 }
 
 impl Config {
@@ -82,6 +112,7 @@ impl Config {
             steam_path: String::new(),
             language: Language::Auto,
             minimize_to_tray: true,
+            theme: ThemePreference::System,
         }
     }
 }
@@ -148,11 +179,21 @@ fn parse(text: &str) -> Result<Config, ConfigError> {
         Some(v) => v.as_bool().unwrap_or(true),
     };
 
+    // 主题偏好：字段缺失/非法 = 默认跟随系统（老配置无该字段，不迁移不 bump 版本）。
+    let theme = match doc.get("theme") {
+        None => ThemePreference::System,
+        Some(v) => v
+            .as_str()
+            .and_then(ThemePreference::parse)
+            .unwrap_or(ThemePreference::System),
+    };
+
     Ok(Config {
         version: CONFIG_VERSION,
         steam_path,
         language,
         minimize_to_tray,
+        theme,
     })
 }
 
@@ -164,6 +205,7 @@ fn serialize(config: &Config) -> String {
     doc["steam_path"] = toml_edit::value(config.steam_path.trim().to_owned());
     doc["language"] = toml_edit::value(config.language.as_str());
     doc["minimize_to_tray"] = toml_edit::value(config.minimize_to_tray);
+    doc["theme"] = toml_edit::value(config.theme.as_str());
     doc.to_string()
 }
 
@@ -183,22 +225,64 @@ mod tests {
         let dir = tmp_dir("roundtrip");
         let path = dir.join(CONFIG_FILE);
         for lang in [Language::Auto, Language::Zh, Language::En] {
-            for steam_path in ["C:/Program Files (x86)/Steam", ""] {
-                for minimize_to_tray in [true, false] {
-                    let cfg = Config {
-                        version: CONFIG_VERSION,
-                        steam_path: steam_path.into(),
-                        language: lang,
-                        minimize_to_tray,
-                    };
-                    save(&path, &cfg).unwrap();
-                    assert_eq!(
-                        load(&path).unwrap(),
-                        cfg,
-                        "round-trip {lang:?} {steam_path:?} {minimize_to_tray}"
-                    );
+            for theme in [
+                ThemePreference::System,
+                ThemePreference::Dark,
+                ThemePreference::Light,
+            ] {
+                for steam_path in ["C:/Program Files (x86)/Steam", ""] {
+                    for minimize_to_tray in [true, false] {
+                        let cfg = Config {
+                            version: CONFIG_VERSION,
+                            steam_path: steam_path.into(),
+                            language: lang,
+                            minimize_to_tray,
+                            theme,
+                        };
+                        save(&path, &cfg).unwrap();
+                        assert_eq!(
+                            load(&path).unwrap(),
+                            cfg,
+                            "round-trip {lang:?} {theme:?} {steam_path:?} {minimize_to_tray}"
+                        );
+                    }
                 }
             }
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn missing_theme_defaults_to_system() {
+        let dir = tmp_dir("oldtheme");
+        let path = dir.join(CONFIG_FILE);
+        std::fs::write(
+            &path,
+            "version = 1\nsteam_path = \"C:/S\"\nlanguage = \"zh\"",
+        )
+        .unwrap();
+        let cfg = load(&path).unwrap();
+        assert_eq!(cfg.language, Language::Zh);
+        assert_eq!(cfg.theme, ThemePreference::System, "字段缺失应默认跟随系统");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn theme_invalid_is_tolerated() {
+        let dir = tmp_dir("themetol");
+        for bad in ["\"blue\"", "\"auto\"", "42"] {
+            let path = dir.join(CONFIG_FILE);
+            std::fs::write(
+                &path,
+                format!("version = 1\nsteam_path = \"C:/S\"\nlanguage = \"zh\"\ntheme = {bad}"),
+            )
+            .unwrap();
+            let cfg = load(&path).unwrap();
+            assert_eq!(
+                cfg.theme,
+                ThemePreference::System,
+                "theme = {bad} 应宽容降级默认跟随系统"
+            );
         }
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -306,6 +390,33 @@ mod tests {
         save(&path, &Config::defaults()).unwrap();
         assert!(path.is_file());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn theme_pref_parse_table() {
+        assert_eq!(
+            ThemePreference::parse("system"),
+            Some(ThemePreference::System)
+        );
+        assert_eq!(ThemePreference::parse("dark"), Some(ThemePreference::Dark));
+        assert_eq!(
+            ThemePreference::parse("light"),
+            Some(ThemePreference::Light)
+        );
+        assert_eq!(ThemePreference::parse("auto"), None);
+        assert_eq!(ThemePreference::parse(""), None);
+        assert_eq!(ThemePreference::parse("SYSTEM"), None);
+    }
+
+    #[test]
+    fn theme_pref_as_str_round_trips() {
+        for t in [
+            ThemePreference::System,
+            ThemePreference::Dark,
+            ThemePreference::Light,
+        ] {
+            assert_eq!(ThemePreference::parse(t.as_str()), Some(t));
+        }
     }
 
     #[test]

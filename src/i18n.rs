@@ -2,7 +2,7 @@
 
 use crate::busy::BusyKind;
 use crate::compat::CompatError;
-use crate::config::Language;
+use crate::config::{Language, ThemePreference};
 use crate::updater::UpdateError;
 use crate::workflow::{Action, Op, Precheck, WorkflowError};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -125,6 +125,11 @@ pub struct Strings {
     pub settings_tray_title: &'static str,
     /// Settings — 通用 页签最小化隐身勾选项（#37；与托盘菜单勾选同一事实源）。
     pub settings_tray_minimize: &'static str,
+    /// Settings — 通用 页签「主题」小节（ADR-0016）：标题 + 三态下拉选项。
+    pub settings_theme_title: &'static str,
+    pub settings_theme_system: &'static str,
+    pub settings_theme_dark: &'static str,
+    pub settings_theme_light: &'static str,
     pub settings_version_label: &'static str,
     pub settings_app_update_title: &'static str,
     pub settings_btn_app_update_check: &'static str,
@@ -228,6 +233,15 @@ impl Strings {
         ]
     }
 
+    /// 主题选项表：设置通用页签「主题」小节的下拉数据源（ADR-0016）。
+    pub fn theme_options(&self) -> [(ThemePreference, &'static str); 3] {
+        [
+            (ThemePreference::System, self.settings_theme_system),
+            (ThemePreference::Dark, self.settings_theme_dark),
+            (ThemePreference::Light, self.settings_theme_light),
+        ]
+    }
+
     pub fn new(lang: Lang) -> Self {
         match lang {
             Lang::Zh => Self::zh(),
@@ -304,6 +318,10 @@ impl Strings {
             settings_language_title: "语言",
             settings_tray_title: "系统托盘",
             settings_tray_minimize: "最小化时隐藏到系统托盘",
+            settings_theme_title: "主题",
+            settings_theme_system: "跟随系统",
+            settings_theme_dark: "深色",
+            settings_theme_light: "浅色",
             settings_version_label: "软件版本",
             settings_app_update_title: "应用更新",
             settings_btn_app_update_check: "检查应用更新",
@@ -431,6 +449,10 @@ impl Strings {
             settings_language_title: "Language",
             settings_tray_title: "System Tray",
             settings_tray_minimize: "Hide to tray when minimized",
+            settings_theme_title: "Theme",
+            settings_theme_system: "Follow system",
+            settings_theme_dark: "Dark",
+            settings_theme_light: "Light",
             settings_version_label: "Version",
             settings_app_update_title: "App Update",
             settings_btn_app_update_check: "Check App Update",

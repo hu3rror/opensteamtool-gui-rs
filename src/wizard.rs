@@ -178,7 +178,7 @@ pub fn should_show(config_path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{CONFIG_FILE, CONFIG_VERSION, Config};
+    use crate::config::{CONFIG_FILE, CONFIG_VERSION, Config, ThemePreference};
 
     fn tmp_dir(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("ost_wiz_{}_{}", name, std::process::id()));
@@ -193,6 +193,7 @@ mod tests {
             steam_path: steam_path.into(),
             language: Language::Auto,
             minimize_to_tray: true,
+            theme: ThemePreference::System,
         };
         config::save(&dir.join(CONFIG_FILE), &cfg).unwrap();
     }
