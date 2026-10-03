@@ -599,12 +599,15 @@ fn path_edit_row(
 }
 
 /// 三态下拉共用实现（语言 / 主题；设置页与向导同一形态，ADR-0016）。
+/// 选中项文字显式用 palette.accent——egui 选中态底色取自 selection.bg_fill（浅蓝），
+/// 而全局 override_text_color 会把无显式色文字强制成 ink（深色主题近白），白字浅底不可读。
 fn tri_state_combo<T: Copy + PartialEq>(
     ui: &mut egui::Ui,
     options: [(T, &'static str); 3],
     selected: T,
     width: f32,
     salt: &'static str,
+    palette: Palette,
 ) -> Option<T> {
     let current = options
         .iter()
@@ -617,7 +620,12 @@ fn tri_state_combo<T: Copy + PartialEq>(
         .width(width)
         .show_ui(ui, |ui| {
             for (v, label) in options {
-                if ui.selectable_label(selected == v, label).clicked() {
+                let text = if selected == v {
+                    egui::RichText::new(label).color(palette.accent)
+                } else {
+                    egui::RichText::new(label)
+                };
+                if ui.selectable_label(selected == v, text).clicked() {
                     chosen = Some(v);
                 }
             }
@@ -631,8 +639,9 @@ fn language_combo(
     selected: Language,
     width: f32,
     salt: &'static str,
+    palette: Palette,
 ) -> Option<Language> {
-    tri_state_combo(ui, options, selected, width, salt)
+    tri_state_combo(ui, options, selected, width, salt, palette)
 }
 
 /// 主题偏好 → egui 偏好（System/Dark/Light 三态一一对应，ADR-0016）。
@@ -651,8 +660,9 @@ fn theme_combo(
     selected: ThemePreference,
     width: f32,
     salt: &'static str,
+    palette: Palette,
 ) -> Option<ThemePreference> {
-    tri_state_combo(ui, options, selected, width, salt)
+    tri_state_combo(ui, options, selected, width, salt, palette)
 }
 
 fn wizard_download() -> Result<(), UpdateError> {
@@ -753,9 +763,14 @@ fn wizard_steps_ui(
                             );
                             ui.add_space(12.0);
                             let options = strings.language_options();
-                            if let Some(lang) =
-                                language_combo(ui, options, view.language, 240.0, "wizard_language")
-                            {
+                            if let Some(lang) = language_combo(
+                                ui,
+                                options,
+                                view.language,
+                                240.0,
+                                "wizard_language",
+                                palette,
+                            ) {
                                 event = Some(wizard::Event::LanguageChosen(lang));
                             }
                             ui.add_space(14.0);
@@ -1370,8 +1385,14 @@ impl App {
         card_title(ui, self.strings.settings_language_title, self.palette);
         ui.add_space(10.0);
         let options = self.strings.language_options();
-        if let Some(lang) = language_combo(ui, options, self.lang_pref, 220.0, "settings_language")
-            && lang != self.lang_pref
+        if let Some(lang) = language_combo(
+            ui,
+            options,
+            self.lang_pref,
+            220.0,
+            "settings_language",
+            self.palette,
+        ) && lang != self.lang_pref
         {
             self.set_language(lang);
             self.config.language = lang;
@@ -1382,8 +1403,14 @@ impl App {
         card_title(ui, self.strings.settings_theme_title, self.palette);
         ui.add_space(10.0);
         let options = self.strings.theme_options();
-        if let Some(theme) = theme_combo(ui, options, self.theme_pref, 220.0, "settings_theme")
-            && theme != self.theme_pref
+        if let Some(theme) = theme_combo(
+            ui,
+            options,
+            self.theme_pref,
+            220.0,
+            "settings_theme",
+            self.palette,
+        ) && theme != self.theme_pref
         {
             self.set_theme(theme);
         }
