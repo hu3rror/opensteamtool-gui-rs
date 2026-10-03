@@ -40,10 +40,12 @@ fn load_icon() -> egui::IconData {
 }
 
 fn main() -> eframe::Result {
+    // 首帧参考 = 最小内尺寸（spec §40 签核：默认窗口贴着最小尺寸启动，只涨不缩）。
+    let min_size = [620.0, 520.0];
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([940.0, 680.0])
-            .with_min_inner_size([620.0, 520.0])
+            .with_inner_size(min_size)
+            .with_min_inner_size(min_size)
             .with_resizable(true)
             .with_icon(load_icon()),
         centered: true,

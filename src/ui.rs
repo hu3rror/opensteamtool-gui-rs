@@ -2621,7 +2621,7 @@ impl eframe::App for App {
             }
         });
 
-        // 首帧自适应：仅在内容放不下时增长窗口，从不缩窗（保持 spec §40 初始 940×680）。
+        // 首帧自适应：仅在内容放不下时增长窗口，从不缩窗（保持 spec §40 初始 620×520）。
         if self.wizard.is_none() && !self.autosized && content_h > 0.0 {
             self.autosized = true;
             let need_h = autosize_inner_height(content_h + Self::STATUS_DOCK_H);
