@@ -18,7 +18,11 @@
 - `steam_path`：空 = 未设置，启动回退注册表检测；检测结果不自动写回（配置只反映
   用户显式选择，检测是建议不是选择）。
 - `language = "auto" | "zh" | "en"`：三态，`auto` 在启动时解析为系统语言
-  （`GetUserDefaultUILanguage`），`zh`/`en` 固定；顶栏切换把偏好钉到另一侧并持久化。
+  （`GetUserDefaultUILanguage`），`zh`/`en` 固定；入口为设置通用页签下拉与向导
+  步骤 1（顶栏语言按钮已随 #34 移除），即选即存。
+- `minimize_to_tray`（#37 加）：布尔，缺省启用；字段缺失/类型非法宽容降级默认值。
+- `theme`（#39 / ADR-0016 加）：三态 `"system" | "dark" | "light"`，缺省跟随系统；
+  字段缺失/非法宽容降级默认值。
 
 ## 一致性与错误语义
 
@@ -29,8 +33,10 @@
 - **类型化错误、启动降级**：缺失文件 = 未配置（默认值）；损坏 TOML / 字段非法 =
   `ConfigError::Parse`；版本不符 = `ConfigError::UnsupportedVersion`。启动路径一律
   降级默认值继续，不 panic 不崩溃；错误保留类型供 wizard/设置页在 UI 显式呈现。
-- **严格解析**：非法内容整体拒绝（降级默认值），不做部分读取——宽容会悄悄吞掉
-  写错的文件，严格让调用方显式决策。
+- **严格解析（唯一例外：新增字段宽容）**：非法内容整体拒绝（降级默认值），不做部分
+  读取——宽容会悄悄吞掉写错的文件，严格让调用方显式决策。`minimize_to_tray`（#37）
+  与 `theme`（#39）为字段级宽容例外：缺失或类型非法均降级默认值，不拖垮整份配置
+  其他字段（老配置缺新字段不迁移不 bump 版本）。
 
 ## 范围
 
@@ -42,5 +48,6 @@ ADR-0013。
 
 单测覆盖 load/save 往返（三语言 × 有/无路径）、缺文件默认值、损坏/字段非法 →
 类型化 Parse 错误、版本不符 → UnsupportedVersion、原子写无残留临时文件、language
-三态解析/生效/顶栏切换表；`cargo test`、`cargo check --all-targets`、`cargo clippy
+三态解析/生效表、新增字段宽容降级（minimize_to_tray / theme）；`cargo test`、
+`cargo check --all-targets`、`cargo clippy
 --all-targets` 通过。
