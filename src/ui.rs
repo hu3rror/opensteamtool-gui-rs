@@ -763,16 +763,22 @@ fn wizard_steps_ui(
                             );
                             ui.add_space(12.0);
                             let options = strings.language_options();
-                            if let Some(lang) = language_combo(
-                                ui,
-                                options,
-                                view.language,
-                                240.0,
-                                "wizard_language",
-                                palette,
-                            ) {
-                                event = Some(wizard::Event::LanguageChosen(lang));
-                            }
+                            // ComboBox 内部自建 horizontal 行（子内容左对齐），父层 Align::Center 管不到它；
+                            // 用外层 horizontal + 偏移把它推到与「下一步」按钮同一条中线上。
+                            let combo_w = 240.0;
+                            ui.horizontal(|ui| {
+                                ui.add_space((ui.available_width() - combo_w) / 2.0);
+                                if let Some(lang) = language_combo(
+                                    ui,
+                                    options,
+                                    view.language,
+                                    combo_w,
+                                    "wizard_language",
+                                    palette,
+                                ) {
+                                    event = Some(wizard::Event::LanguageChosen(lang));
+                                }
+                            });
                             ui.add_space(14.0);
                             if styled_button(
                                 ui,
