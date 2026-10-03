@@ -1,33 +1,29 @@
 # 统一语义色板（unified semantic palette）
 
-> **色值更新注**：本文档基础槽色值（#0F6CBD / #16A34A / #F8F9FA 等）为浅色时代
-> 遗留，现行 Dark（B）色值以 `docs/design/main-page-ui-reference.md` §10 为准；
-> 本文档保留的是**结构决策**（槽收敛、派生规则、警戒组例外、按钮样式、命名收拢）。
-
 Rust 版外观此前逐按钮/逐状态手写配色：27 个常量 + 4 处内联（3 处 `Color32::WHITE` + 1 处 selection 底 `from_rgb`），蓝系 8 个值、绿系 3 个值、重复别名 3 组（#15803D ×3、#E2E8F0 ×2、#0284C7 ×2）。颜色种类失控的根源是「每个视觉形态一个色值」——hover、徽章浅底、selection、警戒按钮各写死一套变体。决定：收敛为固定语义槽集合，所有形态变体一律由槽派生，不新增色值；唯一例外是「警戒组」第二蓝，专门保留给「退出 Steam 并卸载补丁」这一个按钮。
 
 ## 决策
 
-- **基础槽（12 个语义槽，11 个不同色值）**：
-  - accent 蓝 `#0F6CBD`（主按钮底 / accent bar / 蓝字 / selection stroke / hover stroke）
-  - 成功绿 `#16A34A`（成功状态文字 / 状态绿点；原 Deploy 按钮底已随 Deploy 废止）
-  - 警告琥珀 `#B45309`（上游已适配未缓存）
-  - 错误红 `#DC2626`（错误文案）
-  - 文字三档 `#0F172A` / `#334155` / `#64748B`（正文 / 次级 / 弱化·禁用态·灰状态）
-  - 面板底 `#F8F9FA`（兼并旧 FILL_SECONDARY：TextEdit 底、hover 底）
-  - 卡片底 `#FFFFFF`
-  - 反色白 `#FFFFFF`（深底按钮文字；与卡片底同值不同槽）
-  - 卡片边框 `#E2E8F0`（兼灰徽章底）
-  - 控件描边 `#CBD5E1`（输入框 / 次按钮描边）
-- **警戒组（唯一写死例外，仅「退出 Steam 并卸载补丁」使用）**：`bg #F0F9FF` / `hover #E0F2FE` / `fg #0284C7` / `border #7DD3FC`。这是对早期「单蓝全派生」草案的修订：第二蓝被保留为卸载类动作的唯一视觉入口，其余按钮一律不再使用。
-- **派生变体（不占槽）**：按钮 hover = 底色暗化 ×0.92（Neutral ×0.9）；徽章浅底 = 语义色 ×15% + 面板底 ×85%（dark 下深色徽章底、亮色文字，与设置页背景融洽；旧「×10% + 白 ×90%」属浅色时代规则，Dark 定稿后废止，L1 落地时按浅色派生规则另行定义）；selection 底 = accent ×18% + 白。
+- **基础槽（12 个语义槽）**：现行值为 **Dark（B）定稿**（spec §10 Deep Navy / Ice Blue，见 `docs/design/main-page-ui-reference.md` §10；`src/theme.rs` 为唯一代码来源）：
+  - accent 蓝 `#5C91C7`（主按钮底 / accent bar / 蓝字 / selection stroke / hover stroke）
+  - 成功绿 `#6BA88F`（成功状态文字 / 状态绿点）
+  - 警告琥珀 `#C39A5B`（上游已适配未缓存）
+  - 错误红 `#C97979`（错误文案）
+  - 文字三档 `#E8EDF3` / `#A9B5C3` / `#778596`（正文 / 次级 / 弱化·禁用态·灰状态；Dark 下文字为浅色，语义翻转见 spec §10）
+  - 面板底 `#0F151C`（Background）
+  - 卡片底 `#151E28`（Surface）
+  - 反色白 `#FFFFFF`（深底按钮文字；与卡片底不同槽）
+  - 卡片边框 `#293746`（Border，兼灰徽章底）
+  - 控件层次/描边 `#1C2835`（ENTRY = Surface Elevated 深色对偶，输入框 / 次按钮描边）
+- **警戒组（唯一写死例外，仅「退出 Steam 并卸载补丁」使用）**：Dark 家族 Warning Secondary Blue——`bg #1A2A3D` / `hover #23374F` / `fg #587A9D` / `border #4A6E93`。这是对早期「单蓝全派生」草案的修订：第二蓝被保留为卸载类动作的唯一视觉入口，其余按钮一律不再使用。
+- **派生变体（不占槽）**：按钮 hover = 底色暗化 ×0.92（Neutral ×0.9，`darken` 截断）；徽章浅底 = 语义色 ×15% + 面板底 ×85%（`blend(base, PANEL, 0.85)`，Dark 下深色徽章底、亮色文字，与设置页背景融洽）；selection 底 = accent ×18% + 白（`blend(ACCENT, WHITE, 0.82)`）。
 - **按钮样式 3 种（Deploy 废止）**：
   - Primary（accent 蓝实心 / 白字，无描边）：应用补丁并启动 Steam（原 Deploy 绿废止，见 Main Page 定稿 §18/§19 统一 Solid Brand Blue）/ 下载并解压新版本 / 保存 / 确认
   - Caution（警戒组天蓝描边）：仅「退出 Steam 并卸载补丁」
-  - Neutral（白底描边 / 次级文字）：其余全部按钮（启动 / 正常启动（未部署时）/ 重启 / 卸载 / 卸载补丁并重启 / 检查更新 / 一键缓存签名 / 浏览 / 取消 / 设置 / 语言切换；原 Launch + Secondary + UninstallRestart + Lang 统一并入，含「卸载并重启」从蓝实心降级）
+  - Neutral（卡片底描边 / 次级文字）：其余全部按钮（启动 / 正常启动（未部署时）/ 重启 / 卸载 / 卸载补丁并重启 / 检查更新 / 一键缓存签名 / 浏览 / 取消 / 设置 / 语言切换；原 Launch + Secondary + UninstallRestart + Lang 统一并入，含「卸载并重启」从蓝实心降级）
 - **命名收拢**：旧 STATUS_INSTALLED / BTN_DEPLOY_BG / DOT_RUNNING → `SUCCESS`；ERR_RED → `DANGER`；STATUS_WARN → `WARN`；ACCENT 沿用。作废常量：ACCENT_ACTIVE、FILL_SECONDARY、BTN_DEPLOY_HOVER、BTN_SECONDARY_HOVER、BTN_UNINSTALL_A_*、BTN_UNINSTALL_B_*、BADGE_*。
-- **顶栏对齐**：标题按固定行高（28px）手绘文本（LEFT_CENTER 垂直居中锚点），与右侧设置按钮（72×28）垂直同轴；设置与语言切换按钮同尺寸、同 Neutral 样式；按钮左右次序维持现状（语言切换最右）。外层必须 `horizontal`——`with_layout(left_to_right)` 的子区域会吃满剩余空间把后续内容顶出可视区（原型已验证）。
-- **结构**：新建 `src/theme.rs` 收纳色槽常量、警戒组、派生函数（`darken` / `blend` / `badge_bg` / `selection_bg`）与按钮样式解析表；ui.rs 只引用语义名，不出现任何内联色值字面量（有源码扫描测试守卫）。派生函数与解析表可单测（金样值），色板不变量有测试（槽数恰 12、派生色不占槽、仓库无越权色值）。
+- **结构**：新建 `src/theme.rs` 收纳色槽常量、警戒组、派生函数（`darken` / `blend` / `badge_bg` / `selection_bg` / `accent_hover`）与按钮样式解析表（`ButtonStyle::palette` → `ButtonPalette`）；ui.rs 只引用语义名，不出现任何内联色值字面量（有源码扫描测试守卫）。派生函数与解析表可单测（金样值），色板不变量有测试（槽数恰 12、派生色不占槽、仓库无越权色值）。
+- **深浅切换状态**：切换功能**未实现**（无入口 / 无 config 字段 / 无运行时模式 / 无 `Visuals::dark/light` 分支）。Light（L1 — Ice Mist）色值已定稿于 spec §10 且**不进代码**；实现时在 `theme.rs` 预留 `Palette::light()` 数据（spec §47/§48 架构），等切换功能立项后启用。L1 派生差异：徽章浅底改向 WHITE 混、对比度敏感项（Health Warning / Busy 文字）混黑调深、GitHub mark 需白/黑双态资源，详见 spec §10 注与 `load_github_mark` 注释。
 - **取代 ADR-0003 配色小节**：本 ADR 槽表取代 0003 的逐按钮色值清单；0003 保留的 kill-ai-slop 约束与组件形态（accent bar、独立按钮区、纯文字状态）不变。
 
 ## 相对旧版 GUI 的偏离

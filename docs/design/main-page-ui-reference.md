@@ -1528,9 +1528,9 @@ Small UI
 * 不依赖固定窗口像素位置维持布局
 
 > **验收微调（用户签核）**：
-> * 内容净高估算基准 460lp（最坏态 = supporting + 健康警告 + 两行 secondary ≈
->   445lp），保证默认 940×680 下任何状态都不裁底；实测正常态 331lp，重心仍落
->   0.38 区间。基准属 Tunable，与滚动态无关。
+> * 内容净高估算基准 430lp（正常态观感与最坏态防裁的折中：最坏态 = supporting +
+>   健康警告 + 两行 secondary ≈ 445lp，顶留白 79 + 列 445 仍在可用区内，底部留白
+>   吸收溢出不伤内容；实测正常态 331lp，重心 ≈0.44 略偏下，避免头重脚轻）。基准属 Tunable，与滚动态无关。
 > * Hero 内部节奏：eyebrow→status 8 / status→primary 22 lp；supporting 显示时
 >   status→supporting 10、supporting→primary 22 lp；primary→patch-update 14 lp。
 > * 内容列统一 gap 14 lp（hero→health→secondary）。
