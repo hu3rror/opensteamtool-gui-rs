@@ -1,31 +1,44 @@
-# OpenSteamTool Manager
+<div align="center">
+  <img src="assets/logo.png" width="96" alt="OpenSteamTool Manager logo">
 
-A native Windows tool that deploys, removes, and updates OpenSteamTool patches for Steam. Built with Rust and egui/eframe (glow): a single binary, no runtime dependencies.
+  # OpenSteamTool Manager
 
-[简体中文](README_zh-CN.md)
+  Deploy, remove, and update OpenSteamTool patches for Steam — a portable native Windows GUI.
+
+  [![CI](https://img.shields.io/github/actions/workflow/status/hu3rror/opensteamtool-gui-rs/ci.yml)](https://github.com/hu3rror/opensteamtool-gui-rs/actions)
+  [![Release](https://img.shields.io/github/v/release/hu3rror/opensteamtool-gui-rs)](https://github.com/hu3rror/opensteamtool-gui-rs/releases)
+  [![License: MIT](https://img.shields.io/github/license/hu3rror/opensteamtool-gui-rs)](LICENSE)
+
+  [简体中文](README_zh-CN.md)
+
+</div>
+
+A single-binary Windows tool that manages the OpenSteamTool patch set (three target DLLs) in your Steam install: deploy, uninstall, and keep them up to date — with launch and shutdown flows around the patch. Built with Rust and egui/eframe (glow); no installer, no runtime dependencies.
 
 ## Features
 
-- **Deploy / uninstall patches**: copy (or remove) the three target DLLs — `OpenSteamTool.dll`, `dwmapi.dll`, `xinput1_4.dll` — in your Steam directory
-- **Slim main page**: deploy status plus the action button group (apply & launch / launch / exit & uninstall / uninstall & restart / restart Steam); a one-line health warning appears only when the compatibility probe reports "not yet supported upstream" or "core DLLs not found" (click to open Settings → Steam)
-- **First-run setup wizard**: three steps (language → Steam path → optional patch download); skippable at any step, re-runnable from Settings
-- **Two-tab settings dialog**: General (language, About with app update check, patch update check, re-run wizard) and Steam (path editor + compatibility probe)
-- **Patch update maintenance**: in Settings → General → Patch Update Check — check, then download & extract the new version when one is available; results are shown without patch version numbers
-- **App update check**: in Settings → General → About — check only; opens the download page when a new release exists (no self-update)
-- **Compatibility probe**: hashes Steam's core DLLs and checks upstream signatures (pattern / IPC channels); the health badge, auto/manual precache, and details live in Settings → Steam
-- **Auto-detect Steam path**: resolved from the registry, or pick the folder manually
-- **Steam-aware window**: hides to the system tray when Steam starts, restores on exit; hides automatically after launch operations
-- **Tray**: left-click toggles visibility; menu has Show, Restart Steam, "Minimize to tray automatically", Quit
-- **Bilingual UI**: Chinese or English, chosen by system locale, switchable at runtime
+- **One-click actions** — apply the patch and launch Steam in one action; plain launch, exit & uninstall, uninstall & restart, and restart Steam, with confirmation only where it matters
+- **Deploy status at a glance** — a status card shows deployed / not deployed / invalid path, plus a one-line health warning when the compatibility probe reports "not yet supported upstream" or "core DLLs not found" (click to open Settings → Steam)
+- **First-run setup wizard** — three steps (language → Steam path → optional patch download), skippable at any step and re-runnable from Settings
+- **Three-tab settings dialog** — General (language, theme), Steam (path editor + compatibility probe), and About (app update check, re-run wizard); every change saves instantly
+- **Patch update check on the main page** — check, then download & extract a new version when one is available; patch version numbers stay out of the UI
+- **Light / dark themes** — follow the system or pick manually (Settings → General)
+- **Compatibility probe** — hashes Steam's core DLLs and checks upstream signatures (pattern / IPC channels), with auto- and manual precache
+- **Steam-aware window** — auto-hides to the tray when Steam starts, restores on exit; "minimize to tray" preference is persisted
+- **Tray controls** — left-click toggles visibility; menu has Show, Restart Steam, "Minimize to tray automatically", and Quit
+- **Portable by design** — settings live in `config.toml`, patches in `dlls/`, both next to the executable; copy the folder and it just works
+- **Bilingual UI** — Chinese or English, picked from the system locale and switchable at runtime
+- **Compact default window** — opens at the minimum size and only grows when the content needs more room
 
-## Usage
+## Quick start
 
-1. Download the latest ZIP from [Releases](../../releases) and extract it anywhere
-2. Run `opensteamtool-manager.exe` (portable, no install)
-3. First run opens the setup wizard: pick your language and Steam path, then optionally download the patch DLLs (skip any time — you can do it later)
-4. Click "Apply Patch & Launch Steam". If the patch DLLs aren't downloaded yet, follow the hint to Settings → General → Patch Update Check, then download & extract
+1. Download the latest ZIP from [Releases](../../releases) and extract it anywhere.
+2. Run `opensteamtool-manager.exe` — no installation.
+3. The first run opens the setup wizard: pick a language and your Steam path, then optionally download the patch DLLs (skip any step, do it later).
+4. Click **Apply Patch & Launch Steam**. If the patch isn't downloaded yet, use the patch-update check button on the main page, then download & extract.
 
-Settings persist in `config.toml` next to the executable, so the whole folder moves with you. Patches live in a `dlls/` folder next to the executable. The app starts without any loading screen; all operations run on background threads so the UI never freezes.
+> [!TIP]
+> Everything is portable: `config.toml` (settings) and `dlls/` (patch files) sit next to the exe — move the whole folder to another machine and it just works.
 
 ## Build
 
@@ -36,7 +49,7 @@ cargo build --release
 # Output: target/release/opensteamtool-manager.exe (~6.8 MB)
 ```
 
-Package the portable ZIP (same script local and CI use; requires PowerShell 7+, `pwsh`):
+Package the portable ZIP (same script used locally and in CI; requires PowerShell 7+, `pwsh`):
 
 ```sh
 pwsh -File tools/build-release.ps1 -Version <version>
@@ -48,20 +61,14 @@ Tests:
 cargo test
 ```
 
-## Releases
+## Release
 
-Pushing a `v*` tag triggers GitHub Actions to build, test, package, and create a Release (see `.github/workflows/release.yml`; tags look like `v1.0.0`):
+Pushing a `v*` tag builds, tests, packages, and publishes a GitHub Release with the portable ZIP (see `.github/workflows/release.yml`):
 
 ```sh
 git tag v1.0.0
 git push origin v1.0.0
 ```
-
-You can also trigger it manually from the Actions tab.
-
-## Terminology
-
-Patch, Deploy, Uninstall, Action, Restart, Local Version / Online Version (internal-only), Setup Wizard, App Update Check, Patch Update Check, Auto-tray, Minimize-to-Tray — definitions in [GLOSSARY.md](GLOSSARY.md).
 
 ## Source layout
 
@@ -81,9 +88,11 @@ src/
 ├── compat.rs      # compatibility probe: hashing / mirror chain / precache
 ├── compat_flow.rs # compatibility probe orchestration state machine (ADR-0006)
 ├── fsutil.rs      # shared atomic file write
+├── theme.rs       # palette & visual assembly (ADR-0010/0016)
+├── main_page.rs   # main-page view-model derivation & icon painting
 ├── tray.rs        # system tray
 ├── i18n.rs        # bilingual strings and error→copy mapping (ADR-0009)
 └── ui.rs          # egui UI (main page, settings dialog, wizard rendering)
 ```
 
-Spec: archived as GitHub issues [#18](https://github.com/hu3rror/opensteamtool-gui-rs/issues/18)–[#23](https://github.com/hu3rror/opensteamtool-gui-rs/issues/23) (SPEC.md removed from repo).
+Design decisions are recorded in `docs/adr/` (ADR-0001–0016); domain terms are defined in [GLOSSARY.md](GLOSSARY.md); the locked UI spec and interactive prototype live in `docs/design/`.
