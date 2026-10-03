@@ -1,14 +1,28 @@
-# 便携版构建打包脚本：cargo build --release + 打 ZIP（exe + dlls/ 占位）。
+# 便携版构建打包脚本：版本同步 + cargo build --release + 打 ZIP（exe + dlls/ 占位）。
 # 本地与 CI（.github/workflows/release.yml）共用。
 #
 # 用法：pwsh -File tools/build-release.ps1 [-Version <字符串>]（需 pwsh 7+）
-#   默认 Version=0.0.0，产物 opensteamtool-manager-<Version>.zip 于仓库根目录。
+#   默认 Version=0.0.0（不碰 Cargo.toml），产物 opensteamtool-manager-<Version>.zip 于仓库根目录。
 
 param(
     [string]$Version = "0.0.0"
 )
 
 $ErrorActionPreference = "Stop"
+
+# 版本同步（#34 修订）：-Version 给定（≠ 默认占位）时把 Cargo.toml 的 version 字段
+# 改为该版本（去 v 前缀）。软件版本/应用更新检查读 CARGO_PKG_VERSION——此前发布
+# 从不同步导致所有发布包都显示陈旧的 0.2.4，且应用更新检查永远报「有新版本」。
+if ($Version -and $Version -ne "0.0.0") {
+    $v = $Version -replace "^v", ""
+    $path = Join-Path (Get-Location) "Cargo.toml"
+    $text = [System.IO.File]::ReadAllText($path)
+    $new = [regex]::Replace($text, '^version = "[^"]*"', "version = `"$v`"", "Multiline")
+    if ($new -ne $text) {
+        [System.IO.File]::WriteAllText($path, $new)  # 默认无 BOM UTF-8（pwsh 7 惯例）
+        Write-Host "==> Cargo.toml version -> $v"
+    }
+}
 
 Write-Host "==> cargo build --release"
 cargo build --release

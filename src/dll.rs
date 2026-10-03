@@ -6,21 +6,15 @@ use std::path::{Path, PathBuf};
 /// 三个目标 DLL，部署/卸载/提取都以此集合为准。
 pub const TARGET_DLLS: [&str; 3] = ["OpenSteamTool.dll", "dwmapi.dll", "xinput1_4.dll"];
 
-/// 本地版本记录文件名（位于 dlls/ 目录）。
 pub const VERSION_FILE: &str = "version.txt";
 
-/// 本地部署状态。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DeployStatus {
-    /// 路径为空或不是目录。
     InvalidPath,
-    /// 三个目标 DLL 全部存在于 Steam 目录。
     Deployed,
-    /// 未部署。
     NotDeployed,
 }
 
-/// dlls/ 目录：exe 同目录下的 `dlls` 文件夹（便携版）。
 pub fn dll_dir() -> PathBuf {
     std::env::current_exe()
         .ok()
@@ -29,7 +23,6 @@ pub fn dll_dir() -> PathBuf {
         .join("dlls")
 }
 
-/// 读取本地版本记录 `dlls/version.txt`，失败返回 None。
 pub fn read_local_version(dll_dir: &Path) -> Option<String> {
     fs::read_to_string(dll_dir.join(VERSION_FILE))
         .ok()
@@ -38,33 +31,38 @@ pub fn read_local_version(dll_dir: &Path) -> Option<String> {
 }
 
 /// 目标 DLL 在 `dir` 下是否齐全，即「补丁已下载」的文件本位判据（版本记录不作数，
-/// 见 ADR-0011）。部署前置校验（`workflow::plan` 的 `NoTargetDlls`）与 UI 置灰/本地
+/// 见 ADR-0011）。部署前置校验（`workflow::plan` 的 `MissingTargetDlls`）与 UI 置灰/本地
 /// 版本行/更新对比/通知文案共用同一谓词，一处演化各处跟随。
 pub fn target_dlls_present(dir: &Path) -> bool {
     TARGET_DLLS.iter().all(|d| dir.join(d).is_file())
 }
 
-/// `dlls/`（exe 旁）三个目标 DLL 是否齐全，等价于 [`target_dlls_present`] 以 `dlls/` 为参数。
 pub fn dlls_present() -> bool {
     target_dlls_present(&dll_dir())
 }
 
-/// 根据 Steam 路径判断本地部署状态。
+/// 有效 Steam 目录判据：trim 后非空且为目录。空 = 未设置（ADR-0012 的合法终态）；
+/// 空串是否放行由调用方按语境决定——向导步骤 2 拒绝空路径（必须有路径才能继续），
+/// 设置页允许空（编辑语义下可留空）、启动回退把无效配置视为未设置。
+/// 与 `wizard` 步骤 2 提交、`SteamPathEditor::submit`、启动恢复共用同一口径（ADR-0013）。
+pub fn is_valid_steam_dir(path: &str) -> bool {
+    let p = path.trim();
+    !p.is_empty() && Path::new(p).is_dir()
+}
+
+/// 根据 Steam 路径判断本地部署状态。路径判据共用 [`is_valid_steam_dir`]（ADR-0013）：
+/// 非有效目录 → `InvalidPath`（调用方先 trim）。
 pub fn check_status(steam_dir: &Path) -> DeployStatus {
-    if steam_dir.as_os_str().is_empty() || !steam_dir.is_dir() {
+    if !is_valid_steam_dir(&steam_dir.to_string_lossy()) {
         return DeployStatus::InvalidPath;
     }
-    if TARGET_DLLS
-        .iter()
-        .all(|dll| steam_dir.join(dll).is_file())
-    {
+    if TARGET_DLLS.iter().all(|dll| steam_dir.join(dll).is_file()) {
         DeployStatus::Deployed
     } else {
         DeployStatus::NotDeployed
     }
 }
 
-/// 部署：从 `dlls/` 复制三个 DLL 到 Steam 目录，并创建 `config/lua` 目录。
 pub fn deploy(dll_dir: &Path, steam_dir: &Path) -> Result<(), String> {
     fs::create_dir_all(steam_dir.join("config").join("lua"))
         .map_err(|e| format!("create config/lua: {e}"))?;
@@ -77,7 +75,6 @@ pub fn deploy(dll_dir: &Path, steam_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// 卸载：删除 Steam 目录下的三个目标 DLL（已不存在的跳过）。
 pub fn uninstall(steam_dir: &Path) -> Result<(), String> {
     for dll in TARGET_DLLS {
         let target = steam_dir.join(dll);
@@ -91,6 +88,18 @@ pub fn uninstall(steam_dir: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_valid_steam_dir_requires_nonempty_existing_dir() {
+        let dir = std::env::temp_dir().join(format!("ost_valid_dir_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(!is_valid_steam_dir(""));
+        assert!(!is_valid_steam_dir("   "));
+        assert!(!is_valid_steam_dir("Z:/nope_12345"));
+        assert!(is_valid_steam_dir(&dir.display().to_string()));
+        assert!(is_valid_steam_dir(&format!("  {}  ", dir.display())));
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn empty_path_is_invalid() {
@@ -124,27 +133,20 @@ mod tests {
         fs::remove_dir_all(&dir).ok();
     }
 
-    /// 文件本位判据（ADR-0011）：目录不存在 / 部分文件 → false；齐全 → true（不含要不要
-    /// version.txt）；版本记录不影响判据；删掉任一文件后哪怕记录仍在 → false。
     #[test]
     fn target_dlls_present_is_file_based() {
         let dir = std::env::temp_dir().join(format!("ost_dlls_present_{}", std::process::id()));
-        // 目录不存在 → false。
         assert!(!target_dlls_present(&dir));
         fs::create_dir_all(&dir).unwrap();
-        // 空目录 / 部分文件 → false。
         assert!(!target_dlls_present(&dir));
         fs::write(dir.join(TARGET_DLLS[0]), b"x").unwrap();
         assert!(!target_dlls_present(&dir));
-        // 三个齐全，无 version.txt → true。
         for dll in TARGET_DLLS {
             fs::write(dir.join(dll), b"x").unwrap();
         }
         assert!(target_dlls_present(&dir));
-        // 补齐版本记录不影响判据。
         fs::write(dir.join(VERSION_FILE), b"9.9.9").unwrap();
         assert!(target_dlls_present(&dir));
-        // 删掉一个文件（记录仍在）→ false。
         fs::remove_file(dir.join(TARGET_DLLS[0])).unwrap();
         assert!(!target_dlls_present(&dir));
         fs::remove_dir_all(&dir).ok();

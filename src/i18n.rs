@@ -2,32 +2,13 @@
 
 use crate::busy::BusyKind;
 use crate::compat::CompatError;
-use crate::config_editor::ConfigError;
-use crate::onlinefix::{VdfError, VdfStructureError};
-use crate::settings::{ConfigEditError, OfError};
+use crate::config::{Language, ThemePreference};
 use crate::updater::UpdateError;
 use crate::workflow::{Action, Op, Precheck, WorkflowError};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Lang {
     Zh,
     En,
-}
-
-impl Lang {
-    pub fn toggle(self) -> Self {
-        match self {
-            Lang::Zh => Lang::En,
-            Lang::En => Lang::Zh,
-        }
-    }
-
-    /// 手动切换按钮上的文案：中文界面显示 "EN"，英文界面显示 "中文"。
-    pub fn toggle_label(self) -> &'static str {
-        match self {
-            Lang::Zh => "EN",
-            Lang::En => "中文",
-        }
-    }
 }
 
 /// 检测系统语言：`GetUserDefaultUILanguage` 返回 0x0804/0x1004（简体中文）→ 中文，否则英文。
@@ -43,40 +24,42 @@ pub fn detect_system_lang() -> Lang {
     Lang::En
 }
 
-/// 全部界面文案，按语言取值。
 #[derive(Clone, Copy)]
 pub struct Strings {
     pub app_title: &'static str,
     pub window_title: &'static str,
-    pub card1_title: &'static str,
     pub steam_path_label: &'static str,
     pub browse: &'static str,
-    pub card2_title: &'static str,
-    pub status_invalid: &'static str,
+    /// 部署状态词条：Hero 大字（spec §15 严格「已应用/未应用」，无前缀符号）。
     pub status_deployed: &'static str,
     pub status_not_deployed: &'static str,
+    /// Hero 补丁操作失败文案（spec §30 Operation Failure）。
+    pub op_failed: &'static str,
+    /// Primary CTA「前往设置修复」（spec §25）。
+    pub pri_fix_path: &'static str,
+    /// Supporting 标题/正文（默认不显示，仅在需解释状态或 Primary 不可用时显示，spec §17）。
+    pub sup_files_title: &'static str,
+    pub sup_path_title: &'static str,
+    pub sup_path_body: &'static str,
+    /// Health Warning 右侧去向提示（点击整行跳 Settings → Steam，spec §24.2）。
+    pub health_go: &'static str,
     pub btn_apply_and_launch: &'static str,
     pub btn_launch_normal: &'static str,
     /// 「启动 Steam」（已应用且 Steam 未运行时；带补丁启动，不言「正常」，见 ADR-0011）。
     pub btn_launch: &'static str,
     pub btn_exit_and_uninstall: &'static str,
     pub btn_uninstall_and_restart: &'static str,
-    /// 「重启 Steam」（已应用且 Steam 运行中时显示；纯 Steam 操作，无补丁）。
     pub btn_restart_steam: &'static str,
-    /// 补丁未下载引导（操作区下方弱化提示；未部署且 dlls/ 缺文件时显示，见 ADR-0011）。
+    /// 补丁未下载引导：指向操作区上方的「检查补丁更新」按钮（先检查 → 再下载并解压），不自动联网检查。
     pub hint_download_patch: &'static str,
-    pub card3_title: &'static str,
-    pub local_version: &'static str,
-    pub local_ver_ready_no_record: &'static str,
-    pub local_ver_missing: &'static str,
-    pub online_version: &'static str,
-    pub online_check_fail: &'static str,
-    pub btn_check_update: &'static str,
+    pub main_warning_pending: &'static str,
+    pub main_warning_missing: &'static str,
     pub btn_download_and_extract: &'static str,
+    /// Update 按钮位检查中（spec §26.2 Checking，同按钮位 spinner，不进状态栏）。
+    pub up_checking: &'static str,
+    /// Update 检查失败行内结论（spec §26.7）。
+    pub up_check_failed: &'static str,
     pub checking: &'static str,
-    pub up_to_date: &'static str,
-    pub new_version: &'static str,
-    pub unknown: &'static str,
     pub confirm_title: &'static str,
     pub confirm_close_steam: &'static str,
     pub yes: &'static str,
@@ -91,9 +74,9 @@ pub struct Strings {
     pub err_network: &'static str,
     pub err_no_zip: &'static str,
     pub err_parse_version: &'static str,
-    /// 兼容性体检本地文件操作失败（CompatError::Io）。
     pub err_compat_io: &'static str,
     pub err_write_local: &'static str,
+    /// 「应用补丁并启动」成功反馈（词表定名「补丁已应用 / Patch applied」，#36）。
     pub ok_deployed: &'static str,
     pub ok_uninstalled: &'static str,
     pub ok_launched: &'static str,
@@ -106,48 +89,11 @@ pub struct Strings {
     pub busy_killing: &'static str,
     pub tray_show: &'static str,
     pub tray_quit: &'static str,
-    /// Steam 未运行时「卸载补丁」按钮（无需先退出 Steam）。
     pub btn_uninstall: &'static str,
-    /// 托盘菜单「最小化时自动隐藏到托盘」勾选项。
     pub tray_minimize: &'static str,
-    /// 托盘菜单「重启 Steam」入口。
     pub tray_restart: &'static str,
-    pub btn_settings: &'static str,
     pub settings_title: &'static str,
-    /// 设置对话框「配置编辑器」页签标签（OnlineFix 页签复用 of_title）。
-    pub settings_tab_config: &'static str,
-    /// 「目标文件：」前缀（设置对话框显示正在编辑的路径）。
-    pub settings_target: &'static str,
-    pub settings_no_steam_dir: &'static str,
-    pub settings_file_missing: &'static str,
-    pub btn_load_template: &'static str,
-    pub btn_undo: &'static str,
-    /// 「从示例模板创建」覆盖确认弹窗文案（仅存在未保存修改时出现）。
-    pub confirm_template_overwrite: &'static str,
-    pub btn_save: &'static str,
     pub btn_close: &'static str,
-    /// 校验错误前缀（行列定位由 config_error_text 拼接）。
-    pub err_config_parse: &'static str,
-    pub ok_config_saved: &'static str,
-    pub err_config_load: &'static str,
-    pub err_config_save: &'static str,
-    /// OnlineFix 启动预设（PR-2）。
-    pub of_title: &'static str,
-    pub of_steam_running: &'static str,
-    pub of_no_account: &'static str,
-    pub of_account_label: &'static str,
-    pub of_appid_label: &'static str,
-    pub of_status_enabled: &'static str,
-    pub of_status_disabled: &'static str,
-    pub of_btn_enable: &'static str,
-    pub of_btn_disable: &'static str,
-    pub of_btn_copy: &'static str,
-    pub of_copied: &'static str,
-    pub err_of_op: &'static str,
-    pub err_of_invalid_appid: &'static str,
-    pub of_err_root_chain: &'static str,
-    /// 上游限制提示：同一时间仅一个 onlinefix 游戏可运行。
-    pub of_single_limit: &'static str,
     /// Steam 核心兼容性（issue #23 §7.8）。
     pub compat_title: &'static str,
     pub compat_checking: &'static str,
@@ -169,10 +115,61 @@ pub struct Strings {
     pub compat_tip_missing: &'static str,
     pub compat_tip_network: &'static str,
     pub compat_row_dll: &'static str,
+    pub settings_tab_general: &'static str,
+    pub settings_tab_about: &'static str,
+    pub settings_tab_steam: &'static str,
+    pub settings_steam_title: &'static str,
+    /// Settings — Steam 手输路径失焦/回车校验失败的内联错误（#31；非法输入不落盘）。
+    pub settings_steam_path_invalid: &'static str,
+    pub settings_language_title: &'static str,
+    pub settings_tray_title: &'static str,
+    /// Settings — 通用 页签最小化隐身勾选项（#37；与托盘菜单勾选同一事实源）。
+    pub settings_tray_minimize: &'static str,
+    /// Settings — 通用 页签「主题」小节（ADR-0016）：标题 + 三态下拉选项。
+    pub settings_theme_title: &'static str,
+    pub settings_theme_system: &'static str,
+    pub settings_theme_dark: &'static str,
+    pub settings_theme_light: &'static str,
+    pub settings_version_label: &'static str,
+    pub settings_app_update_title: &'static str,
+    pub settings_btn_app_update_check: &'static str,
+    pub settings_app_update_checking: &'static str,
+    pub settings_app_update_up_to_date: &'static str,
+    pub settings_app_update_new_version: &'static str,
+    pub settings_btn_open_download_page: &'static str,
+    pub settings_btn_patch_update_check: &'static str,
+    /// 补丁检查结果文案（永不出现补丁版本号，见 #30）。
+    pub settings_patch_up_to_date: &'static str,
+    pub settings_patch_new_version: &'static str,
+    pub settings_wizard_title: &'static str,
+    pub settings_btn_rerun_wizard: &'static str,
+    pub settings_rerun_wizard_hint: &'static str,
+    pub status_steam_running: &'static str,
+    pub status_steam_stopped: &'static str,
+    /// 顶栏设置齿轮按钮的悬停提示（图标按钮，可发现性靠 tooltip）。
+    pub settings_gear_tooltip: &'static str,
+    pub settings_github_label: &'static str,
+    pub settings_github_title: &'static str,
+    pub wizard_title: &'static str,
+    pub wizard_step_of: &'static str,
+    pub wizard_language_prompt: &'static str,
+    pub wizard_language_auto: &'static str,
+    pub wizard_language_zh: &'static str,
+    pub wizard_language_en: &'static str,
+    pub wizard_path_prompt: &'static str,
+    pub wizard_path_invalid: &'static str,
+    pub wizard_btn_next: &'static str,
+    pub wizard_download_prompt: &'static str,
+    pub wizard_download_ready: &'static str,
+    pub wizard_download_running: &'static str,
+    pub wizard_download_failed: &'static str,
+    pub wizard_btn_download: &'static str,
+    pub wizard_btn_retry: &'static str,
+    pub wizard_btn_done: &'static str,
+    pub wizard_btn_skip: &'static str,
 }
 
 impl Strings {
-    /// 在线更新错误 → 当前语言提示文案。
     pub fn update_error(&self, e: &UpdateError) -> String {
         match e {
             UpdateError::Network(detail) => format!("{}: {detail}", self.err_network),
@@ -183,7 +180,6 @@ impl Strings {
         }
     }
 
-    /// 「操作」执行阶段错误 → 当前语言提示文案（按失败步骤取前缀）。
     pub fn workflow_error_text(&self, e: &WorkflowError) -> String {
         let prefix = match e.op {
             Op::CloseSteam => self.err_kill_steam,
@@ -194,56 +190,20 @@ impl Strings {
         format!("{}: {}", prefix, e.message)
     }
 
-    /// 前置校验错误 → 当前语言提示文案。
     pub fn precheck_text(&self, precheck: &Precheck) -> String {
         match precheck {
-            Precheck::NoSteamDir => self.err_no_steam_dir.to_string(),
-            Precheck::NoTargetDlls => self.err_no_dlls.to_string(),
-            Precheck::NoSteamExe => self.err_steam_exe_missing.to_string(),
+            Precheck::InvalidSteamDir => self.err_no_steam_dir.to_string(),
+            Precheck::MissingTargetDlls => self.err_no_dlls.to_string(),
+            Precheck::MissingSteamExe => self.err_steam_exe_missing.to_string(),
         }
     }
 
-    /// TOML 配置校验错误 → 当前语言提示文案（带行列定位）。
-    pub fn config_error_text(&self, lang: Lang, e: &ConfigError) -> String {
-        match lang {
-            Lang::Zh => format!("{}（第 {} 行，第 {} 列）：{}", self.err_config_parse, e.line, e.col, e.message),
-            Lang::En => format!("{} (line {}, column {}): {}", self.err_config_parse, e.line, e.col, e.message),
-        }
-    }
-
-    /// OnlineFix 写入/读取错误 → 当前语言提示文案。
-    pub fn onlinefix_error(&self, e: &VdfError) -> String {
-        match e {
-            VdfError::Io(detail) => format!("{}: {detail}", self.err_of_op),
-            VdfError::Structure(code) => match code {
-                VdfStructureError::MissingRootChain => self.of_err_root_chain.to_string(),
-            },
-        }
-    }
-    /// 配置编辑器类型化错误 → 本地化文案（Load/Save 取前缀，Validation 穿透 lang）。
-    pub fn config_edit_error_text(&self, lang: Lang, e: &ConfigEditError) -> String {
-        match e {
-            ConfigEditError::Load(m) => format!("{}: {m}", self.err_config_load),
-            ConfigEditError::Validation(e) => self.config_error_text(lang, e),
-            ConfigEditError::Save(m) => format!("{}: {m}", self.err_config_save),
-        }
-    }
-    /// OnlineFix 类型化错误 → 当前语言提示文案。
-    pub fn of_error_text(&self, e: &OfError) -> String {
-        match e {
-            OfError::WriteBlocked => self.of_steam_running.to_string(),
-            OfError::InvalidAppid => self.err_of_invalid_appid.to_string(),
-            OfError::Vdf(e) => self.onlinefix_error(e),
-        }
-    }
-    /// 兼容性体检错误 → 当前语言提示文案（与 UpdateError 同等待遇；Display 只留给日志）。
     pub fn compat_error_text(&self, e: &CompatError) -> String {
         match e {
             CompatError::Network(detail) => format!("{}: {detail}", self.err_network),
             CompatError::Io(detail) => format!("{}: {detail}", self.err_compat_io),
         }
     }
-    /// 「操作」成功后 → 当前语言提示文案。
     pub fn success_text(&self, action: Action) -> &'static str {
         match action {
             Action::ApplyAndLaunch => self.ok_deployed,
@@ -253,7 +213,6 @@ impl Strings {
         }
     }
 
-    /// 忙碌态阶段 → 当前语言提示文案。
     pub fn busy_label(&self, kind: BusyKind) -> &'static str {
         match kind {
             BusyKind::Deploying => self.busy_deploying,
@@ -263,6 +222,24 @@ impl Strings {
             BusyKind::Downloading => self.busy_downloading,
             BusyKind::ClosingSteam => self.busy_killing,
         }
+    }
+
+    /// 语言选项表：设置通用页签与向导步骤 1 共用的唯一下拉数据源——新增语言只在此追加一行（#34）。
+    pub fn language_options(&self) -> [(Language, &'static str); 3] {
+        [
+            (Language::Auto, self.wizard_language_auto),
+            (Language::Zh, self.wizard_language_zh),
+            (Language::En, self.wizard_language_en),
+        ]
+    }
+
+    /// 主题选项表：设置通用页签「主题」小节的下拉数据源（ADR-0016）。
+    pub fn theme_options(&self) -> [(ThemePreference, &'static str); 3] {
+        [
+            (ThemePreference::System, self.settings_theme_system),
+            (ThemePreference::Dark, self.settings_theme_dark),
+            (ThemePreference::Light, self.settings_theme_light),
+        ]
     }
 
     pub fn new(lang: Lang) -> Self {
@@ -276,32 +253,30 @@ impl Strings {
         Self {
             app_title: "OpenSteamTool Manager",
             window_title: "OpenSteamTool 一键管理工具",
-            card1_title: "STEAM 安装路径",
             steam_path_label: "路径",
             browse: "浏览...",
-            card2_title: "本地应用状态",
-            status_invalid: "【未应用】请先指定有效的 Steam 安装路径",
-            status_deployed: "【已应用】OpenSteamTool 补丁已成功生效",
-            status_not_deployed: "【未应用】检测到补丁文件未完整部署",
-            btn_apply_and_launch: "▶ 应用补丁并启动 Steam",
-            btn_launch_normal: "▶ 正常启动 Steam",
-            btn_launch: "▶ 启动 Steam",
-            btn_exit_and_uninstall: "◀ 退出 Steam 并卸载补丁",
-            btn_uninstall_and_restart: "◀ 卸载补丁并重启 Steam",
-            btn_restart_steam: "↻ 重启 Steam",
-            hint_download_patch: "补丁未下载：请先点击「检查更新」，再「下载并解压新版本」",
-            card3_title: "在线版本更新",
-            local_version: "当前本地版本：",
-            local_ver_ready_no_record: "已本地就绪 (未记录版本)",
-            local_ver_missing: "未下载 (dlls 文件夹缺失文件)",
-            online_version: "最新线上版本：",
-            online_check_fail: "检查失败",
-            btn_check_update: "检查更新",
+            // 部署状态词条（spec §15）：Hero 大字。
+            status_deployed: "已应用",
+            status_not_deployed: "未应用",
+            op_failed: "补丁应用失败",
+            pri_fix_path: "前往设置修复",
+            sup_files_title: "补丁未下载",
+            sup_path_title: "Steam 路径无效",
+            sup_path_body: "请在设置中指定有效的 Steam 安装路径",
+            health_go: "设置 →",
+            btn_apply_and_launch: "应用补丁并启动 Steam",
+            btn_launch_normal: "正常启动 Steam",
+            btn_launch: "启动 Steam",
+            btn_exit_and_uninstall: "退出 Steam 并卸载补丁",
+            btn_uninstall_and_restart: "卸载补丁并重启 Steam",
+            btn_restart_steam: "重启 Steam",
+            hint_download_patch: "请点击「检查补丁更新」下载新版本",
+            main_warning_pending: "当前 Steam 尚未适配",
+            main_warning_missing: "未找到 Steam 核心文件",
             btn_download_and_extract: "下载并解压新版本",
-            checking: "正在检查更新...",
-            up_to_date: "(本地已是最新版)",
-            new_version: "(发现可更新版本)",
-            unknown: "未知",
+            up_checking: "检查中…",
+            up_check_failed: "检查失败",
+            checking: "正在检查补丁…",
             confirm_title: "确认",
             confirm_close_steam: "Steam 正在运行。是否自动关闭 Steam 并继续？",
             yes: "是",
@@ -318,51 +293,53 @@ impl Strings {
             err_parse_version: "解析线上版本失败",
             err_compat_io: "本地文件操作失败",
             err_write_local: "写入本地文件失败",
-            ok_deployed: "已部署补丁",
+            ok_deployed: "补丁已应用",
             ok_uninstalled: "已卸载补丁",
             ok_launched: "Steam 已启动",
             ok_restarted: "Steam 已重启",
             ok_downloaded: "新版本下载并解压完成",
-            busy_deploying: "正在部署...",
-            busy_uninstalling: "正在卸载...",
-            busy_launching: "正在启动...",
-            busy_downloading: "正在下载...",
-            busy_killing: "正在关闭 Steam...",
+            busy_deploying: "正在应用补丁…",
+            busy_uninstalling: "正在卸载补丁…",
+            busy_launching: "正在启动 Steam…",
+            busy_downloading: "正在下载补丁…",
+            busy_killing: "正在关闭 Steam…",
             tray_show: "显示",
             tray_quit: "退出",
             btn_uninstall: "卸载补丁",
             tray_minimize: "最小化时自动隐藏到托盘",
             tray_restart: "重启 Steam",
-            btn_settings: "设置",
             settings_title: "设置",
-            settings_tab_config: "配置编辑器",
-            settings_target: "目标文件：",
-            settings_no_steam_dir: "请先指定有效的 Steam 安装路径，再编辑配置",
-            settings_file_missing: "文件不存在，保存后创建；也可从示例模板开始",
-            btn_load_template: "从示例模板创建",
-            btn_undo: "撤销",
-            confirm_template_overwrite: "从示例模板创建将覆盖当前编辑内容，是否继续？",
-            btn_save: "保存",
             btn_close: "关闭",
-            err_config_parse: "配置格式错误",
-            ok_config_saved: "已保存",
-            err_config_load: "读取配置失败",
-            err_config_save: "保存失败",
-            of_title: "OnlineFix 启动预设",
-            of_steam_running: "Steam 正在运行：请先关闭 Steam 再修改启动参数",
-            of_no_account: "未找到账号配置（userdata/*/config/localconfig.vdf）",
-            of_account_label: "账号：",
-            of_appid_label: "游戏 AppID：",
-            of_status_enabled: "该游戏已启用 -onlinefix",
-            of_status_disabled: "该游戏未启用 -onlinefix",
-            of_btn_enable: "启用 OnlineFix",
-            of_btn_disable: "停用 OnlineFix",
-            of_btn_copy: "复制参数",
-            of_copied: "已复制 -onlinefix",
-            err_of_op: "OnlineFix 操作失败",
-            err_of_invalid_appid: "AppID 无效，请输入数字",
-            of_err_root_chain: "localconfig.vdf 结构异常（缺少 UserLocalConfigStore 根块）",
-            of_single_limit: "注意：同一时间仅一个 onlinefix 游戏可运行",
+            settings_tab_general: "通用",
+            settings_tab_about: "关于",
+            settings_tab_steam: "Steam",
+            settings_steam_title: "Steam 路径",
+            settings_steam_path_invalid: "路径无效：请输入有效的 Steam 安装目录",
+            settings_language_title: "语言",
+            settings_tray_title: "系统托盘",
+            settings_tray_minimize: "最小化时隐藏到系统托盘",
+            settings_theme_title: "主题",
+            settings_theme_system: "跟随系统",
+            settings_theme_dark: "深色",
+            settings_theme_light: "浅色",
+            settings_version_label: "软件版本",
+            settings_app_update_title: "应用更新",
+            settings_btn_app_update_check: "检查应用更新",
+            settings_app_update_checking: "正在检查应用更新...",
+            settings_app_update_up_to_date: "已是最新版本",
+            settings_app_update_new_version: "发现新版本 ",
+            settings_btn_open_download_page: "打开下载页",
+            settings_btn_patch_update_check: "检查补丁更新",
+            settings_patch_up_to_date: "补丁已是最新",
+            settings_patch_new_version: "发现新补丁",
+            settings_wizard_title: "设置向导",
+            settings_btn_rerun_wizard: "重新运行向导",
+            settings_rerun_wizard_hint: "以当前语言与 Steam 路径为初值重新运行设置向导。",
+            status_steam_running: "Steam 正在运行",
+            status_steam_stopped: "Steam 未运行",
+            settings_gear_tooltip: "设置",
+            settings_github_label: "opensteamtool-gui-rs",
+            settings_github_title: "项目主页",
             compat_title: "Steam 核心兼容性",
             compat_checking: "正在检查兼容性...",
             compat_status_ready: "完美兼容 (已缓存)",
@@ -383,6 +360,23 @@ impl Strings {
             compat_tip_missing: "未找到核心 DLL（steamclient64.dll / steamui.dll）。",
             compat_tip_network: "网络不可用，体检结果未知；已缓存项仍可离线使用。",
             compat_row_dll: "{dll}（{kind}）",
+            wizard_title: "首次运行向导",
+            wizard_step_of: "第 {n} / 3 步",
+            wizard_language_prompt: "请选择界面语言：",
+            wizard_language_auto: "跟随系统",
+            wizard_language_zh: "简体中文",
+            wizard_language_en: "English",
+            wizard_path_prompt: "请确认 Steam 安装路径：",
+            wizard_path_invalid: "路径无效：请选择有效的 Steam 安装目录",
+            wizard_btn_next: "下一步",
+            wizard_download_prompt: "补丁尚未下载。点击下方按钮开始下载并解压（可选跳过）。",
+            wizard_download_ready: "补丁已下载，无需再下载。",
+            wizard_download_running: "正在下载并解压补丁...",
+            wizard_download_failed: "补丁下载失败：{err}",
+            wizard_btn_download: "下载并解压",
+            wizard_btn_retry: "重试",
+            wizard_btn_done: "完成",
+            wizard_btn_skip: "跳过",
         }
     }
 
@@ -390,32 +384,30 @@ impl Strings {
         Self {
             app_title: "OpenSteamTool Manager",
             window_title: "OpenSteamTool Manager",
-            card1_title: "STEAM INSTALLATION PATH",
             steam_path_label: "Path",
             browse: "Browse...",
-            card2_title: "LOCAL PATCH STATUS",
-            status_invalid: "[Not Applied] Please specify a valid Steam path",
-            status_deployed: "[Applied] OpenSteamTool patch is now active",
-            status_not_deployed: "[Not Applied] Patch files incomplete or missing",
-            btn_apply_and_launch: "▶ Apply Patch & Launch Steam",
-            btn_launch_normal: "▶ Launch Steam Normally",
-            btn_launch: "▶ Launch Steam",
-            btn_exit_and_uninstall: "◀ Exit Steam & Uninstall Patch",
-            btn_uninstall_and_restart: "◀ Uninstall Patch & Restart Steam",
-            btn_restart_steam: "↻ Restart Steam",
-            hint_download_patch: "Patch not downloaded: click \"Check Update\", then \"Download & Extract New Version\"",
-            card3_title: "ONLINE VERSION & UPDATE",
-            local_version: "Current Local Version: ",
-            local_ver_ready_no_record: "Ready locally (No version log)",
-            local_ver_missing: "Not downloaded (Missing files in 'dlls')",
-            online_version: "Latest Online Version: ",
-            online_check_fail: "Check failed",
-            btn_check_update: "Check Update",
+            // 部署状态词条（spec §15）：Hero 大字。
+            status_deployed: "Applied",
+            status_not_deployed: "Not Applied",
+            op_failed: "Failed to apply patch",
+            pri_fix_path: "Open Settings to Fix",
+            sup_files_title: "Patch not downloaded",
+            sup_path_title: "Steam path is invalid",
+            sup_path_body: "Set a valid Steam path in Settings",
+            health_go: "Settings →",
+            btn_apply_and_launch: "Apply Patch & Launch Steam",
+            btn_launch_normal: "Launch Steam Normally",
+            btn_launch: "Launch Steam",
+            btn_exit_and_uninstall: "Exit Steam & Uninstall Patch",
+            btn_uninstall_and_restart: "Uninstall Patch & Restart Steam",
+            btn_restart_steam: "Restart Steam",
+            hint_download_patch: "Click \"Check for Patch Update\" to download the new version",
+            main_warning_pending: "Steam is not yet supported",
+            main_warning_missing: "Steam core files not found",
             btn_download_and_extract: "Download & Extract New Version",
-            checking: "Checking for updates...",
-            up_to_date: "(Up to date)",
-            new_version: "(Update available)",
-            unknown: "Unknown",
+            up_checking: "Checking…",
+            up_check_failed: "Check failed",
+            checking: "Checking for patch updates…",
             confirm_title: "Confirm",
             confirm_close_steam: "Steam is running. Close Steam automatically and continue?",
             yes: "Yes",
@@ -432,51 +424,53 @@ impl Strings {
             err_parse_version: "Failed to parse online version",
             err_compat_io: "Local file operation failed",
             err_write_local: "Failed to write local files",
-            ok_deployed: "Patch deployed",
+            ok_deployed: "Patch applied",
             ok_uninstalled: "Patch removed",
             ok_launched: "Steam launched",
             ok_restarted: "Steam restarted",
             ok_downloaded: "New version downloaded & extracted",
-            busy_deploying: "Deploying...",
-            busy_uninstalling: "Uninstalling...",
-            busy_launching: "Launching...",
-            busy_downloading: "Downloading...",
-            busy_killing: "Closing Steam...",
+            busy_deploying: "Applying patch…",
+            busy_uninstalling: "Uninstalling patch…",
+            busy_launching: "Launching Steam…",
+            busy_downloading: "Downloading patch…",
+            busy_killing: "Closing Steam…",
             tray_show: "Show",
             tray_quit: "Quit",
-            btn_uninstall: "Remove Patch",
+            btn_uninstall: "Uninstall Patch",
             tray_minimize: "Minimize to tray automatically",
             tray_restart: "Restart Steam",
-            btn_settings: "Settings",
             settings_title: "Settings",
-            settings_tab_config: "Config Editor",
-            settings_target: "Target file: ",
-            settings_no_steam_dir: "Set a valid Steam install path to edit the config",
-            settings_file_missing: "File does not exist — save to create it, or start from the example template",
-            btn_load_template: "Load Example Template",
-            btn_undo: "Undo",
-            confirm_template_overwrite: "Loading the example template will overwrite your current edits. Continue?",
-            btn_save: "Save",
             btn_close: "Close",
-            err_config_parse: "Invalid config",
-            ok_config_saved: "Saved",
-            err_config_load: "Failed to read config",
-            err_config_save: "Save failed",
-            of_title: "OnlineFix Launch Preset",
-            of_steam_running: "Steam is running — close Steam before changing launch options",
-            of_no_account: "No account config found (userdata/*/config/localconfig.vdf)",
-            of_account_label: "Account: ",
-            of_appid_label: "Game App ID: ",
-            of_status_enabled: "-onlinefix enabled for this game",
-            of_status_disabled: "-onlinefix not enabled",
-            of_btn_enable: "Enable OnlineFix",
-            of_btn_disable: "Disable OnlineFix",
-            of_btn_copy: "Copy Argument",
-            of_copied: "Copied -onlinefix",
-            err_of_op: "OnlineFix operation failed",
-            err_of_invalid_appid: "Invalid App ID — enter a number",
-            of_err_root_chain: "localconfig.vdf is malformed (missing UserLocalConfigStore root)",
-            of_single_limit: "Note: only one onlinefix game can run at a time",
+            settings_tab_general: "General",
+            settings_tab_about: "About",
+            settings_tab_steam: "Steam",
+            settings_steam_title: "Steam Path",
+            settings_steam_path_invalid: "Invalid path: enter a valid Steam install folder",
+            settings_language_title: "Language",
+            settings_tray_title: "System Tray",
+            settings_tray_minimize: "Hide to tray when minimized",
+            settings_theme_title: "Theme",
+            settings_theme_system: "Follow system",
+            settings_theme_dark: "Dark",
+            settings_theme_light: "Light",
+            settings_version_label: "Version",
+            settings_app_update_title: "App Update",
+            settings_btn_app_update_check: "Check App Update",
+            settings_app_update_checking: "Checking for app update...",
+            settings_app_update_up_to_date: "Up to date",
+            settings_app_update_new_version: "New version available: ",
+            settings_btn_open_download_page: "Open Download Page",
+            settings_btn_patch_update_check: "Check Patch Update",
+            settings_patch_up_to_date: "Patch up to date",
+            settings_patch_new_version: "New patch available",
+            settings_wizard_title: "Setup Wizard",
+            settings_btn_rerun_wizard: "Re-run Wizard",
+            settings_rerun_wizard_hint: "Re-runs setup with your current language and Steam path as starting values.",
+            status_steam_running: "Steam is running",
+            status_steam_stopped: "Steam is not running",
+            settings_gear_tooltip: "Settings",
+            settings_github_label: "opensteamtool-gui-rs",
+            settings_github_title: "Project Home",
             compat_title: "Steam Core Compatibility",
             compat_checking: "Checking compatibility...",
             compat_status_ready: "Fully Compatible",
@@ -497,6 +491,23 @@ impl Strings {
             compat_tip_missing: "Core DLLs not found (steamclient64.dll / steamui.dll).",
             compat_tip_network: "Network unavailable — results unknown; cached items remain usable offline.",
             compat_row_dll: "{dll} ({kind})",
+            wizard_title: "First-run Setup",
+            wizard_step_of: "Step {n} of 3",
+            wizard_language_prompt: "Choose your interface language:",
+            wizard_language_auto: "Auto (follow system)",
+            wizard_language_zh: "简体中文",
+            wizard_language_en: "English",
+            wizard_path_prompt: "Confirm your Steam installation path:",
+            wizard_path_invalid: "Invalid path: choose a valid Steam install folder",
+            wizard_btn_next: "Next",
+            wizard_download_prompt: "The patch is not downloaded yet. Click below to download & extract it (or skip).",
+            wizard_download_ready: "The patch is already downloaded.",
+            wizard_download_running: "Downloading & extracting patch...",
+            wizard_download_failed: "Patch download failed: {err}",
+            wizard_btn_download: "Download & Extract",
+            wizard_btn_retry: "Retry",
+            wizard_btn_done: "Done",
+            wizard_btn_skip: "Skip",
         }
     }
 }
@@ -505,7 +516,34 @@ impl Strings {
 mod tests {
     use super::*;
 
-    /// CompatError → 双语文案：Network 复用 err_network、Io 用 err_compat_io（与 UpdateError 同等待遇）。
+    #[test]
+    fn language_options_cover_all_variants() {
+        for lang in [Lang::Zh, Lang::En] {
+            let s = Strings::new(lang);
+            let opts = s.language_options();
+            for v in [Language::Auto, Language::Zh, Language::En] {
+                assert_eq!(
+                    opts.iter().filter(|(l, _)| *l == v).count(),
+                    1,
+                    "{lang:?} 选项表应恰好含 {v:?} 一次"
+                );
+            }
+            assert!(!opts[0].1.is_empty(), "{lang:?} 跟随系统标签不应为空");
+            assert_eq!(opts[1].1, "简体中文", "{lang:?} 中文标签应定名简体中文");
+            assert_eq!(opts[2].1, "English");
+        }
+    }
+
+    #[test]
+    fn patch_hint_points_to_main_button() {
+        let zh = Strings::new(Lang::Zh);
+        let en = Strings::new(Lang::En);
+        assert!(zh.hint_download_patch.contains("检查补丁更新"));
+        assert!(!zh.hint_download_patch.contains("通用"));
+        assert!(en.hint_download_patch.contains("Check for Patch Update"));
+        assert!(!en.hint_download_patch.contains("General"));
+    }
+
     #[test]
     fn compat_error_text_both_langs() {
         for lang in [Lang::Zh, Lang::En] {
@@ -517,78 +555,6 @@ mod tests {
             assert_eq!(
                 s.compat_error_text(&CompatError::Io("y".into())),
                 format!("{}: y", s.err_compat_io)
-            );
-        }
-    }
-
-    /// OfError → 双语文案：三变体各归其位（Vdf 转发 onlinefix_error）。
-    #[test]
-    fn of_error_text_maps_all_variants() {
-        for lang in [Lang::Zh, Lang::En] {
-            let s = Strings::new(lang);
-            assert_eq!(s.of_error_text(&OfError::WriteBlocked), s.of_steam_running);
-            assert_eq!(
-                s.of_error_text(&OfError::InvalidAppid),
-                s.err_of_invalid_appid
-            );
-            let vdf_err = VdfError::Io(std::io::Error::new(std::io::ErrorKind::Other, "t"));
-            assert_eq!(
-                s.of_error_text(&OfError::Vdf(vdf_err)),
-                s.onlinefix_error(&VdfError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "t"
-                )))
-            );
-        }
-    }
-
-    /// ConfigEditError → 双语文案：Load/Validation/Save 三变体；Validation 穿透 lang（行列措辞因语言而异）。
-    #[test]
-    fn config_edit_error_text_maps_variants() {
-        for lang in [Lang::Zh, Lang::En] {
-            let s = Strings::new(lang);
-            assert_eq!(
-                s.config_edit_error_text(lang, &ConfigEditError::Load("m".into())),
-                format!("{}: m", s.err_config_load)
-            );
-            let ce = ConfigError {
-                line: 3,
-                col: 5,
-                message: "e".into(),
-            };
-            assert_eq!(
-                s.config_edit_error_text(lang, &ConfigEditError::Validation(ce.clone())),
-                s.config_error_text(lang, &ce)
-            );
-            assert_eq!(
-                s.config_edit_error_text(lang, &ConfigEditError::Save("m".into())),
-                format!("{}: m", s.err_config_save)
-            );
-        }
-        // 跨语言穿透：zh 实例 + En lang → Validation 按英文格式（措辞随 lang 参数而非实例）。
-        let zh = Strings::new(Lang::Zh);
-        let ce = ConfigError {
-            line: 3,
-            col: 5,
-            message: "e".into(),
-        };
-        let cross = zh.config_edit_error_text(Lang::En, &ConfigEditError::Validation(ce));
-        assert!(
-            cross.contains("line 3"),
-            "跨语言穿透应取 En 行列措辞: {cross}"
-        );
-    }
-
-    /// VdfError::Structure 错误码 → 双语文案（穷尽枚举映射：MissingRootChain → of_err_root_chain）。
-    #[test]
-    fn of_error_text_maps_structure_code() {
-        for lang in [Lang::Zh, Lang::En] {
-            let s = Strings::new(lang);
-            assert_eq!(
-                s.of_error_text(&OfError::Vdf(VdfError::Structure(
-                    VdfStructureError::MissingRootChain
-                ))),
-                s.of_err_root_chain
             );
         }
     }
@@ -638,10 +604,13 @@ mod tests {
         let zh = Strings::new(Lang::Zh);
         let en = Strings::new(Lang::En);
         for s in [&zh, &en] {
-            assert_eq!(s.precheck_text(&Precheck::NoSteamDir), s.err_no_steam_dir);
-            assert_eq!(s.precheck_text(&Precheck::NoTargetDlls), s.err_no_dlls);
             assert_eq!(
-                s.precheck_text(&Precheck::NoSteamExe),
+                s.precheck_text(&Precheck::InvalidSteamDir),
+                s.err_no_steam_dir
+            );
+            assert_eq!(s.precheck_text(&Precheck::MissingTargetDlls), s.err_no_dlls);
+            assert_eq!(
+                s.precheck_text(&Precheck::MissingSteamExe),
                 s.err_steam_exe_missing
             );
         }
@@ -675,5 +644,53 @@ mod tests {
             assert_eq!(s.busy_label(BusyKind::Downloading), s.busy_downloading);
             assert_eq!(s.busy_label(BusyKind::ClosingSteam), s.busy_killing);
         }
+    }
+
+    #[test]
+    fn ui_copy_follows_v36_terminology() {
+        let zh = Strings::new(Lang::Zh);
+        let en = Strings::new(Lang::En);
+        for (lang, s) in [(Lang::Zh, &zh), (Lang::En, &en)] {
+            // 图标化后按钮文案不得再带 Unicode 符号（spec §36 由程序化图标代替 ▶↻⏏⚙⚠）。
+            for t in [
+                s.btn_exit_and_uninstall,
+                s.btn_uninstall_and_restart,
+                s.btn_apply_and_launch,
+                s.btn_launch,
+                s.btn_launch_normal,
+                s.btn_restart_steam,
+                s.main_warning_pending,
+                s.main_warning_missing,
+            ] {
+                assert!(
+                    !t.chars().any(|c| ['▶', '⏏', '↻', '⚙', '⚠'].contains(&c)),
+                    "{lang:?} 文案 {t} 残留 Unicode 符号"
+                );
+            }
+            let statusish = [
+                s.status_deployed,
+                s.status_not_deployed,
+                s.ok_deployed,
+                s.ok_uninstalled,
+                s.busy_deploying,
+                s.busy_uninstalling,
+                s.err_deploy,
+                s.err_uninstall,
+            ];
+            for t in statusish {
+                assert!(!t.contains('◀'), "{lang:?} 文案 {t} 残留 ◀");
+                assert!(!t.contains("已部署"), "{lang:?} 文案 {t} 残留 已部署");
+                assert!(
+                    !t.to_lowercase().contains("deployed"),
+                    "{lang:?} 文案 {t} 残留 deployed"
+                );
+            }
+        }
+        assert_eq!(zh.status_deployed, "已应用");
+        assert_eq!(en.status_deployed, "Applied");
+        assert_eq!(zh.status_not_deployed, "未应用");
+        assert_eq!(en.status_not_deployed, "Not Applied");
+        assert_eq!(zh.ok_deployed, "补丁已应用");
+        assert_eq!(en.ok_deployed, "Patch applied");
     }
 }

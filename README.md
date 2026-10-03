@@ -7,22 +7,25 @@ A native Windows tool that deploys, removes, and updates OpenSteamTool patches f
 ## Features
 
 - **Deploy / uninstall patches**: copy (or remove) the three target DLLs — `OpenSteamTool.dll`, `dwmapi.dll`, `xinput1_4.dll` — in your Steam directory
-- **Online update**: check GitHub Releases for the latest version, download and extract into the local `dlls/` folder
+- **Slim main page**: deploy status plus the action button group (apply & launch / launch / exit & uninstall / uninstall & restart / restart Steam); a one-line health warning appears only when the compatibility probe reports "not yet supported upstream" or "core DLLs not found" (click to open Settings → Steam)
+- **First-run setup wizard**: three steps (language → Steam path → optional patch download); skippable at any step, re-runnable from Settings
+- **Two-tab settings dialog**: General (language, About with app update check, patch update check, re-run wizard) and Steam (path editor + compatibility probe)
+- **Patch update maintenance**: in Settings → General → Patch Update Check — check, then download & extract the new version when one is available; results are shown without patch version numbers
+- **App update check**: in Settings → General → About — check only; opens the download page when a new release exists (no self-update)
+- **Compatibility probe**: hashes Steam's core DLLs and checks upstream signatures (pattern / IPC channels); the health badge, auto/manual precache, and details live in Settings → Steam
 - **Auto-detect Steam path**: resolved from the registry, or pick the folder manually
 - **Steam-aware window**: hides to the system tray when Steam starts, restores on exit; hides automatically after launch operations
-- **Tray**: left-click toggles visibility; menu has Show, "Minimize to tray automatically", Quit
+- **Tray**: left-click toggles visibility; menu has Show, Restart Steam, "Minimize to tray automatically", Quit
 - **Bilingual UI**: Chinese or English, chosen by system locale, switchable at runtime
-- **Settings dialog**: edit the upstream `opensteamtool.toml` (Steam dir) with a validated TOML editor; starts from the bundled example template when the file is missing
-- **OnlineFix launch preset**: toggle the `-onlinefix` launch option for a game in `localconfig.vdf` from the settings dialog (auto-backup before writing, Steam must be closed); one-click copy of the argument
 
 ## Usage
 
 1. Download the latest ZIP from [Releases](../../releases) and extract it anywhere
 2. Run `opensteamtool-manager.exe` (portable, no install)
-3. On first use, populate `dlls/`: click "Check for Updates" then "Download & Extract New Version" to fetch the DLLs, or drop them in manually
-4. Pick your Steam path, then "Apply Patch & Launch Steam"
+3. First run opens the setup wizard: pick your language and Steam path, then optionally download the patch DLLs (skip any time — you can do it later)
+4. Click "Apply Patch & Launch Steam". If the patch DLLs aren't downloaded yet, follow the hint to Settings → General → Patch Update Check, then download & extract
 
-Patches live in a `dlls/` folder next to the executable. The app starts without any loading screen; all operations run on background threads so the UI never freezes.
+Settings persist in `config.toml` next to the executable, so the whole folder moves with you. Patches live in a `dlls/` folder next to the executable. The app starts without any loading screen; all operations run on background threads so the UI never freezes.
 
 ## Build
 
@@ -58,30 +61,29 @@ You can also trigger it manually from the Actions tab.
 
 ## Terminology
 
-Deploy, Uninstall, Local Version, Online Version, Action, Auto-tray, Minimize-to-Tray — definitions in [CONTEXT.md](CONTEXT.md).
+Patch, Deploy, Uninstall, Action, Restart, Local Version / Online Version (internal-only), Setup Wizard, App Update Check, Patch Update Check, Auto-tray, Minimize-to-Tray — definitions in [GLOSSARY.md](GLOSSARY.md).
 
 ## Source layout
 
 ```text
 src/
-├── main.rs       # eframe entry point
-├── steam.rs      # registry path detection, steam.exe launch
+├── main.rs        # eframe entry point
+├── config.rs      # portable app config (config.toml next to exe, ADR-0012)
+├── wizard.rs      # first-run setup wizard state machine (ADR-0013)
+├── steam.rs       # registry path detection, steam.exe launch
 ├── steam_state.rs # shared Steam process table (alive / group_running / kill)
-├── process.rs    # Steam process monitor (2s polling cache, edge events)
-├── dll.rs        # target DLL deploy/uninstall, local status
-├── workflow.rs   # action planning and step execution (plan/execute)
-├── busy.rs       # busy gate: exclusive interactive background ops (ADR-0007)
-├── updater.rs    # GitHub update check, download & extract
+├── process.rs     # Steam process monitor (2s polling cache, edge events)
+├── dll.rs         # target DLL deploy/uninstall, local status
+├── workflow.rs    # action planning and step execution (plan/execute)
+├── busy.rs        # busy gate: exclusive interactive background ops (ADR-0007)
+├── updater.rs     # patch & app update checks, download & extract
 ├── update_flow.rs # single source of truth for update-check results (ADR-0008)
-├── compat.rs     # compatibility probe: hashing / mirror chain / precache
+├── compat.rs      # compatibility probe: hashing / mirror chain / precache
 ├── compat_flow.rs # compatibility probe orchestration state machine (ADR-0006)
-├── config_editor.rs # opensteamtool.toml read/validate/atomic-write (settings dialog)
-├── onlinefix.rs  # localconfig.vdf LaunchOptions edits (OnlineFix preset: VDF parser + backup)
-├── settings.rs   # settings dialog state (config editor + OnlineFix preset)
-├── fsutil.rs     # shared atomic file write
-├── tray.rs       # system tray
-├── i18n.rs       # bilingual strings and error→copy mapping (ADR-0009)
-└── ui.rs         # egui UI (3 cards + tray + auto-tray wiring)
+├── fsutil.rs      # shared atomic file write
+├── tray.rs        # system tray
+├── i18n.rs        # bilingual strings and error→copy mapping (ADR-0009)
+└── ui.rs          # egui UI (main page, settings dialog, wizard rendering)
 ```
 
 Spec: archived as GitHub issues [#18](https://github.com/hu3rror/opensteamtool-gui-rs/issues/18)–[#23](https://github.com/hu3rror/opensteamtool-gui-rs/issues/23) (SPEC.md removed from repo).

@@ -1,3 +1,6 @@
 /target
 /dlls
 /opensteamtool-manager-*.zip
+
+# 会话临时文件（spec 缓存 / issue body 草稿等），禁止提交
+/.tmp-*

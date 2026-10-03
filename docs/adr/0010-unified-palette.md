@@ -4,27 +4,26 @@ Rust 版外观此前逐按钮/逐状态手写配色：27 个常量 + 4 处内联
 
 ## 决策
 
-- **基础槽（12 个语义槽，11 个不同色值）**：
-  - accent 蓝 `#0F6CBD`（主按钮底 / accent bar / 蓝字 / selection stroke / hover stroke）
-  - 成功绿 `#16A34A`（Deploy 按钮底 / 成功状态文字）
-  - 警告琥珀 `#B45309`（上游已适配未缓存）
-  - 错误红 `#DC2626`（错误文案）
-  - 文字三档 `#0F172A` / `#334155` / `#64748B`（正文 / 次级 / 弱化·禁用态·灰状态）
-  - 面板底 `#F8F9FA`（兼并旧 FILL_SECONDARY：TextEdit 底、hover 底）
-  - 卡片底 `#FFFFFF`
-  - 反色白 `#FFFFFF`（深底按钮文字；与卡片底同值不同槽）
-  - 卡片边框 `#E2E8F0`（兼灰徽章底）
-  - 控件描边 `#CBD5E1`（输入框 / 次按钮描边）
-- **警戒组（唯一写死例外，仅「退出 Steam 并卸载补丁」使用）**：`bg #F0F9FF` / `hover #E0F2FE` / `fg #0284C7` / `border #7DD3FC`。这是对早期「单蓝全派生」草案的修订：第二蓝被保留为卸载类动作的唯一视觉入口，其余按钮一律不再使用。
-- **派生变体（不占槽）**：按钮 hover = 底色暗化 ×0.92（Neutral ×0.9）；徽章浅底 = 语义色 ×10% + 白 ×90%（灰徽章 = BORDER 槽）；selection 底 = accent ×18% + 白。
-- **按钮样式 4 种**：
-  - Deploy（绿实心 / 白字，无描边）：应用补丁并启动 Steam
-  - Primary（accent 蓝实心 / 白字，无描边）：下载并解压新版本 / 保存 / 确认
+- **基础槽（12 个语义槽）**：现行值为 **Dark（B）定稿**（spec §10 Deep Navy / Ice Blue，见 `docs/design/main-page-ui-reference.md` §10；`src/theme.rs` 为唯一代码来源）：
+  - accent 蓝 `#5C91C7`（主按钮底 / accent bar / 蓝字 / selection stroke / hover stroke）
+  - 成功绿 `#6BA88F`（成功状态文字 / 状态绿点）
+  - 警告琥珀 `#C39A5B`（上游已适配未缓存）
+  - 错误红 `#C97979`（错误文案）
+  - 文字三档 `#E8EDF3` / `#A9B5C3` / `#778596`（正文 / 次级 / 弱化·禁用态·灰状态；Dark 下文字为浅色，语义翻转见 spec §10）
+  - 面板底 `#0F151C`（Background）
+  - 卡片底 `#151E28`（Surface）
+  - 反色白 `#FFFFFF`（深底按钮文字；与卡片底不同槽）
+  - 卡片边框 `#293746`（Border，兼灰徽章底）
+  - 控件层次/描边 `#1C2835`（ENTRY = Surface Elevated 深色对偶，输入框 / 次按钮描边）
+- **警戒组（唯一写死例外，仅「退出 Steam 并卸载补丁」使用）**：Dark 家族 Warning Secondary Blue——`bg #1A2A3D` / `hover #23374F` / `fg #587A9D` / `border #4A6E93`。这是对早期「单蓝全派生」草案的修订：第二蓝被保留为卸载类动作的唯一视觉入口，其余按钮一律不再使用。
+- **派生变体（不占槽）**：按钮 hover = 底色暗化 ×0.92（Neutral ×0.9，`darken` 截断）；徽章浅底 = 语义色 ×15% + 页面底色 ×85%（`blend(base, panel_or_white, 0.85)`——Dark 向 PANEL、L1 向 WHITE，`Palette::badge_bg`）；selection 底 = accent ×18% + 白（`Palette::selection_bg`）。对比度敏感项按模式派生（ADR-0016）：Dark health 前景混白 0.2、busy 用 accent 纯色；L1 前景/忙碌文字向黑混（`warn_fg` / `busy_ink`）。
+- **按钮样式 3 种（Deploy 废止）**：
+  - Primary（accent 蓝实心 / 白字，无描边）：应用补丁并启动 Steam（原 Deploy 绿废止，见 Main Page 定稿 §18/§19 统一 Solid Brand Blue）/ 下载并解压新版本 / 保存 / 确认
   - Caution（警戒组天蓝描边）：仅「退出 Steam 并卸载补丁」
-  - Neutral（白底描边 / 次级文字）：其余全部按钮（启动 / 正常启动（未部署时）/ 重启 / 卸载 / 卸载补丁并重启 / 检查更新 / 一键缓存签名 / 浏览 / 取消 / 设置 / 语言切换；原 Launch + Secondary + UninstallRestart + Lang 统一并入，含「卸载并重启」从蓝实心降级）
+  - Neutral（卡片底描边 / 次级文字）：其余全部按钮（启动 / 正常启动（未部署时）/ 重启 / 卸载 / 卸载补丁并重启 / 检查更新 / 一键缓存签名 / 浏览 / 取消 / 设置 / 语言切换；原 Launch + Secondary + UninstallRestart + Lang 统一并入，含「卸载并重启」从蓝实心降级）
 - **命名收拢**：旧 STATUS_INSTALLED / BTN_DEPLOY_BG / DOT_RUNNING → `SUCCESS`；ERR_RED → `DANGER`；STATUS_WARN → `WARN`；ACCENT 沿用。作废常量：ACCENT_ACTIVE、FILL_SECONDARY、BTN_DEPLOY_HOVER、BTN_SECONDARY_HOVER、BTN_UNINSTALL_A_*、BTN_UNINSTALL_B_*、BADGE_*。
-- **顶栏对齐**：标题按固定行高（28px）手绘文本（LEFT_CENTER 垂直居中锚点），与右侧设置按钮（72×28）垂直同轴；设置与语言切换按钮同尺寸、同 Neutral 样式；按钮左右次序维持现状（语言切换最右）。外层必须 `horizontal`——`with_layout(left_to_right)` 的子区域会吃满剩余空间把后续内容顶出可视区（原型已验证）。
-- **结构**：新建 `src/theme.rs` 收纳色槽常量、警戒组、派生函数（`darken` / `blend` / `badge_bg` / `selection_bg`）与按钮样式解析表；ui.rs 只引用语义名，不出现任何内联色值字面量（有源码扫描测试守卫）。派生函数与解析表可单测（金样值），色板不变量有测试（槽数恰 12、派生色不占槽、仓库无越权色值）。
+- **结构**：`src/theme.rs` 收纳 `Palette { dark(), light() }` 结构体（12 语义槽 + 反色白 + 警戒组 4 色）、派生方法（`badge_bg` / `selection_bg` / `accent_hover` / `warn_fg` / `busy_ink` / `health_warning_bg/border`）、基础函数（`darken` / `blend`）与按钮样式解析表（`ButtonStyle::palette` → `ButtonPalette`）；ui.rs 只引用语义名/当前 Palette 实例，不出现任何内联色值字面量（有源码扫描测试守卫）。派生函数与解析表可单测（金样值），色板不变量有测试（Dark 槽数恰 12 且全异、派生色不占槽、仓库无越权色值）。
+- **深浅切换状态**：切换功能**已实现**（#39 / ADR-0016）：config `theme` 三态字段、`Palette::dark()/light()` 双色源、System 模式跟随 OS（含运行时变化与原生标题栏联动）。Dark（B）与 Light（L1 — Ice Mist）均定稿于 spec §10；L1 accent_hover 为定稿槽值（非派生，spec 内部矛盾裁定定稿优先）；L1 警戒组由 Warning Blue `#3E6F9E` 派生、对比度敏感项向黑混（原型经验值）；GitHub mark 白/黑双态。详见 ADR-0016。
 - **取代 ADR-0003 配色小节**：本 ADR 槽表取代 0003 的逐按钮色值清单；0003 保留的 kill-ai-slop 约束与组件形态（accent bar、独立按钮区、纯文字状态）不变。
 
 ## 相对旧版 GUI 的偏离
