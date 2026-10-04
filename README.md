@@ -19,7 +19,7 @@ A single-binary Windows tool that manages the OpenSteamTool patch set (three tar
 
 - **One-click actions** — apply the patch and launch Steam in one action; plain launch, exit & uninstall, uninstall & restart, and restart Steam, with confirmation only where it matters
 - **Deploy status at a glance** — a status card shows deployed / not deployed / invalid path, plus a one-line health warning when the compatibility probe reports "not yet supported upstream" or "core DLLs not found" (click to open Settings → Steam)
-- **First-run setup wizard** — three steps (language → Steam path → optional patch download), skippable at any step and re-runnable from Settings
+- **First-run setup wizard** — four steps (language → theme → Steam path → optional patch download), skippable at any step and re-runnable from Settings
 - **Three-tab settings dialog** — General (language, theme), Steam (path editor + compatibility probe), and About (app update check, re-run wizard); every change saves instantly
 - **Patch update check on the main page** — check, then download & extract a new version when one is available; patch version numbers stay out of the UI
 - **Light / dark themes** — follow the system or pick manually (Settings → General)
@@ -35,7 +35,7 @@ A single-binary Windows tool that manages the OpenSteamTool patch set (three tar
 
 1. Download the latest ZIP from [Releases](../../releases) and extract it anywhere.
 2. Run `opensteamtool-manager.exe` — no installation.
-3. The first run opens the setup wizard: pick a language and your Steam path, then optionally download the patch DLLs (skip any step, do it later).
+3. The first run opens the setup wizard: pick a language, a theme, and your Steam path, then optionally download the patch DLLs (skip any step, do it later).
 4. Click **Apply Patch & Launch Steam**. If the patch isn't downloaded yet, use the patch-update check button on the main page, then download & extract.
 
 > [!TIP]

@@ -721,6 +721,15 @@ fn wizard_step3_content(strings: &Strings, dl: &wizard::DownloadState) -> Wizard
     }
 }
 
+fn wizard_step_number(step: wizard::Step) -> u32 {
+    match step {
+        WizardStep::Language => 1,
+        WizardStep::Theme => 2,
+        WizardStep::SteamPath => 3,
+        WizardStep::Download => 4,
+    }
+}
+
 /// 向导步骤渲染（纯函数：视图 + 文案 → 用户意图 + 卡片矩形；不触碰 App 状态，可单测）。
 fn wizard_steps_ui(
     ui: &mut egui::Ui,
@@ -747,11 +756,7 @@ fn wizard_steps_ui(
                             .color(palette.ink),
                     );
                     ui.add_space(4.0);
-                    let n = match view.step {
-                        WizardStep::Language => 1,
-                        WizardStep::SteamPath => 2,
-                        WizardStep::Download => 3,
-                    };
+                    let n = wizard_step_number(view.step);
                     ui.label(
                         egui::RichText::new(strings.wizard_step_of.replace("{n}", &n.to_string()))
                             .size(12.0)
@@ -794,6 +799,40 @@ fn wizard_steps_ui(
                             .clicked()
                             {
                                 event = Some(wizard::Event::LanguageSubmitted);
+                            }
+                        }
+                        WizardStep::Theme => {
+                            ui.label(egui::RichText::new(strings.wizard_theme_prompt).size(13.0));
+                            ui.add_space(12.0);
+                            let options = strings.theme_options();
+                            // ComboBox 内部自建 horizontal 行（子内容左对齐），父层 Align::Center 管不到它；
+                            // 用外层 horizontal + 偏移把它推到与「下一步」按钮同一条中线上。
+                            let combo_w = 240.0;
+                            ui.horizontal(|ui| {
+                                ui.add_space((ui.available_width() - combo_w) / 2.0);
+                                if let Some(theme) = theme_combo(
+                                    ui,
+                                    options,
+                                    view.theme,
+                                    combo_w,
+                                    "wizard_theme",
+                                    palette,
+                                ) {
+                                    event = Some(wizard::Event::ThemeChosen(theme));
+                                }
+                            });
+                            ui.add_space(14.0);
+                            if styled_button(
+                                ui,
+                                strings.wizard_btn_next,
+                                ButtonStyle::Primary,
+                                egui::vec2(140.0, 34.0),
+                                true,
+                                palette,
+                            )
+                            .clicked()
+                            {
+                                event = Some(wizard::Event::ThemeSubmitted);
                             }
                         }
                         WizardStep::SteamPath => {
@@ -936,8 +975,9 @@ impl App {
         } else {
             config.steam_path.clone()
         };
-        let wizard = wizard::should_show(&config::config_path())
-            .then(|| wizard::Wizard::new(lang_pref, steam_path.clone(), dll::dll_dir()));
+        let wizard = wizard::should_show(&config::config_path()).then(|| {
+            wizard::Wizard::new(lang_pref, config.theme, steam_path.clone(), dll::dll_dir())
+        });
         let steam_dir = Path::new(&steam_path);
         let status = dll::check_status(steam_dir);
         let local_version = dll::read_local_version(&dll::dll_dir());
@@ -1283,6 +1323,10 @@ impl App {
     fn wizard_event(&mut self, ctx: &egui::Context, event: wizard::Event) {
         let (v, effects) = self.wizard.as_mut().unwrap().step(event);
         self.set_language(v.language);
+        // 主题仅在变化时写入（路径编辑每键触发的事件不落盘）；set_theme 即改即存（ADR-0016 唯一写入点）。
+        if v.theme != self.theme_pref {
+            self.set_theme(v.theme);
+        }
         self.exec_wizard_effects(ctx, effects);
     }
 
@@ -1295,6 +1339,7 @@ impl App {
                 }
                 wizard::Effect::Finish {
                     language,
+                    theme,
                     steam_path,
                 } => {
                     debug_assert!(
@@ -1302,6 +1347,7 @@ impl App {
                         "Finish 效果只能由已结束的向导产出"
                     );
                     self.config.language = language;
+                    self.config.theme = theme;
                     self.config.steam_path = steam_path.clone();
                     self.persist_config();
                     self.steam_path = steam_path;
@@ -1615,6 +1661,7 @@ impl App {
         self.settings_open = false;
         self.wizard = Some(wizard::Wizard::new(
             self.lang_pref,
+            self.theme_pref,
             self.steam_path.clone(),
             dll::dll_dir(),
         ));
@@ -3132,6 +3179,7 @@ mod tests {
                 let view = wizard::View {
                     step: WizardStep::Language,
                     language: Language::Auto,
+                    theme: ThemePreference::System,
                     steam_path: String::new(),
                     path_valid: false,
                     download: wizard::DownloadState::Idle,
@@ -3158,6 +3206,14 @@ mod tests {
             "卡片不应是整窗宽（实际 {}",
             rect.width()
         );
+    }
+
+    #[test]
+    fn wizard_step_numbers_run_1_to_4() {
+        assert_eq!(wizard_step_number(WizardStep::Language), 1);
+        assert_eq!(wizard_step_number(WizardStep::Theme), 2);
+        assert_eq!(wizard_step_number(WizardStep::SteamPath), 3);
+        assert_eq!(wizard_step_number(WizardStep::Download), 4);
     }
 
     #[test]

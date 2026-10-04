@@ -1,25 +1,27 @@
-//! 「首次运行向导」状态机：首次运行（配置缺失或已存 Steam 路径无效）的三步引导。
+//! 「首次运行向导」状态机：首次运行（配置缺失或已存 Steam 路径无效）的四步引导
+//! （语言 → 主题 → Steam 路径 → 补丁下载并解压）。
 //! 纯状态机：无 IO、无线程、无 egui、无 i18n；触发判据与终局语义见 ADR-0012。
 
 use std::path::{Path, PathBuf};
 
-use crate::config::{self, Language};
+use crate::config::{self, Language, ThemePreference};
 use crate::dll;
 use crate::updater::UpdateError;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Step {
     Language,
+    Theme,
     SteamPath,
     Download,
 }
 
-/// 步骤 3 的下载子状态：进入停在 `Idle`，由用户点击「下载并解压」才开始（不自动下载，#29）；失败可重试，跳过/关窗不阻塞完成。
+/// 步骤 4 的下载子状态：进入停在 `Idle`，由用户点击「下载并解压」才开始（不自动下载，#29）；失败可重试，跳过/关窗不阻塞完成。
 #[derive(Clone, Debug)]
 pub enum DownloadState {
     Idle,
     /// 补丁已下载（注入 `dll_dir` 下三目标 DLL 齐全，ADR-0011 文件本位判据）：
-    /// 步骤 3 呈现「就绪」无需下载；点「完成」（复用跳过事件）即收敛终局。
+    /// 步骤 4 呈现「就绪」无需下载；点「完成」（复用跳过事件）即收敛终局。
     Ready,
     Running,
     Failed(UpdateError),
@@ -30,8 +32,11 @@ pub enum Event {
     /// 步骤 1 选定语言：立即本地化后续步骤，但**不推进**（#34 修订：选完语言需点「下一步」才进步骤 2，下拉选择不再直达）。
     LanguageChosen(Language),
     LanguageSubmitted,
+    /// 步骤 2 选定主题：立即应用（即改即看），但**不推进**——与步骤 1 同款交互（#34 精神）。
+    ThemeChosen(ThemePreference),
+    ThemeSubmitted,
     PathEdited(String),
-    /// 步骤 2 提交路径：有效则推进到步骤 3；无效则停留。
+    /// 步骤 3 提交路径：有效则推进到步骤 4；无效则停留。
     PathSubmitted,
     DownloadRequested,
     DownloadDone(Result<(), UpdateError>),
@@ -46,6 +51,7 @@ pub enum Effect {
     Download,
     Finish {
         language: Language,
+        theme: ThemePreference,
         steam_path: String,
     },
 }
@@ -54,6 +60,7 @@ pub enum Effect {
 pub struct View {
     pub step: Step,
     pub language: Language,
+    pub theme: ThemePreference,
     pub steam_path: String,
     pub path_valid: bool,
     pub download: DownloadState,
@@ -62,6 +69,7 @@ pub struct View {
 pub struct Wizard {
     step: Step,
     language: Language,
+    theme: ThemePreference,
     steam_path: String,
     /// 步骤 3 就绪判据的文件系统注入点（App 传 `dll::dll_dir()`）。
     dll_dir: PathBuf,
@@ -70,11 +78,18 @@ pub struct Wizard {
 }
 
 impl Wizard {
-    /// `dll_dir` 是步骤 3 就绪判据的文件系统注入点（App 传 `dll::dll_dir()`，测试用临时目录）。重跑向导时以现值播种，使重跑是「编辑」而非「重置」。
-    pub fn new(language: Language, steam_path: String, dll_dir: PathBuf) -> Self {
+    /// `dll_dir` 是步骤 4 就绪判据的文件系统注入点（App 传 `dll::dll_dir()`，测试用临时目录）。
+    /// 重跑向导时以现值播种（语言、主题、Steam 路径），使重跑是「编辑」而非「重置」。
+    pub fn new(
+        language: Language,
+        theme: ThemePreference,
+        steam_path: String,
+        dll_dir: PathBuf,
+    ) -> Self {
         Self {
             step: Step::Language,
             language,
+            theme,
             steam_path,
             dll_dir,
             download: DownloadState::Idle,
@@ -88,11 +103,19 @@ impl Wizard {
         }
         let effects = match event {
             Event::LanguageChosen(language) if self.step == Step::Language => {
-                // 只应用语言（立即本地化后续步骤文案），不推进——由
+                // 选完语言不推进——由「下一步」显式进入步骤 2（#34：下拉不再直达）。
                 self.language = language;
                 Vec::new()
             }
             Event::LanguageSubmitted if self.step == Step::Language => {
+                self.step = Step::Theme;
+                Vec::new()
+            }
+            Event::ThemeChosen(theme) if self.step == Step::Theme => {
+                self.theme = theme;
+                Vec::new()
+            }
+            Event::ThemeSubmitted if self.step == Step::Theme => {
                 self.step = Step::SteamPath;
                 Vec::new()
             }
@@ -102,7 +125,7 @@ impl Wizard {
             }
             Event::PathSubmitted if self.step == Step::SteamPath => {
                 if dll::is_valid_steam_dir(&self.steam_path) {
-                    // 只推进到步骤 3，不自动下载：由用户点击「下载并解压」显式开始
+                    // 只推进到步骤 4，不自动下载：由用户点击「下载并解压」显式开始
                     self.step = Step::Download;
                     // 补丁是否已下载是文件系统事实（ADR-0011 文件本位判据）：已下载
                     self.download = if dll::target_dlls_present(&self.dll_dir) {
@@ -148,6 +171,7 @@ impl Wizard {
         View {
             step: self.step,
             language: self.language,
+            theme: self.theme,
             steam_path: self.steam_path.clone(),
             path_valid: dll::is_valid_steam_dir(&self.steam_path),
             download: self.download.clone(),
@@ -162,6 +186,7 @@ impl Wizard {
         self.finished = true;
         vec![Effect::Finish {
             language: self.language,
+            theme: self.theme,
             steam_path: self.steam_path.clone(),
         }]
     }
@@ -253,7 +278,12 @@ mod tests {
     #[test]
     fn step_progression_to_completion() {
         let steam = tmp_dir("progress");
-        let mut w = Wizard::new(Language::Auto, String::new(), tmp_dir("progress_dlls"));
+        let mut w = Wizard::new(
+            Language::Auto,
+            ThemePreference::System,
+            String::new(),
+            tmp_dir("progress_dlls"),
+        );
 
         let (v, fx) = w.step(Event::LanguageChosen(Language::Zh));
         assert_eq!(v.step, Step::Language, "选语言后不推进，等「下一步」");
@@ -266,7 +296,16 @@ mod tests {
         assert!(!w.finished());
 
         let (v, fx) = w.step(Event::LanguageSubmitted);
-        assert_eq!(v.step, Step::SteamPath, "点「下一步」才推进");
+        assert_eq!(v.step, Step::Theme, "点「下一步」才进主题步骤");
+        assert!(fx.is_empty());
+
+        let (v, fx) = w.step(Event::ThemeChosen(ThemePreference::Dark));
+        assert_eq!(v.step, Step::Theme, "选主题后不推进，等「下一步」");
+        assert_eq!(v.theme, ThemePreference::Dark, "步骤 2 选择立即生效");
+        assert!(fx.is_empty());
+
+        let (v, fx) = w.step(Event::ThemeSubmitted);
+        assert_eq!(v.step, Step::SteamPath, "点「下一步」才进步骤 3");
         assert!(fx.is_empty());
 
         let (v, fx) = w.step(Event::PathEdited(steam.display().to_string()));
@@ -291,6 +330,7 @@ mod tests {
             fx,
             vec![Effect::Finish {
                 language: Language::Zh,
+                theme: ThemePreference::Dark,
                 steam_path: steam.display().to_string()
             }]
         );
@@ -302,9 +342,16 @@ mod tests {
     #[test]
     fn invalid_path_submit_stays() {
         let steam = tmp_dir("invalid_submit");
-        let mut w = Wizard::new(Language::En, String::new(), tmp_dir("invalid_submit_dlls"));
+        let mut w = Wizard::new(
+            Language::En,
+            ThemePreference::System,
+            String::new(),
+            tmp_dir("invalid_submit_dlls"),
+        );
         w.step(Event::LanguageChosen(Language::En));
         w.step(Event::LanguageSubmitted);
+        w.step(Event::ThemeChosen(ThemePreference::Dark));
+        w.step(Event::ThemeSubmitted);
 
         let (v, fx) = w.step(Event::PathEdited("Z:/nope_98765".into()));
         assert!(!v.path_valid);
@@ -325,7 +372,7 @@ mod tests {
     #[test]
     fn download_failure_then_retry_succeeds() {
         let steam = tmp_dir("retry");
-        let mut w = entered_download(&steam, Language::Zh);
+        let mut w = entered_download(&steam, Language::Zh, ThemePreference::System);
 
         let (v, fx) = w.step(Event::DownloadDone(Err(UpdateError::Network("x".into()))));
         assert_eq!(v.step, Step::Download);
@@ -348,7 +395,7 @@ mod tests {
     #[test]
     fn download_failure_then_skip_finishes() {
         let steam = tmp_dir("skip");
-        let mut w = entered_download(&steam, Language::En);
+        let mut w = entered_download(&steam, Language::En, ThemePreference::System);
         w.step(Event::DownloadDone(Err(UpdateError::NoZip)));
         assert!(!w.finished());
 
@@ -358,6 +405,7 @@ mod tests {
             fx,
             vec![Effect::Finish {
                 language: Language::En,
+                theme: ThemePreference::System,
                 steam_path: steam.display().to_string()
             }]
         );
@@ -366,7 +414,7 @@ mod tests {
     #[test]
     fn skip_while_running_finishes() {
         let steam = tmp_dir("skip_running");
-        let mut w = entered_download(&steam, Language::En);
+        let mut w = entered_download(&steam, Language::En, ThemePreference::System);
         assert!(!w.finished());
         let (v, fx) = w.step(Event::SkipDownload);
         assert!(
@@ -382,9 +430,9 @@ mod tests {
     #[test]
     fn skip_and_close_converge_on_same_end_state() {
         let steam = tmp_dir("converge");
-        let mut skipped = entered_download(&steam, Language::Zh);
+        let mut skipped = entered_download(&steam, Language::Zh, ThemePreference::System);
         skipped.step(Event::DownloadDone(Err(UpdateError::Network("x".into()))));
-        let mut closed = entered_download(&steam, Language::Zh);
+        let mut closed = entered_download(&steam, Language::Zh, ThemePreference::System);
         closed.step(Event::DownloadDone(Err(UpdateError::Network("x".into()))));
 
         let (sv, sfx) = skipped.step(Event::SkipDownload);
@@ -404,6 +452,7 @@ mod tests {
     fn close_from_language_step_finishes() {
         let mut w = Wizard::new(
             Language::Auto,
+            ThemePreference::System,
             "C:/prefilled".into(),
             tmp_dir("close_lang_dlls"),
         );
@@ -413,6 +462,7 @@ mod tests {
             fx,
             vec![Effect::Finish {
                 language: Language::Auto,
+                theme: ThemePreference::System,
                 steam_path: "C:/prefilled".into()
             }]
         );
@@ -420,7 +470,12 @@ mod tests {
 
     #[test]
     fn events_after_finish_are_ignored() {
-        let mut w = Wizard::new(Language::Zh, String::new(), tmp_dir("after_finish_dlls"));
+        let mut w = Wizard::new(
+            Language::Zh,
+            ThemePreference::System,
+            String::new(),
+            tmp_dir("after_finish_dlls"),
+        );
         w.step(Event::Closed);
         let (_, fx) = w.step(Event::DownloadDone(Ok(())));
         assert!(fx.is_empty());
@@ -432,7 +487,12 @@ mod tests {
 
     #[test]
     fn language_choice_can_change_without_advancing() {
-        let mut w = Wizard::new(Language::Auto, String::new(), tmp_dir("lang_change_dlls"));
+        let mut w = Wizard::new(
+            Language::Auto,
+            ThemePreference::System,
+            String::new(),
+            tmp_dir("lang_change_dlls"),
+        );
         let (v, _) = w.step(Event::LanguageChosen(Language::En));
         assert_eq!(v.step, Step::Language, "改语言不推进");
         assert_eq!(v.language, Language::En);
@@ -443,13 +503,88 @@ mod tests {
         assert_eq!(v.step, Step::Language);
         assert!(fx.is_empty());
         let (v, _) = w.step(Event::LanguageSubmitted);
+        assert_eq!(v.step, Step::Theme, "语言「下一步」先进主题步骤");
+        let (v, _) = w.step(Event::ThemeSubmitted);
         assert_eq!(v.step, Step::SteamPath);
+    }
+
+    #[test]
+    fn theme_step_applies_without_advancing() {
+        let mut w = Wizard::new(
+            Language::Zh,
+            ThemePreference::System,
+            String::new(),
+            tmp_dir("theme_dlls"),
+        );
+        let (v, fx) = w.step(Event::LanguageSubmitted);
+        assert_eq!(v.step, Step::Theme, "语言「下一步」先进主题步骤");
+        assert_eq!(v.theme, ThemePreference::System, "主题初值为播种值");
+        assert!(fx.is_empty());
+
+        let (v, fx) = w.step(Event::ThemeChosen(ThemePreference::Dark));
+        assert_eq!(v.step, Step::Theme, "选主题不推进，等「下一步」");
+        assert_eq!(v.theme, ThemePreference::Dark, "步骤 2 选择立即生效");
+        assert!(fx.is_empty());
+
+        let (v, fx) = w.step(Event::ThemeChosen(ThemePreference::Light));
+        assert_eq!(v.step, Step::Theme, "再次改主题仍不推进");
+        assert_eq!(v.theme, ThemePreference::Light);
+        assert!(fx.is_empty());
+
+        let (v, fx) = w.step(Event::ThemeSubmitted);
+        assert_eq!(v.step, Step::SteamPath, "点「下一步」才进步骤 3");
+        assert!(fx.is_empty());
+    }
+
+    #[test]
+    fn theme_carries_to_finish() {
+        let mut w = Wizard::new(
+            Language::En,
+            ThemePreference::System,
+            String::new(),
+            tmp_dir("theme_finish_dlls"),
+        );
+        w.step(Event::LanguageSubmitted);
+        w.step(Event::ThemeChosen(ThemePreference::Dark));
+        w.step(Event::ThemeSubmitted);
+
+        let (_, fx) = w.step(Event::Closed);
+        assert!(w.finished());
+        assert_eq!(
+            fx,
+            vec![Effect::Finish {
+                language: Language::En,
+                theme: ThemePreference::Dark,
+                steam_path: String::new()
+            }]
+        );
+    }
+
+    #[test]
+    fn theme_events_ignored_outside_theme_step() {
+        let mut w = Wizard::new(
+            Language::Zh,
+            ThemePreference::System,
+            String::new(),
+            tmp_dir("theme_wrong_step_dlls"),
+        );
+        let (v, fx) = w.step(Event::ThemeChosen(ThemePreference::Dark));
+        assert_eq!(v.step, Step::Language, "语言步骤不接受主题事件");
+        assert_eq!(v.theme, ThemePreference::System, "主题不被改写");
+        assert!(fx.is_empty());
+
+        w.step(Event::LanguageSubmitted);
+        w.step(Event::ThemeSubmitted);
+        let (v, fx) = w.step(Event::ThemeChosen(ThemePreference::Light));
+        assert_eq!(v.step, Step::SteamPath, "离开主题步骤后主题事件被忽略");
+        assert_eq!(v.theme, ThemePreference::System);
+        assert!(fx.is_empty());
     }
 
     #[test]
     fn download_request_dedupes_while_running() {
         let steam = tmp_dir("dedupe");
-        let mut w = entered_download(&steam, Language::En);
+        let mut w = entered_download(&steam, Language::En, ThemePreference::System);
         let (_, fx) = w.step(Event::DownloadRequested);
         assert!(fx.is_empty(), "已在途不应重复发起下载");
         std::fs::remove_dir_all(&steam).ok();
@@ -458,9 +593,15 @@ mod tests {
     #[test]
     fn idle_request_starts_once() {
         let steam = tmp_dir("idle");
-        let mut w = Wizard::new(Language::En, String::new(), tmp_dir("idle_dlls"));
+        let mut w = Wizard::new(
+            Language::En,
+            ThemePreference::System,
+            String::new(),
+            tmp_dir("idle_dlls"),
+        );
         w.step(Event::LanguageChosen(Language::En));
         w.step(Event::LanguageSubmitted);
+        w.step(Event::ThemeSubmitted);
         w.step(Event::PathEdited(steam.display().to_string()));
         w.step(Event::PathSubmitted);
 
@@ -472,7 +613,7 @@ mod tests {
         std::fs::remove_dir_all(&steam).ok();
     }
 
-    fn entered_download(steam: &Path, language: Language) -> Wizard {
+    fn entered_download(steam: &Path, language: Language, theme: ThemePreference) -> Wizard {
         let dlls = std::env::temp_dir().join(format!(
             "ost_wiz_{}_dlls_{}",
             steam.file_name().unwrap_or_default().to_string_lossy(),
@@ -480,9 +621,11 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dlls);
         std::fs::create_dir_all(&dlls).unwrap();
-        let mut w = Wizard::new(language, String::new(), dlls);
+        let mut w = Wizard::new(language, theme, String::new(), dlls);
         w.step(Event::LanguageChosen(language));
         w.step(Event::LanguageSubmitted);
+        w.step(Event::ThemeChosen(theme));
+        w.step(Event::ThemeSubmitted);
         w.step(Event::PathEdited(steam.display().to_string()));
         w.step(Event::PathSubmitted);
         w.step(Event::DownloadRequested);
@@ -497,9 +640,15 @@ mod tests {
             std::fs::write(dlls.join(name), b"x").unwrap();
         }
 
-        let mut w = Wizard::new(Language::Zh, steam.display().to_string(), dlls.clone());
+        let mut w = Wizard::new(
+            Language::Zh,
+            ThemePreference::System,
+            steam.display().to_string(),
+            dlls.clone(),
+        );
         w.step(Event::LanguageChosen(Language::Zh));
         w.step(Event::LanguageSubmitted);
+        w.step(Event::ThemeSubmitted);
         w.step(Event::PathEdited(steam.display().to_string()));
         let (v, fx) = w.step(Event::PathSubmitted);
         assert_eq!(v.step, Step::Download);
@@ -515,6 +664,7 @@ mod tests {
             fx,
             vec![Effect::Finish {
                 language: Language::Zh,
+                theme: ThemePreference::System,
                 steam_path: steam.display().to_string()
             }]
         );
@@ -537,9 +687,15 @@ mod tests {
         std::fs::write(version_only.join(dll::VERSION_FILE), b"1.4.8").unwrap();
 
         for dlls in [&missing, &empty, &partial, &version_only] {
-            let mut w = Wizard::new(Language::En, steam.display().to_string(), dlls.clone());
+            let mut w = Wizard::new(
+                Language::En,
+                ThemePreference::System,
+                steam.display().to_string(),
+                dlls.clone(),
+            );
             w.step(Event::LanguageChosen(Language::En));
             w.step(Event::LanguageSubmitted);
+            w.step(Event::ThemeSubmitted);
             w.step(Event::PathEdited(steam.display().to_string()));
             let (v, _) = w.step(Event::PathSubmitted);
             assert_eq!(v.step, Step::Download);
