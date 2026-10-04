@@ -313,9 +313,9 @@ pub fn paint_icon(
             ];
             painter.add(Shape::convex_polygon(pts, color, Stroke::NONE));
         }
-        IconKind::Restart | IconKind::Refresh => {
+        IconKind::Restart => {
             // 原型几何（与 download/uninstall 不同构）：顶部起弧经右侧扫到右下（约 158°），
-            // 弧起点处两条短边构成箭头（对应原型 refresh / restart path）。
+            // 弧起点处两条短边构成箭头（对应原型 restart path）。
             arc(
                 painter,
                 unit(center, size, 9.5, 10.0),
@@ -338,6 +338,24 @@ pub fn paint_icon(
                 color,
                 ICON_STROKE,
             );
+        }
+        IconKind::Refresh => {
+            // 循环双箭头（sync 构型）：两段约 126° 的圆弧 + 两个实心三角箭头，绕中心 180° 对称；
+            // 箭头基准沿半径横跨弧内外，尖端切向指向逆时针，读作「重新检查」。
+            let stroke = Stroke::new(ICON_STROKE, color);
+            let r = 5.6 * size / 20.0;
+            arc(painter, center, r, 126.0, 0.0, 20, stroke);
+            arc(painter, center, r, 306.0, 180.0, 20, stroke);
+            for arm in [
+                [(13.1, 10.0), (15.1, 7.4), (17.7, 10.0)],
+                [(6.9, 10.0), (4.9, 12.6), (2.3, 10.0)],
+            ] {
+                painter.add(Shape::convex_polygon(
+                    arm.iter().map(|&(x, y)| unit(center, size, x, y)).collect(),
+                    color,
+                    Stroke::NONE,
+                ));
+            }
         }
         IconKind::Uninstall | IconKind::Download => {
             seg(
