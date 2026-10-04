@@ -1710,7 +1710,7 @@ impl App {
                     );
                 }
             }
-            // logo 右缘与标题间距 ≈10px（格内居中右侧留白 5 + 此处 5）；缩短自 16px。
+            // logo 右缘与标题间距 ≈10px（格内居中右侧留白 5 + 此处 5）。
             ui.add_space(5.0);
             ui.label(
                 egui::RichText::new(self.strings.app_title)
@@ -2675,13 +2675,9 @@ impl eframe::App for App {
         self.was_minimized = minimized;
 
         self.handle_messages();
-    }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let ctx = ui.ctx().clone();
-
-        // 每帧同步当前色板：System 模式下 OS 切深浅由 egui 解析（ctx.theme()），UI 引用点随之换色；
-        // mark 按模式重载（Dark 烤白 / L1 保留黑 mark）。
+        // 每帧同步当前色板（放在 logic 而非 ui：窗口隐藏/托盘隐身期 ui() 不调用，托盘图标
+        // 仍需随 System 模式 OS 切深浅换版）。mark 按模式重载（Dark 烤白 / L1 保留黑 mark）。
         let palette = match ctx.theme() {
             egui::Theme::Dark => Palette::dark(),
             egui::Theme::Light => Palette::light(),
@@ -2690,10 +2686,10 @@ impl eframe::App for App {
             self.palette = palette;
             if palette.dark_mode != self.mark_dark {
                 self.mark_dark = palette.dark_mode;
-                self.github_mark = load_github_mark(&ctx, palette);
+                self.github_mark = load_github_mark(ctx, palette);
                 // 图标双态（ADR-0016 / GLOSSARY「应用图标」）：主页面 LOGO、窗口标题栏 +
                 // 任务栏按钮、托盘图标随主题同切，与 mark 共用同一模式变化钩子。
-                self.logo = brand::logo_texture(&ctx, palette.dark_mode);
+                self.logo = brand::logo_texture(ctx, palette.dark_mode);
                 self.ctx
                     .send_viewport_cmd(egui::ViewportCommand::Icon(Some(Arc::new(
                         brand::window_icon(palette.dark_mode),
@@ -2705,16 +2701,22 @@ impl eframe::App for App {
                 }
             }
         }
-        // 首帧：窗口已显示后按当前主题同步一次窗口图标（System 模式在此按系统深浅校正）。
-        // 实测 ViewportCommand::Icon 在窗口显示前不生效（App::new 期间发送被吞），
-        // 此处 ui() 在 winit show 之后执行，命令必达；幂等，仅首帧执行。
-        if !self.icon_synced {
+        // 首帧窗口图标同步：实测 ViewportCommand::Icon 在窗口显示前不生效（App::new 期间
+        // 发送被吞，标题栏沿用 ViewportBuilder 图标，见 main.rs），故等窗口真实显示后再发
+        // 一次，校正 System 模式按系统深浅的主题（隐藏期不触发，恢复显示后下一帧补上）。
+        // 幂等，仅首帧触发。
+        if !self.icon_synced && ctx.input(|i| i.viewport().visible()).unwrap_or(false) {
             self.icon_synced = true;
             self.ctx
                 .send_viewport_cmd(egui::ViewportCommand::Icon(Some(Arc::new(
                     brand::window_icon(self.palette.dark_mode),
                 ))));
         }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // 色板与图标已在 logic() 按当前主题同步，此处只消费 self.palette / self.logo。
+        let ctx = ui.ctx().clone();
 
         let mut content_h = 0.0f32;
         egui::CentralPanel::default().show(ui, |ui| {

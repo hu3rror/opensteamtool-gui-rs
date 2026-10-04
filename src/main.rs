@@ -24,7 +24,7 @@ mod wizard;
 mod workflow;
 
 fn main() -> eframe::Result {
-    use eframe::egui; // ViewportBuilder / ViewportCommand 引用（与 ui.rs 同源）。
+    use eframe::egui; // ViewportBuilder / ViewportCommand 类型引用。
 
     // 初始窗口图标按持久化主题选版（深浅双态，ADR-0016）：ViewportBuilder 图标是创建时
     // 同步设置的（运行中 ViewportCommand::Icon 在窗口显示前不生效，实测被吞），必须在创建前
@@ -54,6 +54,7 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size(min_size)
             .with_min_inner_size(min_size)
+            .with_resizable(true)
             .with_icon(initial_window_icon()),
         centered: true,
         ..Default::default()

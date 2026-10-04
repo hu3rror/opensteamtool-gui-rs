@@ -19,10 +19,15 @@ fn logo_png(dark_mode: bool) -> &'static [u8] {
     }
 }
 
+/// 解出当前主题对应 LOGO 的解码图像（解码失败返回 None，调用方各自兜底）。
+fn logo_image(dark_mode: bool) -> Option<image::DynamicImage> {
+    image::load_from_memory(logo_png(dark_mode)).ok()
+}
+
 /// 窗口标题栏 + 任务栏按钮图标（egui `ViewportBuilder::with_icon` / `ViewportCommand::Icon`）。
-/// 解码失败兜底空 IconData（不改崩溃语义），与旧 `main.rs::load_icon` 行为一致。
+/// 解码失败兜底空 IconData（不改崩溃语义）。
 pub fn window_icon(dark_mode: bool) -> egui::IconData {
-    let Ok(img) = image::load_from_memory(logo_png(dark_mode)) else {
+    let Some(img) = logo_image(dark_mode) else {
         return egui::IconData::default();
     };
     let rgba = img.to_rgba8();
@@ -36,18 +41,17 @@ pub fn window_icon(dark_mode: bool) -> egui::IconData {
 
 /// 托盘图标（32×32，tray-icon RGBA）。
 pub fn tray_icon(dark_mode: bool) -> Option<tray_icon::Icon> {
-    let img = image::load_from_memory(logo_png(dark_mode)).ok()?;
-    let img = img.resize_to_fill(32, 32, image::imageops::FilterType::Lanczos3);
+    let img = logo_image(dark_mode)?.resize_to_fill(32, 32, image::imageops::FilterType::Lanczos3);
     let rgba = img.to_rgba8();
     let (w, h) = rgba.dimensions();
     tray_icon::Icon::from_rgba(rgba.into_raw(), w, h).ok()
 }
 
 /// 主页面左上角 LOGO 纹理（按当前主题选版；模式变化时由调用方重载）。
+/// 256px 原图缩放到 ~20px 显示：开 mipmap 线性过滤尽量避免无 mipmap 缩小产生的
+/// 混叠/锯齿伪影（glow 后端自动 `gl.generate_mipmap`）。
 pub fn logo_texture(ctx: &egui::Context, dark_mode: bool) -> Option<egui::TextureHandle> {
-    let img = image::load_from_memory(logo_png(dark_mode))
-        .ok()?
-        .to_rgba8();
+    let img = logo_image(dark_mode)?.to_rgba8();
     let (w, h) = img.dimensions();
     let color = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &img);
     let options = egui::TextureOptions::LINEAR.with_mipmap_mode(Some(egui::TextureFilter::Linear));
