@@ -102,7 +102,7 @@ pub enum UpdateKind {
     Download,
     /// 检查中（同按钮位 spinner，不进状态栏，§26.2）
     Checking,
-    /// 下载中（不确定进度 → 阶段文案，§29）
+    /// 下载中（同按钮位 spinner 原位，不进状态栏，§26.5/§34）
     Downloading,
 }
 
@@ -129,7 +129,7 @@ pub fn derive(input: &MainPageInput) -> MainPageVm {
 
     let secondary = secondary_rows(input);
 
-    let hero = if input.busy.is_some() {
+    let hero = if input.busy.is_some() && !input.busy.is_some_and(BusyKind::is_update_flow) {
         HeroStatus::Busy
     } else if input.apply_failed {
         HeroStatus::Failed
@@ -150,30 +150,34 @@ pub fn derive(input: &MainPageInput) -> MainPageVm {
         None
     };
 
-    let primary = if input.busy.is_some() {
+    let primary = if input.busy.is_some() && !input.busy.is_some_and(BusyKind::is_update_flow) {
         PrimaryVm {
             kind: PrimaryKind::BusyStage,
             enabled: false,
         }
-    } else if path_invalid {
-        PrimaryVm {
-            kind: PrimaryKind::Action(PrimaryAction::FixPath),
-            enabled: true,
-        }
-    } else if input.deploy == DeployStatus::NotDeployed {
-        PrimaryVm {
-            kind: PrimaryKind::Action(PrimaryAction::ApplyAndLaunch),
-            // ADR-0011 文件本位：dlls/ 缺文件时置灰（点了会报 MissingTargetDlls）。
-            enabled: input.dlls_present,
-        }
     } else {
-        PrimaryVm {
-            kind: PrimaryKind::Action(if input.steam_running {
-                PrimaryAction::Restart
-            } else {
-                PrimaryAction::Launch
-            }),
-            enabled: true,
+        // 更新流程忙碌（检查/下载）不阶段化 Primary：保留正常动作仅禁用，进度只呈现于更新按钮位。
+        let enabled = input.busy.is_none();
+        if path_invalid {
+            PrimaryVm {
+                kind: PrimaryKind::Action(PrimaryAction::FixPath),
+                enabled,
+            }
+        } else if input.deploy == DeployStatus::NotDeployed {
+            PrimaryVm {
+                kind: PrimaryKind::Action(PrimaryAction::ApplyAndLaunch),
+                // ADR-0011 文件本位：dlls/ 缺文件时置灰（点了会报 MissingTargetDlls）。
+                enabled: enabled && input.dlls_present,
+            }
+        } else {
+            PrimaryVm {
+                kind: PrimaryKind::Action(if input.steam_running {
+                    PrimaryAction::Restart
+                } else {
+                    PrimaryAction::Launch
+                }),
+                enabled,
+            }
         }
     };
 
@@ -579,31 +583,31 @@ mod tests {
     }
 
     #[test]
-    fn busy_hides_files_missing_supporting() {
-        // §27：busy 原位原状态，不叠加「补丁未下载」引导（检查/下载进行中再提示即自相矛盾）。
-        let vm = derive(&input(
-            DeployStatus::NotDeployed,
-            false,
-            Some(BusyKind::Checking),
-            false,
-            false,
-        ));
-        assert_eq!(vm.hero, HeroStatus::Busy);
-        assert_eq!(vm.supporting, None);
-        assert_eq!(
-            vm.primary.kind,
-            PrimaryKind::BusyStage,
-            "files_missing 的 busy 下 Primary 也走 busy 原位"
-        );
-        let downloading = derive(&input(
-            DeployStatus::NotDeployed,
-            false,
-            Some(BusyKind::Downloading),
-            false,
-            false,
-        ));
-        assert_eq!(downloading.supporting, None);
-        assert_eq!(downloading.update.kind, UpdateKind::Downloading);
+    fn update_flow_busy_keeps_hero_and_primary_quiet() {
+        // 更新流程忙碌（检查/下载）只在「补丁更新检查」按钮位原位呈现（§26.2/§26.5/§34）：
+        // Hero 不阶段化、Primary 保留正常动作仅禁用；进行中不叠加「补丁未下载」引导（自相矛盾）。
+        for (kind, want_update) in [
+            (BusyKind::Checking, UpdateKind::Checking),
+            (BusyKind::Downloading, UpdateKind::Downloading),
+        ] {
+            let vm = derive(&input(
+                DeployStatus::NotDeployed,
+                false,
+                Some(kind),
+                false,
+                false,
+            ));
+            assert_eq!(vm.hero, HeroStatus::NotApplied, "{kind:?} 不压 Hero");
+            assert_eq!(vm.supporting, None, "{kind:?} 不显示 supporting");
+            assert_eq!(
+                vm.primary.kind,
+                PrimaryKind::Action(PrimaryAction::ApplyAndLaunch),
+                "{kind:?} Primary 保留正常动作"
+            );
+            assert!(!vm.primary.enabled, "{kind:?} Primary 禁用");
+            assert_eq!(vm.update.kind, want_update);
+            assert!(!vm.update.enabled, "{kind:?} 更新按钮位原位禁用");
+        }
     }
 
     #[test]
@@ -626,6 +630,10 @@ mod tests {
         ));
         assert_eq!(vm.update.kind, UpdateKind::Downloading);
         assert_eq!(vm.update.note, None);
+        // 已应用场景：更新流程忙碌不压 Hero / Primary（交互类忙碌才阶段化，§27）。
+        assert_eq!(vm.hero, HeroStatus::Applied);
+        assert_eq!(vm.primary.kind, PrimaryKind::Action(PrimaryAction::Restart));
+        assert!(!vm.primary.enabled);
     }
 
     #[test]

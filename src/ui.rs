@@ -310,7 +310,7 @@ fn status_bar_items(
         items.push((strings.status_steam_stopped.to_string(), palette.weak));
     }
     if let Some(kind) = busy
-        && kind != BusyKind::Checking
+        && !kind.is_update_flow()
     {
         items.push((strings.busy_label(kind).to_string(), palette.busy_ink()));
     }
@@ -2883,6 +2883,30 @@ mod tests {
         assert!(texts(false, &uninstalled).iter().any(|t| t == "已卸载补丁"));
         let applied = Notice::WorkflowDone(workflow::Action::ApplyAndLaunch, Ok(()));
         assert!(texts(false, &applied).iter().any(|t| t == "补丁已应用"));
+    }
+
+    #[test]
+    fn status_bar_keeps_interaction_busy_but_drops_update_flow() {
+        // §32/§34：交互类忙碌可占状态栏；检查/下载（更新流程）只在更新按钮位原位，不进状态栏。
+        let zh = Strings::new(Lang::Zh);
+        let texts = |busy: Option<BusyKind>| -> Vec<String> {
+            status_bar_items(false, busy, None, &zh, Palette::dark())
+                .iter()
+                .map(|(t, _)| t.clone())
+                .collect()
+        };
+        let deploying = texts(Some(BusyKind::Deploying));
+        assert!(
+            deploying.iter().any(|t| t == zh.busy_deploying),
+            "交互类 busy 应占状态栏：{deploying:?}"
+        );
+        for kind in [BusyKind::Checking, BusyKind::Downloading] {
+            let got = texts(Some(kind));
+            assert!(
+                !got.iter().any(|t| t == zh.busy_label(kind)),
+                "{kind:?} 不进状态栏：{got:?}"
+            );
+        }
     }
 
     #[test]
