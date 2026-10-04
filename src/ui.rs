@@ -668,6 +668,26 @@ fn theme_combo(
     tri_state_combo(ui, options, selected, width, salt, palette)
 }
 
+/// ComboBox 内部自建 horizontal 行（子内容左对齐），父层 `Align::Center` 管不到它；
+/// 用外层 horizontal + 偏移把下拉推到卡片中线上（向导语言/主题步骤的居中对齐）。
+fn centered_combo<T: Copy + PartialEq>(
+    ui: &mut egui::Ui,
+    options: [(T, &'static str); 3],
+    selected: T,
+    width: f32,
+    salt: &'static str,
+    palette: Palette,
+) -> Option<T> {
+    let mut chosen = None;
+    ui.horizontal(|ui| {
+        ui.add_space((ui.available_width() - width) / 2.0);
+        if let Some(v) = tri_state_combo(ui, options, selected, width, salt, palette) {
+            chosen = Some(v);
+        }
+    });
+    chosen
+}
+
 fn wizard_download() -> Result<(), UpdateError> {
     let info = updater::check_update()?;
     updater::download_and_extract(&info, &dll::dll_dir())
@@ -770,23 +790,16 @@ fn wizard_steps_ui(
                                 egui::RichText::new(strings.wizard_language_prompt).size(13.0),
                             );
                             ui.add_space(12.0);
-                            let options = strings.language_options();
-                            // ComboBox 内部自建 horizontal 行（子内容左对齐），父层 Align::Center 管不到它；
-                            // 用外层 horizontal + 偏移把它推到与「下一步」按钮同一条中线上。
-                            let combo_w = 240.0;
-                            ui.horizontal(|ui| {
-                                ui.add_space((ui.available_width() - combo_w) / 2.0);
-                                if let Some(lang) = language_combo(
-                                    ui,
-                                    options,
-                                    view.language,
-                                    combo_w,
-                                    "wizard_language",
-                                    palette,
-                                ) {
-                                    event = Some(wizard::Event::LanguageChosen(lang));
-                                }
-                            });
+                            if let Some(lang) = centered_combo(
+                                ui,
+                                strings.language_options(),
+                                view.language,
+                                240.0,
+                                "wizard_language",
+                                palette,
+                            ) {
+                                event = Some(wizard::Event::LanguageChosen(lang));
+                            }
                             ui.add_space(14.0);
                             if styled_button(
                                 ui,
@@ -804,23 +817,16 @@ fn wizard_steps_ui(
                         WizardStep::Theme => {
                             ui.label(egui::RichText::new(strings.wizard_theme_prompt).size(13.0));
                             ui.add_space(12.0);
-                            let options = strings.theme_options();
-                            // ComboBox 内部自建 horizontal 行（子内容左对齐），父层 Align::Center 管不到它；
-                            // 用外层 horizontal + 偏移把它推到与「下一步」按钮同一条中线上。
-                            let combo_w = 240.0;
-                            ui.horizontal(|ui| {
-                                ui.add_space((ui.available_width() - combo_w) / 2.0);
-                                if let Some(theme) = theme_combo(
-                                    ui,
-                                    options,
-                                    view.theme,
-                                    combo_w,
-                                    "wizard_theme",
-                                    palette,
-                                ) {
-                                    event = Some(wizard::Event::ThemeChosen(theme));
-                                }
-                            });
+                            if let Some(theme) = centered_combo(
+                                ui,
+                                strings.theme_options(),
+                                view.theme,
+                                240.0,
+                                "wizard_theme",
+                                palette,
+                            ) {
+                                event = Some(wizard::Event::ThemeChosen(theme));
+                            }
                             ui.add_space(14.0);
                             if styled_button(
                                 ui,
