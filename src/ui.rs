@@ -266,8 +266,8 @@ fn load_github_mark(ctx: &egui::Context, palette: Palette) -> Option<egui::Textu
 
 fn card_title(ui: &mut egui::Ui, text: &str, palette: Palette) {
     ui.horizontal(|ui| {
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(3.0, 13.0), egui::Sense::hover());
-        ui.painter().rect_filled(rect, 0.0, palette.accent);
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 2.0), egui::Sense::hover());
+        ui.painter().rect_filled(rect, 1.0, palette.border);
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new(text)
@@ -1842,8 +1842,8 @@ impl App {
         let v = CompatView::snapshot(self);
 
         ui.horizontal(|ui| {
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(3.0, 13.0), egui::Sense::hover());
-            ui.painter().rect_filled(rect, 0.0, self.palette.accent);
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 2.0), egui::Sense::hover());
+            ui.painter().rect_filled(rect, 1.0, self.palette.border);
             ui.add_space(8.0);
             ui.label(
                 egui::RichText::new(self.strings.compat_title)
@@ -2084,12 +2084,12 @@ impl App {
         }
     }
 
-    /// eyebrow：accent 短条 + 大写 PATCH（spec §14 定稿，双语一致）。
+    /// eyebrow：降权短条 + 大写 PATCH（spec §14 定稿，双语一致；短条形态与色槽见 ADR-0018）。
     fn hero_eyebrow(&self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 2.0), egui::Sense::hover());
-            ui.painter().rect_filled(rect, 1.0, self.palette.accent);
-            ui.add_space(10.0);
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 2.0), egui::Sense::hover());
+            ui.painter().rect_filled(rect, 1.0, self.palette.border);
+            ui.add_space(8.0);
             ui.label(
                 egui::RichText::new(main_page::EYEBROW)
                     .size(12.0)
@@ -3137,7 +3137,7 @@ mod tests {
                 for lang in [Lang::Zh, Lang::En] {
                     let s = Strings::new(lang);
                     ui.horizontal(|ui| {
-                        ui.allocate_exact_size(egui::vec2(3.0, 13.0), egui::Sense::hover());
+                        ui.allocate_exact_size(egui::vec2(10.0, 2.0), egui::Sense::hover());
                         ui.add_space(8.0);
                         ui.label(egui::RichText::new(s.compat_title).size(13.5).strong());
                     });
@@ -3363,9 +3363,9 @@ mod tests {
                         ui.set_width(ui.available_width());
                         ui.horizontal(|ui| {
                             let (rect, _) =
-                                ui.allocate_exact_size(egui::vec2(14.0, 2.0), egui::Sense::hover());
-                            ui.painter().rect_filled(rect, 1.0, Palette::dark().accent);
-                            ui.add_space(10.0);
+                                ui.allocate_exact_size(egui::vec2(10.0, 2.0), egui::Sense::hover());
+                            ui.painter().rect_filled(rect, 1.0, Palette::dark().border);
+                            ui.add_space(8.0);
                             ui.label(
                                 egui::RichText::new(main_page::EYEBROW)
                                     .size(12.0)
