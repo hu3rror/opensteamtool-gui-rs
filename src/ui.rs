@@ -7,6 +7,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use eframe::egui;
 use egui::Frame;
 
+use crate::brand;
 use crate::busy::{BusyGate, BusyKind};
 use crate::compat;
 use crate::compat_flow::{self, CompatFlow, CompatSummary};
@@ -501,6 +502,10 @@ pub struct App {
     palette: Palette,
     /// GitHub mark 的加载模式（dark/light）；palette 模式变化时重载（ADR-0016 图片双态）。
     mark_dark: bool,
+    /// 主页面左上角品牌 LOGO 纹理（深/浅双态，GLOSSARY「应用图标」；palette 模式变化时重载）。
+    logo: Option<egui::TextureHandle>,
+    /// 首帧窗口图标同步是否已执行（ViewportCommand::Icon 在窗口显示前不生效，见 ui() 首帧块）。
+    icon_synced: bool,
     was_minimized: bool,
 
     settings_open: bool,
@@ -990,8 +995,20 @@ impl App {
         let steam_state = Arc::new(SteamState::new());
         let steam_monitor = SteamMonitor::new(&steam_state);
         let steam_running = steam_monitor.is_running();
+        let minimize_to_tray = config.minimize_to_tray;
+        let theme_pref = config.theme;
+        // 主题在托盘创建前确定（托盘图标按当前主题选版，GLOSSARY「应用图标」深/浅双态）。
+        let palette = match theme_pref {
+            ThemePreference::Dark => Palette::dark(),
+            ThemePreference::Light => Palette::light(),
+            ThemePreference::System => match cc.egui_ctx.system_theme() {
+                Some(egui::Theme::Light) => Palette::light(),
+                Some(egui::Theme::Dark) | None => Palette::dark(), // 检测缺失回退 Dark（与 egui fallback 同值）
+            },
+        };
+        let mark_dark = palette.dark_mode;
         let tray = Tray::new(
-            crate::tray::load_icon(),
+            crate::brand::tray_icon(palette.dark_mode),
             strings.app_title,
             strings.tray_show,
             strings.tray_quit,
@@ -1002,17 +1019,6 @@ impl App {
 
         let flow = CompatFlow::new();
 
-        let minimize_to_tray = config.minimize_to_tray;
-        let theme_pref = config.theme;
-        let palette = match theme_pref {
-            ThemePreference::Dark => Palette::dark(),
-            ThemePreference::Light => Palette::light(),
-            ThemePreference::System => match cc.egui_ctx.system_theme() {
-                Some(egui::Theme::Light) => Palette::light(),
-                Some(egui::Theme::Dark) | None => Palette::dark(), // 检测缺失回退 Dark（与 egui fallback 同值）
-            },
-        };
-        let mark_dark = palette.dark_mode;
         // 启动即应用持久化主题偏好（ADR-0016）：egui 默认 ThemePreference::System，
         // 不显式设置则固定 Dark/Light 会在首帧被 OS 主题覆盖，重启后恢复失效。
         cc.egui_ctx.set_theme(to_egui_theme_pref(theme_pref));
@@ -1053,7 +1059,12 @@ impl App {
             compat_details_open: false,
             compat_scroll_pending: false,
             github_mark: load_github_mark(&cc.egui_ctx, palette),
+            logo: brand::logo_texture(&cc.egui_ctx, palette.dark_mode),
+            icon_synced: false,
         };
+        // 窗口图标不在 App::new 发送：ViewportCommand::Icon 在窗口显示前不生效（实测被吞，
+        // 标题栏沿用 ViewportBuilder 图标）。初始图标已按 config 主题选版（见 main.rs），
+        // System 模式校正与后续主题切换走 ui() 的 palette 钩子/首帧同步。
         app.sync_tray_restart_enabled();
         // 启动即喂首次路径：产出首次快速体检效果（初始 checking 骨架态，零白屏）。
         app.on_compat_event(
@@ -1672,35 +1683,35 @@ impl App {
             dll::dll_dir(),
         ));
     }
-    /// 顶部应用头：品牌 mark + 名称 + 设置齿轮（spec §7）。
+    /// 顶部应用头：品牌 LOGO + 名称 + 设置齿轮（spec §7；LOGO 深/浅双态，GLOSSARY「应用图标」）。
     fn header(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::hover());
             if ui.is_rect_visible(rect) {
-                let painter = ui.painter();
-                painter.rect(
-                    rect,
-                    egui::CornerRadius::same(R_SMALL),
-                    self.palette.accent,
-                    egui::Stroke::NONE,
-                    egui::StrokeKind::Inside,
-                );
-                main_page::paint_icon(
-                    painter,
-                    IconKind::Play,
-                    rect.center() + egui::vec2(-3.0, 0.0),
-                    self.palette.white,
-                    11.0,
-                    0.0,
-                );
-                // mark 右下角白环（原型 brand SVG 的环绕圆）。
-                painter.circle_stroke(
-                    rect.center() + egui::vec2(8.5, 8.5),
-                    3.4,
-                    egui::Stroke::new(1.6, self.palette.white),
-                );
+                if let Some(tex) = &self.logo {
+                    // 20px 品牌 LOGO 居中于 30px 分配格：header 行高与高度测量测试保持不变。
+                    let logo_rect =
+                        egui::Rect::from_center_size(rect.center(), egui::vec2(20.0, 20.0));
+                    ui.painter().image(
+                        tex.id(),
+                        logo_rect,
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        self.palette.white,
+                    );
+                } else {
+                    // 纹理缺失兜底：accent 占位块（正常路径不触发）。
+                    let painter = ui.painter();
+                    painter.rect(
+                        rect,
+                        egui::CornerRadius::same(R_SMALL),
+                        self.palette.accent,
+                        egui::Stroke::NONE,
+                        egui::StrokeKind::Inside,
+                    );
+                }
             }
-            ui.add_space(11.0);
+            // logo 右缘与标题间距 ≈10px（格内居中右侧留白 5 + 此处 5）；缩短自 16px。
+            ui.add_space(5.0);
             ui.label(
                 egui::RichText::new(self.strings.app_title)
                     .size(15.0)
@@ -2680,7 +2691,29 @@ impl eframe::App for App {
             if palette.dark_mode != self.mark_dark {
                 self.mark_dark = palette.dark_mode;
                 self.github_mark = load_github_mark(&ctx, palette);
+                // 图标双态（ADR-0016 / GLOSSARY「应用图标」）：主页面 LOGO、窗口标题栏 +
+                // 任务栏按钮、托盘图标随主题同切，与 mark 共用同一模式变化钩子。
+                self.logo = brand::logo_texture(&ctx, palette.dark_mode);
+                self.ctx
+                    .send_viewport_cmd(egui::ViewportCommand::Icon(Some(Arc::new(
+                        brand::window_icon(palette.dark_mode),
+                    ))));
+                if let Some(tray) = &self.tray
+                    && let Err(e) = tray.set_icon(brand::tray_icon(palette.dark_mode))
+                {
+                    log_warn(format!("set tray icon: {e}"));
+                }
             }
+        }
+        // 首帧：窗口已显示后按当前主题同步一次窗口图标（System 模式在此按系统深浅校正）。
+        // 实测 ViewportCommand::Icon 在窗口显示前不生效（App::new 期间发送被吞），
+        // 此处 ui() 在 winit show 之后执行，命令必达；幂等，仅首帧执行。
+        if !self.icon_synced {
+            self.icon_synced = true;
+            self.ctx
+                .send_viewport_cmd(egui::ViewportCommand::Icon(Some(Arc::new(
+                    brand::window_icon(self.palette.dark_mode),
+                ))));
         }
 
         let mut content_h = 0.0f32;

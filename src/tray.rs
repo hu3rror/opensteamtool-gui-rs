@@ -64,6 +64,11 @@ impl Tray {
         self.restart_item.set_enabled(enabled);
     }
 
+    /// 更换托盘图标（深/浅主题双态，ADR-0016）：主题切换时由 App 调用。
+    pub fn set_icon(&self, icon: Option<Icon>) -> Result<(), tray_icon::Error> {
+        self._icon.set_icon(icon)
+    }
+
     pub fn is_minimize_to_tray(&self) -> bool {
         self.minimize_item.is_checked()
     }
@@ -104,13 +109,4 @@ impl Tray {
         }
         None
     }
-}
-
-pub fn load_icon() -> Option<Icon> {
-    let bytes = include_bytes!("../app.ico");
-    let img = image::load_from_memory_with_format(bytes, image::ImageFormat::Ico).ok()?;
-    let img = img.resize_to_fill(32, 32, image::imageops::FilterType::Lanczos3);
-    let rgba = img.to_rgba8();
-    let (w, h) = rgba.dimensions();
-    Icon::from_rgba(rgba.into_raw(), w, h).ok()
 }
