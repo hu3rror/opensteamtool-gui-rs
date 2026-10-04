@@ -19,12 +19,13 @@ A single-binary Windows tool that manages the OpenSteamTool patch set (three tar
 
 - **One-click actions** — apply the patch and launch Steam in one action; plain launch, exit & uninstall, uninstall & restart, and restart Steam, with confirmation only where it matters
 - **Deploy status at a glance** — a status card shows deployed / not deployed / invalid path, plus a one-line health warning when the compatibility probe reports "not yet supported upstream" or "core DLLs not found" (click to open Settings → Steam)
-- **First-run setup wizard** — three steps (language → Steam path → optional patch download), skippable at any step and re-runnable from Settings
+- **First-run setup wizard** — four steps (language → theme → Steam path → optional patch download), skippable at any step and re-runnable from Settings
 - **Three-tab settings dialog** — General (language, theme), Steam (path editor + compatibility probe), and About (app update check, re-run wizard); every change saves instantly
 - **Patch update check on the main page** — check, then download & extract a new version when one is available; patch version numbers stay out of the UI
 - **Light / dark themes** — follow the system or pick manually (Settings → General)
 - **Compatibility probe** — hashes Steam's core DLLs and checks upstream signatures (pattern / IPC channels), with auto- and manual precache
 - **Steam-aware window** — auto-hides to the tray when Steam starts, restores on exit; "minimize to tray" preference is persisted
+- **Single instance** — launching the app again never opens a second window; it brings the existing one (even hidden in the tray) back to the foreground
 - **Tray controls** — left-click toggles visibility; menu has Show, Restart Steam, "Minimize to tray automatically", and Quit
 - **Portable by design** — settings live in `config.toml`, patches in `dlls/`, both next to the executable; copy the folder and it just works
 - **Bilingual UI** — Chinese or English, picked from the system locale and switchable at runtime
@@ -34,7 +35,7 @@ A single-binary Windows tool that manages the OpenSteamTool patch set (three tar
 
 1. Download the latest ZIP from [Releases](../../releases) and extract it anywhere.
 2. Run `opensteamtool-manager.exe` — no installation.
-3. The first run opens the setup wizard: pick a language and your Steam path, then optionally download the patch DLLs (skip any step, do it later).
+3. The first run opens the setup wizard: pick a language, a theme, and your Steam path, then optionally download the patch DLLs (skip any step, do it later).
 4. Click **Apply Patch & Launch Steam**. If the patch isn't downloaded yet, use the patch-update check button on the main page, then download & extract.
 
 > [!TIP]
@@ -80,6 +81,7 @@ src/
 ├── steam.rs       # registry path detection, steam.exe launch
 ├── steam_state.rs # shared Steam process table (alive / group_running / kill)
 ├── process.rs     # Steam process monitor (2s polling cache, edge events)
+├── singleton.rs   # single instance: named-mutex gate + wake event to raise existing window (ADR-0017)
 ├── dll.rs         # target DLL deploy/uninstall, local status
 ├── workflow.rs    # action planning and step execution (plan/execute)
 ├── busy.rs        # busy gate: exclusive interactive background ops (ADR-0007)
@@ -95,4 +97,4 @@ src/
 └── ui.rs          # egui UI (main page, settings dialog, wizard rendering)
 ```
 
-Design decisions are recorded in `docs/adr/` (ADR-0001–0016); domain terms are defined in [GLOSSARY.md](GLOSSARY.md); the locked UI spec and interactive prototype live in `docs/design/`.
+Design decisions are recorded in `docs/adr/` (ADR-0001–0017); domain terms are defined in [GLOSSARY.md](GLOSSARY.md); the locked UI spec and interactive prototype live in `docs/design/`.

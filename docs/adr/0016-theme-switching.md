@@ -66,6 +66,52 @@
 - **自己监听 OS 深浅/注册表直读**：egui/winit 已封装（含高对比度兜底），
   重复实现违背零新依赖与复用纪律。
 
+## 应用图标双态（追加：统一 LOGO，深/浅各一版）
+
+统一品牌标识为同一徽标的深浅双版：`assets/logo.png`（深色版：深蓝底 + 橙红环 + 浅蓝 OST）
+与 `assets/logo-light.png`（浅色版），alpha 掩码同构（同一图形仅换配色）。四处消费点
+共用同一映射（见 GLOSSARY「应用图标」）：窗口标题栏 + 任务栏按钮、托盘、主页面左上角。
+
+### 决策
+
+- **`brand` 模块为唯一图标源**：`window_icon` / `tray_icon` / `logo_texture` 由主题
+  `.dark_mode` 选版，替换原 `main.rs::load_icon` 与 `tray.rs::load_icon` 各自读 `app.ico`
+  的重复实现（单一事实源纪律）。
+- **主题切换即换版**：三处运行时图标挂在既有 palette 模式变化钩子（与 GitHub mark 共用
+  `mark_dark` 判断）；System 模式 OS 切深浅自动跟随，无需新增监听。
+- **exe 静态图标固定深色版**：资源管理器 / 快捷方式读 exe 内嵌资源，shell 层无法按主题
+  变，只能一份；选深色版（与 `logo.png` 命名与配色一致）。`tools/generate-ico.ps1`
+  从 `logo.png` 生成多尺寸 `app.ico`（16/24/32/48/64/128/256，PNG 压缩帧，Vista+），
+  取代旧的单尺寸 256（小尺寸靠系统缩放变糊）。
+- **初始图标时序**：`ViewportBuilder` 按 config 主题选版（`main.rs::initial_window_icon`，
+  System 模式先用深色兜底）；运行中主题切换走 `ViewportCommand::Icon`。平台限制（实测）：
+  窗口显示前的 Icon 命令不生效（App::new 期间发送被吞、标题栏沿用 ViewportBuilder 图标），
+  故 App 在首帧 update（窗口已显示）再同步一次，覆盖 System 模式按系统深浅校正；托盘在
+  `App::new` 内即按初始主题选版。
+- **任务栏按钮图标固定深色版（决策，ADR 落定）**：egui 0.36 的 `ViewportCommand::Icon`
+  只更新 winit `set_window_icon`（标题栏 Small 图标）；任务栏按钮（Big 图标）由
+  `set_taskbar_icon` 控制、仅窗口创建时可设（egui 不映射）——运行中切换主题时任务栏
+  按钮恒为 exe 内嵌资源图标（app.ico 深色版）。**接受此限制**（与 exe 静态图标同一
+  深色版、自洽）：替代方案需原生 Windows 路径（hwnd + WM_SETICON ICON_BIG 更新大
+  图标），成本与收益不成比例（任务栏按钮图标不随主题是 Windows 应用常态）。
+- **主页面左上角**：header 30px 格内渲染 20px LOGO 图，替换原手绘 Play mark；行高不变，
+  高度测量测试占位同步无需改动。LOGO 自带不透明圆角色块，不做 GitHub mark 式的
+  抠底/烤白（原图即定稿）。
+
+### 否决的方案
+
+- **托盘/窗口只在启动时定一次、不做运行时切换**：System 模式 OS 切深浅时图标不跟随，
+  与「深/浅主题分别对应不同 LOGO」的意图矛盾。
+- **固定深色版不生成浅色版图标**：主页面浅色主题下 header 仍是深色色块，视觉割裂。
+- **任务栏按钮固定深色版以换取浅色高亮块对比度**：egui 窗口图标与任务栏按钮一体，
+  无法分开；跟随主题优先，浅色主题下按钮可见性偏低的风险由人工验收确认。
+
+### 验收（追加）
+
+- 深/浅主题下四处图标各为对应版本，主题切换（含 System 模式 OS 切换）即时换版。
+- `app.ico` 为 7 尺寸多帧；主页面 header 行高与改动前一致（高度测量测试不变）。
+- 人工验证项：浅色主题下任务栏按钮图标可见性、托盘 16px 清晰度、两版 LOGO 像素观感。
+
 ## 验收
 
 - 设置 — 通用页签「主题」小节：三态下拉（跟随系统 / 深色 / 浅色），即改即存、

@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<!--
+  ⚠️ PROTOTYPE — throwaway visual mockup. Question: "主页面 Hero 顶部 eyebrow 的横杠怎么处理？
+  （用户：横杠格格不入，但去掉又太空；已确认诊断=权重倒挂+形态孤例；职责=层级引入锚点）"
+
+  Four eyebrow treatments of the Main Page hero, switchable via ?v= and the bottom bar,
+  rendered inside the real hero card (dark B + light L1 palettes, applied/not-applied states).
+
+  A — 现状（参考）：accent 14×2 横短条 + PATCH
+  B — 降权横条：横条降为 border 色、缩短 10×2（分隔线语言碎片，保留锚点不抢眼）
+  C — 竖条语言：3×13 accent 竖条（对齐应用内卡标题 card_title 的既有语言）
+  D — 并入状态行：无横杠无独立行，"PATCH ·" 小字缀在大状态字左侧
+
+  This is NOT production code. Real implementation is egui painting in ui.rs (hero_eyebrow).
+  Open by double-clicking; switch with the bottom bar or ←/→ arrow keys.
+-->
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>Hero Eyebrow Prototype — 横杠处理方案</title>
+<style>
+  /* ============ design tokens ============ */
+  :root {
+    --bg:#0f151c; --surface:#151e28; --elevated:#1c2835; --border:#293746;
+    --text:#e8edf3; --text2:#a9b5c3; --muted:#778596;
+    --accent:#5c91c7; --success:#6ba88f;
+    --r-hero:18px; --eyebrow-track:.16em;
+    --page-bg:#0d0e11; --frame-border:#262a30; --titlebar-bg:#0c0f13; --titlebar-stroke:#1c2025;
+  }
+  body.light {
+    --bg:#f3f6f9; --surface:#ffffff; --elevated:#e8eef5; --border:#d3dce6;
+    --text:#1c2630; --text2:#47566a; --muted:#8494a7;
+    --accent:#3e76ac; --success:#3f8e63;
+    --page-bg:#dfe5ec; --frame-border:#c9d2dc; --titlebar-bg:#e8edf2; --titlebar-stroke:#d3dce6;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+    background: var(--page-bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    padding: 44px 16px 120px;
+    display: flex; justify-content: center;
+  }
+
+  /* ============ window frame ============ */
+  .app-window {
+    width: 620px; max-width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--frame-border);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 24px 60px rgba(0,0,0,.45);
+  }
+  .titlebar {
+    height: 30px; display: flex; align-items: center; gap: 10px;
+    padding: 0 14px; background: var(--titlebar-bg); border-bottom: 1px solid var(--titlebar-stroke);
+    font-size: 12px; color: var(--muted);
+  }
+  .tb-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--border); }
+  .tb-note { margin-left: auto; font-size: 11px; color: var(--muted); opacity: .7; letter-spacing: .02em; }
+
+  .app-header {
+    height: 52px;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 26px; border-bottom: 1px solid var(--border);
+  }
+  .brand { display: flex; align-items: center; gap: 11px; user-select: none; }
+  .brand-mark {
+    width: 30px; height: 30px; border-radius: 7px; flex: none;
+    background: linear-gradient(150deg, var(--accent), color-mix(in srgb, var(--accent) 78%, black));
+    display: grid; place-items: center;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.22), 0 1px 3px rgba(0,0,0,.4);
+  }
+  .brand-mark svg { display: block; }
+  .brand-name { font-size: 15px; font-weight: 600; letter-spacing: .01em; }
+
+  /* ============ hero ============ */
+  .content { padding: 26px 28px; }
+  .hero {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-hero);
+    padding: 26px 30px 24px;
+    position: relative;
+  }
+  .hero::after { /* inner top hairline highlight（原型既有，与横杠无关） */
+    content: ""; position: absolute; left: 14px; right: 14px; top: 0; height: 1px;
+    background: color-mix(in srgb, var(--border) 60%, transparent);
+    border-radius: inherit; pointer-events: none;
+  }
+
+  /* ---- eyebrow 行（A/B/C 共享结构，横杠样式随变体） ---- */
+  .eyebrow {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 8px;
+  }
+  .eyebrow .bar {
+    width: 14px; height: 2px; border-radius: 2px;
+    background: var(--accent); opacity: .85;
+    flex: none;
+  }
+  .eyebrow .word {
+    font-size: 12px; font-weight: 600; letter-spacing: var(--eyebrow-track);
+    text-transform: uppercase; color: var(--muted);
+  }
+
+  /* B：横条降权 —— border 色、缩短 */
+  body[data-variant="b"] .eyebrow .bar {
+    width: 10px; height: 2px; background: var(--border); opacity: .9;
+  }
+  /* C：竖条语言 —— 对齐应用内卡标题 card_title（3×13 accent 竖条） */
+  body[data-variant="c"] .eyebrow .bar {
+    width: 3px; height: 13px; border-radius: 0; background: var(--accent); opacity: 1;
+  }
+  /* D：无 eyebrow 行，PATCH 并入状态行 */
+  body[data-variant="d"] .eyebrow { display: none; }
+  body[data-variant="d"] .status-row { display: none; }
+
+  /* ---- 状态行（A/B/C）与合并行（D） ---- */
+  .status-row {
+    display: flex; align-items: center; gap: 6px;
+  }
+  .status-row .check { display: none; }
+  body[data-applied="1"] .status-row .check { display: block; }
+  .status-row .big {
+    font-size: 36px; font-weight: 650; line-height: 1.15; letter-spacing: -0.01em;
+    color: var(--text);
+  }
+  body[data-applied="1"] .status-row .big { color: var(--text); }
+
+  .status-line { display: none; align-items: center; gap: 10px; }
+  body[data-variant="d"] .status-line { display: flex; }
+  .status-line .check { display: none; }
+  body[data-applied="1"] .status-line .check { display: block; }
+  .status-line .mini {
+    font-size: 12px; font-weight: 600; letter-spacing: var(--eyebrow-track);
+    text-transform: uppercase; color: var(--muted);
+  }
+  .status-line .dot { color: var(--muted); font-size: 14px; }
+  .status-line .big {
+    font-size: 36px; font-weight: 650; line-height: 1.15; letter-spacing: -0.01em;
+    color: var(--text);
+  }
+
+  /* ============ floating switcher (not part of the design) ============ */
+  .proto {
+    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 10px;
+    background: #fff; color: #111;
+    border-radius: 999px; padding: 8px 14px;
+    box-shadow: 0 8px 30px rgba(0,0,0,.4);
+    font-size: 12.5px; z-index: 9;
+    border: 1px solid #e2e2e2;
+  }
+  .proto button {
+    border: none; background: #eee; color: #111;
+    border-radius: 999px; padding: 5px 12px; font-size: 12.5px; cursor: pointer;
+    font-family: inherit;
+  }
+  .proto button:hover { background: #ddd; }
+  .proto .arrow { width: 30px; padding: 5px 0; text-align: center; background: #eee; }
+  .proto .v-label { font-weight: 700; min-width: 150px; text-align: center; }
+  .proto .sep { width: 1px; height: 18px; background: #ddd; }
+  .proto .readout { color: #666; font-size: 11.5px; }
+  .proto .kbd { color: #999; font-size: 11px; }
+</style>
+</head>
+<body id="root" data-variant="a" data-applied="0">
+<div class="app-window">
+  <div class="titlebar">
+    <span class="tb-dot"></span>
+    <span>OpenSteamTool Manager</span>
+    <span class="tb-note">Prototype — 仅 Hero 顶部区域</span>
+  </div>
+
+  <header class="app-header">
+    <div class="brand">
+      <span class="brand-mark">
+        <svg width="17" height="17" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+          <path d="M9.5 15 15 10l-5.5-5v3.4H5v3.2h4.5V15Z" fill="rgba(255,255,255,.95)"/>
+          <circle cx="15.4" cy="14.8" r="2.4" stroke="rgba(255,255,255,.85)" stroke-width="1.4"/>
+        </svg>
+      </span>
+      <span class="brand-name">OpenSteamTool Manager</span>
+    </div>
+  </header>
+
+  <main class="content">
+    <section class="hero">
+      <!-- eyebrow 行：A/B/C 共享，横杠样式随变体切换 -->
+      <div class="eyebrow">
+        <span class="bar"></span>
+        <span class="word">PATCH</span>
+      </div>
+
+      <!-- 状态行：A/B/C -->
+      <div class="status-row">
+        <svg class="check" width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+          <path d="M4 10.5 8.2 14.5 16 6" stroke="var(--success)" stroke-width="2.6"
+                stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="big">未应用</span>
+      </div>
+
+      <!-- 合并行：D -->
+      <div class="status-line">
+        <svg class="check" width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+          <path d="M4 10.5 8.2 14.5 16 6" stroke="var(--success)" stroke-width="2.6"
+                stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="mini">PATCH</span>
+        <span class="dot">·</span>
+        <span class="big">未应用</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- prototype controls -->
+<div class="proto">
+  <button class="arrow" id="prev" title="上一个变体">◀</button>
+  <span class="v-label" id="v-label">A · 现状（参考）</span>
+  <button class="arrow" id="next" title="下一个变体">▶</button>
+  <span class="sep"></span>
+  <button id="theme-btn">主题：深色</button>
+  <button id="state-btn">状态：未应用</button>
+  <span class="sep"></span>
+  <span class="readout" id="readout"></span>
+  <span class="kbd">(←/→ 切变体)</span>
+</div>
+
+<script>
+"use strict";
+/* ============================ variants ============================ */
+const VARIANTS = [
+  { key: "a", name: "现状（参考）" },
+  { key: "b", name: "降权横条" },
+  { key: "c", name: "竖条语言" },
+  { key: "d", name: "并入状态行" },
+];
+let variant = "a";
+let applied = false;   // 状态：未应用 / 已应用
+let light = false;     // 主题：深色 / 浅色
+
+const ST_ZH = { not: "未应用", yes: "已应用" };
+const ST_EN = { not: "Not Applied", yes: "Applied" };
+
+/* ============================ render ============================ */
+function setVariant(v) {
+  variant = v;
+  document.body.dataset.variant = v;
+  const meta = VARIANTS.find(x => x.key === v);
+  document.getElementById("v-label").textContent =
+    v.toUpperCase() + " · " + meta.name;
+  const url = new URL(location.href);
+  url.searchParams.set("v", v);
+  history.replaceState(null, "", url);
+  renderReadout();
+}
+
+function setApplied(yes) {
+  applied = yes;
+  document.body.dataset.applied = yes ? "1" : "0";
+  const zh = yes ? ST_ZH.yes : ST_ZH.not;
+  document.querySelectorAll(".status-row .big, .status-line .big")
+    .forEach(el => el.textContent = zh);
+  document.getElementById("state-btn").textContent = "状态：" + (yes ? "已应用" : "未应用");
+  renderReadout();
+}
+
+function setLight(on) {
+  light = on;
+  document.body.classList.toggle("light", on);
+  document.getElementById("theme-btn").textContent = "主题：" + (on ? "浅色" : "深色");
+  renderReadout();
+}
+
+function renderReadout() {
+  document.getElementById("readout").textContent =
+    variant.toUpperCase() + " · " + (light ? "浅色" : "深色") + " · " +
+    (applied ? "已应用" : "未应用");
+}
+
+/* ============================ wiring ============================ */
+function cycle(dir) {
+  const i = VARIANTS.findIndex(x => x.key === variant);
+  setVariant(VARIANTS[(i + dir + VARIANTS.length) % VARIANTS.length].key);
+}
+
+document.getElementById("prev").addEventListener("click", () => cycle(-1));
+document.getElementById("next").addEventListener("click", () => cycle(1));
+document.getElementById("theme-btn").addEventListener("click", () => setLight(!light));
+document.getElementById("state-btn").addEventListener("click", () => setApplied(!applied));
+
+document.addEventListener("keydown", (e) => {
+  if (e.target && e.target.matches && e.target.matches("input, textarea, [contenteditable]")) return;
+  if (e.key === "ArrowLeft") { e.preventDefault(); cycle(-1); }
+  if (e.key === "ArrowRight") { e.preventDefault(); cycle(1); }
+});
+
+/* ============================ init ============================ */
+const p = new URLSearchParams(location.search).get("v");
+if (p && VARIANTS.some(x => x.key === p)) setVariant(p);
+setApplied(new URLSearchParams(location.search).get("s") === "1");
+setLight(new URLSearchParams(location.search).get("t") === "light");
+</script>
+</body>
+</html>

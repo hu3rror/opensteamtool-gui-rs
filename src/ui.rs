@@ -7,6 +7,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use eframe::egui;
 use egui::Frame;
 
+use crate::brand;
 use crate::busy::{BusyGate, BusyKind};
 use crate::compat;
 use crate::compat_flow::{self, CompatFlow, CompatSummary};
@@ -18,6 +19,7 @@ use crate::main_page::{
     UpdateKind,
 };
 use crate::process::{self, SteamEvent, SteamMonitor};
+use crate::singleton::Singleton;
 use crate::steam;
 use crate::steam_state::SteamState;
 use crate::theme::{self, ButtonPalette, ButtonStyle, Palette};
@@ -264,8 +266,8 @@ fn load_github_mark(ctx: &egui::Context, palette: Palette) -> Option<egui::Textu
 
 fn card_title(ui: &mut egui::Ui, text: &str, palette: Palette) {
     ui.horizontal(|ui| {
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(3.0, 13.0), egui::Sense::hover());
-        ui.painter().rect_filled(rect, 0.0, palette.accent);
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 2.0), egui::Sense::hover());
+        ui.painter().rect_filled(rect, 1.0, palette.border);
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new(text)
@@ -309,7 +311,7 @@ fn status_bar_items(
         items.push((strings.status_steam_stopped.to_string(), palette.weak));
     }
     if let Some(kind) = busy
-        && kind != BusyKind::Checking
+        && !kind.is_update_flow()
     {
         items.push((strings.busy_label(kind).to_string(), palette.busy_ink()));
     }
@@ -353,6 +355,8 @@ fn health_warning(s: &Strings, summary: CompatSummary) -> Option<&'static str> {
 
 enum Msg {
     Phase(BusyKind),
+    /// 重复启动（另一实例已置位唤醒事件）：把窗口带回前台。
+    ActivateRequested,
     UpdateChecked(Result<OnlineInfo, UpdateError>),
     Downloaded(Result<(), UpdateError>),
     WorkflowDone(Action, Result<(), workflow::WorkflowError>),
@@ -498,6 +502,10 @@ pub struct App {
     palette: Palette,
     /// GitHub mark 的加载模式（dark/light）；palette 模式变化时重载（ADR-0016 图片双态）。
     mark_dark: bool,
+    /// 主页面左上角品牌 LOGO 纹理（深/浅双态，GLOSSARY「应用图标」；palette 模式变化时重载）。
+    logo: Option<egui::TextureHandle>,
+    /// 首帧窗口图标同步是否已执行（ViewportCommand::Icon 在窗口显示前不生效，见 ui() 首帧块）。
+    icon_synced: bool,
     was_minimized: bool,
 
     settings_open: bool,
@@ -665,6 +673,26 @@ fn theme_combo(
     tri_state_combo(ui, options, selected, width, salt, palette)
 }
 
+/// ComboBox 内部自建 horizontal 行（子内容左对齐），父层 `Align::Center` 管不到它；
+/// 用外层 horizontal + 偏移把下拉推到卡片中线上（向导语言/主题步骤的居中对齐）。
+fn centered_combo<T: Copy + PartialEq>(
+    ui: &mut egui::Ui,
+    options: [(T, &'static str); 3],
+    selected: T,
+    width: f32,
+    salt: &'static str,
+    palette: Palette,
+) -> Option<T> {
+    let mut chosen = None;
+    ui.horizontal(|ui| {
+        ui.add_space((ui.available_width() - width) / 2.0);
+        if let Some(v) = tri_state_combo(ui, options, selected, width, salt, palette) {
+            chosen = Some(v);
+        }
+    });
+    chosen
+}
+
 fn wizard_download() -> Result<(), UpdateError> {
     let info = updater::check_update()?;
     updater::download_and_extract(&info, &dll::dll_dir())
@@ -718,6 +746,15 @@ fn wizard_step3_content(strings: &Strings, dl: &wizard::DownloadState) -> Wizard
     }
 }
 
+fn wizard_step_number(step: wizard::Step) -> u32 {
+    match step {
+        WizardStep::Language => 1,
+        WizardStep::Theme => 2,
+        WizardStep::SteamPath => 3,
+        WizardStep::Download => 4,
+    }
+}
+
 /// 向导步骤渲染（纯函数：视图 + 文案 → 用户意图 + 卡片矩形；不触碰 App 状态，可单测）。
 fn wizard_steps_ui(
     ui: &mut egui::Ui,
@@ -744,11 +781,7 @@ fn wizard_steps_ui(
                             .color(palette.ink),
                     );
                     ui.add_space(4.0);
-                    let n = match view.step {
-                        WizardStep::Language => 1,
-                        WizardStep::SteamPath => 2,
-                        WizardStep::Download => 3,
-                    };
+                    let n = wizard_step_number(view.step);
                     ui.label(
                         egui::RichText::new(strings.wizard_step_of.replace("{n}", &n.to_string()))
                             .size(12.0)
@@ -762,23 +795,16 @@ fn wizard_steps_ui(
                                 egui::RichText::new(strings.wizard_language_prompt).size(13.0),
                             );
                             ui.add_space(12.0);
-                            let options = strings.language_options();
-                            // ComboBox 内部自建 horizontal 行（子内容左对齐），父层 Align::Center 管不到它；
-                            // 用外层 horizontal + 偏移把它推到与「下一步」按钮同一条中线上。
-                            let combo_w = 240.0;
-                            ui.horizontal(|ui| {
-                                ui.add_space((ui.available_width() - combo_w) / 2.0);
-                                if let Some(lang) = language_combo(
-                                    ui,
-                                    options,
-                                    view.language,
-                                    combo_w,
-                                    "wizard_language",
-                                    palette,
-                                ) {
-                                    event = Some(wizard::Event::LanguageChosen(lang));
-                                }
-                            });
+                            if let Some(lang) = centered_combo(
+                                ui,
+                                strings.language_options(),
+                                view.language,
+                                240.0,
+                                "wizard_language",
+                                palette,
+                            ) {
+                                event = Some(wizard::Event::LanguageChosen(lang));
+                            }
                             ui.add_space(14.0);
                             if styled_button(
                                 ui,
@@ -791,6 +817,33 @@ fn wizard_steps_ui(
                             .clicked()
                             {
                                 event = Some(wizard::Event::LanguageSubmitted);
+                            }
+                        }
+                        WizardStep::Theme => {
+                            ui.label(egui::RichText::new(strings.wizard_theme_prompt).size(13.0));
+                            ui.add_space(12.0);
+                            if let Some(theme) = centered_combo(
+                                ui,
+                                strings.theme_options(),
+                                view.theme,
+                                240.0,
+                                "wizard_theme",
+                                palette,
+                            ) {
+                                event = Some(wizard::Event::ThemeChosen(theme));
+                            }
+                            ui.add_space(14.0);
+                            if styled_button(
+                                ui,
+                                strings.wizard_btn_next,
+                                ButtonStyle::Primary,
+                                egui::vec2(140.0, 34.0),
+                                true,
+                                palette,
+                            )
+                            .clicked()
+                            {
+                                event = Some(wizard::Event::ThemeSubmitted);
                             }
                         }
                         WizardStep::SteamPath => {
@@ -895,10 +948,22 @@ fn auto_tray_policy(event: SteamEvent, window_visible: bool) -> Option<bool> {
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, singleton: Singleton) -> Self {
         install_cjk_font(&cc.egui_ctx);
         install_theme(&cc.egui_ctx);
         let (tx, rx) = mpsc::channel();
+        // 单实例唤醒线程：守卫随线程存活到进程退出——中途 drop 会放开互斥体，多开防护随之失效。
+        {
+            let tx = tx.clone();
+            let ctx = cc.egui_ctx.clone();
+            std::thread::spawn(move || {
+                loop {
+                    singleton.wait_activate();
+                    let _ = tx.send(Msg::ActivateRequested);
+                    ctx.request_repaint();
+                }
+            });
+        }
         // 启动即恢复应用配置（语言偏好 + Steam 路径，见 ADR-0012）：缺失文件 = 默认值；损坏/版本不符 = 类型化错误降级（不 panic）。
         let config = match config::load(&config::config_path()) {
             Ok(cfg) => cfg,
@@ -921,16 +986,29 @@ impl App {
         } else {
             config.steam_path.clone()
         };
-        let wizard = wizard::should_show(&config::config_path())
-            .then(|| wizard::Wizard::new(lang_pref, steam_path.clone(), dll::dll_dir()));
+        let wizard = wizard::should_show(&config::config_path()).then(|| {
+            wizard::Wizard::new(lang_pref, config.theme, steam_path.clone(), dll::dll_dir())
+        });
         let steam_dir = Path::new(&steam_path);
         let status = dll::check_status(steam_dir);
         let local_version = dll::read_local_version(&dll::dll_dir());
         let steam_state = Arc::new(SteamState::new());
         let steam_monitor = SteamMonitor::new(&steam_state);
         let steam_running = steam_monitor.is_running();
+        let minimize_to_tray = config.minimize_to_tray;
+        let theme_pref = config.theme;
+        // 主题在托盘创建前确定（托盘图标按当前主题选版，GLOSSARY「应用图标」深/浅双态）。
+        let palette = match theme_pref {
+            ThemePreference::Dark => Palette::dark(),
+            ThemePreference::Light => Palette::light(),
+            ThemePreference::System => match cc.egui_ctx.system_theme() {
+                Some(egui::Theme::Light) => Palette::light(),
+                Some(egui::Theme::Dark) | None => Palette::dark(), // 检测缺失回退 Dark（与 egui fallback 同值）
+            },
+        };
+        let mark_dark = palette.dark_mode;
         let tray = Tray::new(
-            crate::tray::load_icon(),
+            crate::brand::tray_icon(palette.dark_mode),
             strings.app_title,
             strings.tray_show,
             strings.tray_quit,
@@ -941,17 +1019,6 @@ impl App {
 
         let flow = CompatFlow::new();
 
-        let minimize_to_tray = config.minimize_to_tray;
-        let theme_pref = config.theme;
-        let palette = match theme_pref {
-            ThemePreference::Dark => Palette::dark(),
-            ThemePreference::Light => Palette::light(),
-            ThemePreference::System => match cc.egui_ctx.system_theme() {
-                Some(egui::Theme::Light) => Palette::light(),
-                Some(egui::Theme::Dark) | None => Palette::dark(), // 检测缺失回退 Dark（与 egui fallback 同值）
-            },
-        };
-        let mark_dark = palette.dark_mode;
         // 启动即应用持久化主题偏好（ADR-0016）：egui 默认 ThemePreference::System，
         // 不显式设置则固定 Dark/Light 会在首帧被 OS 主题覆盖，重启后恢复失效。
         cc.egui_ctx.set_theme(to_egui_theme_pref(theme_pref));
@@ -992,7 +1059,12 @@ impl App {
             compat_details_open: false,
             compat_scroll_pending: false,
             github_mark: load_github_mark(&cc.egui_ctx, palette),
+            logo: brand::logo_texture(&cc.egui_ctx, palette.dark_mode),
+            icon_synced: false,
         };
+        // 窗口图标不在 App::new 发送：ViewportCommand::Icon 在窗口显示前不生效（实测被吞，
+        // 标题栏沿用 ViewportBuilder 图标）。初始图标已按 config 主题选版（见 main.rs），
+        // System 模式校正与后续主题切换走 ui() 的 palette 钩子/首帧同步。
         app.sync_tray_restart_enabled();
         // 启动即喂首次路径：产出首次快速体检效果（初始 checking 骨架态，零白屏）。
         app.on_compat_event(
@@ -1087,6 +1159,10 @@ impl App {
         while let Ok(msg) = self.rx.try_recv() {
             match msg {
                 Msg::Phase(kind) => self.gate.replace(kind),
+                Msg::ActivateRequested => {
+                    // 重复启动（含托盘隐藏中的窗口）：恢复显示并聚焦到前台。
+                    self.set_window_visible(true);
+                }
                 Msg::UpdateChecked(res) => {
                     self.gate.clear();
                     self.update_flow.check_done(res); // 结果只存这一份（单一事实源）
@@ -1264,6 +1340,10 @@ impl App {
     fn wizard_event(&mut self, ctx: &egui::Context, event: wizard::Event) {
         let (v, effects) = self.wizard.as_mut().unwrap().step(event);
         self.set_language(v.language);
+        // 主题仅在变化时写入（路径编辑每键触发的事件不落盘）；set_theme 即改即存（ADR-0016 唯一写入点）。
+        if v.theme != self.theme_pref {
+            self.set_theme(v.theme);
+        }
         self.exec_wizard_effects(ctx, effects);
     }
 
@@ -1276,6 +1356,7 @@ impl App {
                 }
                 wizard::Effect::Finish {
                     language,
+                    theme,
                     steam_path,
                 } => {
                     debug_assert!(
@@ -1283,6 +1364,7 @@ impl App {
                         "Finish 效果只能由已结束的向导产出"
                     );
                     self.config.language = language;
+                    self.config.theme = theme;
                     self.config.steam_path = steam_path.clone();
                     self.persist_config();
                     self.steam_path = steam_path;
@@ -1596,39 +1678,40 @@ impl App {
         self.settings_open = false;
         self.wizard = Some(wizard::Wizard::new(
             self.lang_pref,
+            self.theme_pref,
             self.steam_path.clone(),
             dll::dll_dir(),
         ));
     }
-    /// 顶部应用头：品牌 mark + 名称 + 设置齿轮（spec §7）。
+    /// 顶部应用头：品牌 LOGO + 名称 + 设置齿轮（spec §7；LOGO 深/浅双态，GLOSSARY「应用图标」）。
     fn header(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::hover());
             if ui.is_rect_visible(rect) {
-                let painter = ui.painter();
-                painter.rect(
-                    rect,
-                    egui::CornerRadius::same(R_SMALL),
-                    self.palette.accent,
-                    egui::Stroke::NONE,
-                    egui::StrokeKind::Inside,
-                );
-                main_page::paint_icon(
-                    painter,
-                    IconKind::Play,
-                    rect.center() + egui::vec2(-3.0, 0.0),
-                    self.palette.white,
-                    11.0,
-                    0.0,
-                );
-                // mark 右下角白环（原型 brand SVG 的环绕圆）。
-                painter.circle_stroke(
-                    rect.center() + egui::vec2(8.5, 8.5),
-                    3.4,
-                    egui::Stroke::new(1.6, self.palette.white),
-                );
+                if let Some(tex) = &self.logo {
+                    // 20px 品牌 LOGO 居中于 30px 分配格：header 行高与高度测量测试保持不变。
+                    let logo_rect =
+                        egui::Rect::from_center_size(rect.center(), egui::vec2(20.0, 20.0));
+                    ui.painter().image(
+                        tex.id(),
+                        logo_rect,
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        self.palette.white,
+                    );
+                } else {
+                    // 纹理缺失兜底：accent 占位块（正常路径不触发）。
+                    let painter = ui.painter();
+                    painter.rect(
+                        rect,
+                        egui::CornerRadius::same(R_SMALL),
+                        self.palette.accent,
+                        egui::Stroke::NONE,
+                        egui::StrokeKind::Inside,
+                    );
+                }
             }
-            ui.add_space(11.0);
+            // logo 右缘与标题间距 ≈10px（格内居中右侧留白 5 + 此处 5）。
+            ui.add_space(5.0);
             ui.label(
                 egui::RichText::new(self.strings.app_title)
                     .size(15.0)
@@ -1759,8 +1842,8 @@ impl App {
         let v = CompatView::snapshot(self);
 
         ui.horizontal(|ui| {
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(3.0, 13.0), egui::Sense::hover());
-            ui.painter().rect_filled(rect, 0.0, self.palette.accent);
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 2.0), egui::Sense::hover());
+            ui.painter().rect_filled(rect, 1.0, self.palette.border);
             ui.add_space(8.0);
             ui.label(
                 egui::RichText::new(self.strings.compat_title)
@@ -2001,12 +2084,12 @@ impl App {
         }
     }
 
-    /// eyebrow：accent 短条 + 大写 PATCH（spec §14 定稿，双语一致）。
+    /// eyebrow：降权短条 + 大写 PATCH（spec §14 定稿，双语一致；短条形态与色槽见 ADR-0018）。
     fn hero_eyebrow(&self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 2.0), egui::Sense::hover());
-            ui.painter().rect_filled(rect, 1.0, self.palette.accent);
-            ui.add_space(10.0);
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 2.0), egui::Sense::hover());
+            ui.painter().rect_filled(rect, 1.0, self.palette.border);
+            ui.add_space(8.0);
             ui.label(
                 egui::RichText::new(main_page::EYEBROW)
                     .size(12.0)
@@ -2592,13 +2675,9 @@ impl eframe::App for App {
         self.was_minimized = minimized;
 
         self.handle_messages();
-    }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let ctx = ui.ctx().clone();
-
-        // 每帧同步当前色板：System 模式下 OS 切深浅由 egui 解析（ctx.theme()），UI 引用点随之换色；
-        // mark 按模式重载（Dark 烤白 / L1 保留黑 mark）。
+        // 每帧同步当前色板（放在 logic 而非 ui：窗口隐藏/托盘隐身期 ui() 不调用，托盘图标
+        // 仍需随 System 模式 OS 切深浅换版）。mark 按模式重载（Dark 烤白 / L1 保留黑 mark）。
         let palette = match ctx.theme() {
             egui::Theme::Dark => Palette::dark(),
             egui::Theme::Light => Palette::light(),
@@ -2607,9 +2686,37 @@ impl eframe::App for App {
             self.palette = palette;
             if palette.dark_mode != self.mark_dark {
                 self.mark_dark = palette.dark_mode;
-                self.github_mark = load_github_mark(&ctx, palette);
+                self.github_mark = load_github_mark(ctx, palette);
+                // 图标双态（ADR-0016 / GLOSSARY「应用图标」）：主页面 LOGO、窗口标题栏 +
+                // 任务栏按钮、托盘图标随主题同切，与 mark 共用同一模式变化钩子。
+                self.logo = brand::logo_texture(ctx, palette.dark_mode);
+                self.ctx
+                    .send_viewport_cmd(egui::ViewportCommand::Icon(Some(Arc::new(
+                        brand::window_icon(palette.dark_mode),
+                    ))));
+                if let Some(tray) = &self.tray
+                    && let Err(e) = tray.set_icon(brand::tray_icon(palette.dark_mode))
+                {
+                    log_warn(format!("set tray icon: {e}"));
+                }
             }
         }
+        // 首帧窗口图标同步：实测 ViewportCommand::Icon 在窗口显示前不生效（App::new 期间
+        // 发送被吞，标题栏沿用 ViewportBuilder 图标，见 main.rs），故等窗口真实显示后再发
+        // 一次，校正 System 模式按系统深浅的主题（隐藏期不触发，恢复显示后下一帧补上）。
+        // 幂等，仅首帧触发。
+        if !self.icon_synced && ctx.input(|i| i.viewport().visible()).unwrap_or(false) {
+            self.icon_synced = true;
+            self.ctx
+                .send_viewport_cmd(egui::ViewportCommand::Icon(Some(Arc::new(
+                    brand::window_icon(self.palette.dark_mode),
+                ))));
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // 色板与图标已在 logic() 按当前主题同步，此处只消费 self.palette / self.logo。
+        let ctx = ui.ctx().clone();
 
         let mut content_h = 0.0f32;
         egui::CentralPanel::default().show(ui, |ui| {
@@ -2867,6 +2974,30 @@ mod tests {
     }
 
     #[test]
+    fn status_bar_keeps_interaction_busy_but_drops_update_flow() {
+        // §32/§34：交互类忙碌可占状态栏；检查/下载（更新流程）只在更新按钮位原位，不进状态栏。
+        let zh = Strings::new(Lang::Zh);
+        let texts = |busy: Option<BusyKind>| -> Vec<String> {
+            status_bar_items(false, busy, None, &zh, Palette::dark())
+                .iter()
+                .map(|(t, _)| t.clone())
+                .collect()
+        };
+        let deploying = texts(Some(BusyKind::Deploying));
+        assert!(
+            deploying.iter().any(|t| t == zh.busy_deploying),
+            "交互类 busy 应占状态栏：{deploying:?}"
+        );
+        for kind in [BusyKind::Checking, BusyKind::Downloading] {
+            let got = texts(Some(kind));
+            assert!(
+                !got.iter().any(|t| t == zh.busy_label(kind)),
+                "{kind:?} 不进状态栏：{got:?}"
+            );
+        }
+    }
+
+    #[test]
     fn primary_cta_fits_longest_english_label() {
         // spec §42：英文 Primary 单行不换行、不缩字——在 340lp 基线宽度内放得下。
         let ctx = egui::Context::default();
@@ -3006,7 +3137,7 @@ mod tests {
                 for lang in [Lang::Zh, Lang::En] {
                     let s = Strings::new(lang);
                     ui.horizontal(|ui| {
-                        ui.allocate_exact_size(egui::vec2(3.0, 13.0), egui::Sense::hover());
+                        ui.allocate_exact_size(egui::vec2(10.0, 2.0), egui::Sense::hover());
                         ui.add_space(8.0);
                         ui.label(egui::RichText::new(s.compat_title).size(13.5).strong());
                     });
@@ -3089,6 +3220,7 @@ mod tests {
                 let view = wizard::View {
                     step: WizardStep::Language,
                     language: Language::Auto,
+                    theme: ThemePreference::System,
                     steam_path: String::new(),
                     path_valid: false,
                     download: wizard::DownloadState::Idle,
@@ -3115,6 +3247,14 @@ mod tests {
             "卡片不应是整窗宽（实际 {}",
             rect.width()
         );
+    }
+
+    #[test]
+    fn wizard_step_numbers_run_1_to_4() {
+        assert_eq!(wizard_step_number(WizardStep::Language), 1);
+        assert_eq!(wizard_step_number(WizardStep::Theme), 2);
+        assert_eq!(wizard_step_number(WizardStep::SteamPath), 3);
+        assert_eq!(wizard_step_number(WizardStep::Download), 4);
     }
 
     #[test]
@@ -3223,9 +3363,9 @@ mod tests {
                         ui.set_width(ui.available_width());
                         ui.horizontal(|ui| {
                             let (rect, _) =
-                                ui.allocate_exact_size(egui::vec2(14.0, 2.0), egui::Sense::hover());
-                            ui.painter().rect_filled(rect, 1.0, Palette::dark().accent);
-                            ui.add_space(10.0);
+                                ui.allocate_exact_size(egui::vec2(10.0, 2.0), egui::Sense::hover());
+                            ui.painter().rect_filled(rect, 1.0, Palette::dark().border);
+                            ui.add_space(8.0);
                             ui.label(
                                 egui::RichText::new(main_page::EYEBROW)
                                     .size(12.0)
