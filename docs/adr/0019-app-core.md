@@ -29,3 +29,13 @@ ADR-0006/0007/0008 承诺「App 只喂事件、执行效果并渲染展示态」
 - 行为等价：应用 / 卸载 / 更新 / 向导 / 托盘 / 单实例全链路对照现有 UI 手动验收；既有测试全绿。
 - 新增编排核心测试：消息乱序与迟到丢弃、确认框生命周期（request_action → confirm → start_action）、门禁拒绝路径、向导终局后迟到下载、快照派生。
 - `cargo test --workspace` / `cargo check --workspace --all-targets` / `cargo clippy --workspace --all-targets` / `cargo fmt --all --check` 全绿。
+
+## 修订（2026-10，切片 3 落地，issue #46）
+
+切片 3（主盘）交付后的实现差异，逐条对上文：
+
+- **子域状态机数量**：上文写四台；现状为**三台在核心**（更新流程 / 忙碌门禁 / 体检流程）——「首次运行向导」因内部文件系统判据（`is_valid_steam_dir` 每步回显、`target_dlls_present` 就绪判据）与语言/主题即改即存的壳副作用链，**留壳**，其效果（下载 / 终局）收编进 `AppEffect` 家族由统一执行器执行。向导状态机迁移留待后续切片，GLOSSARY 词条已按现状订正。
+- **效果统一**：上文「单一 `AppEffect` 枚举、外壳只有一个 executor」已兑现——compat（探针/刷新/预热）与向导（下载/终局）效果平铺进家族（内部枚举被包裹、不进 interface）；壳侧 `exec_compat_effects` / `exec_wizard_effects` 已删除，统一执行器 `exec_app_effects` 是全壳唯一效果执行函数。
+- **窗口显隐**：上文「egui 基础设施（…窗口显隐）留外壳」——执行仍留壳（唯一物理写入点 `set_window_visible`），但 **Steam 联动决策迁入核心**：`window_visible` 镜像（`AppEvent::WindowVisibleChanged`，壳物理写入后回喂）+ Steam 边沿事件（`SteamStarted`/`SteamStopped`）驱动 auto-tray 表决策，产出 `AppEffect::SetWindowVisible`；工作流后隐窗（RescanSteam）改核心内 pending 合成，删除壳执行器隐窗与「唯一发射者」注释债。托盘 / 单实例 / 最小化显隐仍壳决策，经同一写入点同步镜像。
+- **P5 反馈环统一**：`RefreshFacts` 与 compat 路径回喂全部经效果队列（`queue.extend(core.step(…))`），不再嵌套调事件入口；壳侧 `refresh_facts()` 拆为「探测+同步」与「队列回喂」两步，队列深度注释由 ≤ 2 更新为 ≤ 3。
+- **快照**：`Snapshot.compat`（体检域含报告/次数/预热错误，零 i18n）；窗口显隐镜像不进快照（避免第二事实源）。渲染仍直读向导视图一处在 GLOSSARY 显式标注。
