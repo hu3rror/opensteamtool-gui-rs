@@ -426,28 +426,6 @@ impl std::fmt::Display for CompatError {
     }
 }
 
-/// 沿镜像链下载首个 2xx 的 TOML 内容（自定义模板替代语义与探测一致）。
-fn download_first(urls: &[String]) -> Result<Vec<u8>, CompatError> {
-    let agent = crate::updater::download_agent();
-    let mut last_err: Option<CompatError> = None;
-    for url in urls {
-        match agent.get(url).call() {
-            Ok(resp) => {
-                let body = resp
-                    .into_body()
-                    .read_to_vec()
-                    .map_err(|e| CompatError::Network(format!("read body: {e}")))?;
-                return Ok(body);
-            }
-            Err(ureq::Error::StatusCode(404)) => {
-                last_err = Some(CompatError::Network(format!("HTTP 404: {url}")));
-            }
-            Err(e) => last_err = Some(CompatError::Network(e.to_string())),
-        }
-    }
-    Err(last_err.unwrap_or_else(|| CompatError::Network("no URLs".into())))
-}
-
 /// 持久化 TOML 到本地缓存：建目录 + 原子写（避免半截文件被上游热重载读到）。
 fn write_cache_file(
     steam_dir: &Path,
@@ -460,17 +438,25 @@ fn write_cache_file(
         .parent()
         .ok_or_else(|| CompatError::Io("no parent dir".into()))?;
     fs::create_dir_all(dir).map_err(|e| CompatError::Io(format!("create dir: {e}")))?;
-    crate::fsutil::write_atomic(&path, body)
+    crate::downloads::write_atomic(&path, body)
         .map_err(|e| CompatError::Io(format!("write {}: {e}", path.display())))?;
     Ok(())
 }
 
-#[allow(dead_code)]
+/// 预热：沿镜像链下载首个 2xx 的 TOML 并原子落盘（下载语义在 downloads 模块，ADR-0021）。
 pub fn precache(steam_dir: &Path, target: ProbeTarget, sha256: &str) -> Result<(), CompatError> {
     let template = remote_url_template(steam_dir);
     let urls = build_urls(template.as_deref(), target, sha256);
-    let body = download_first(&urls)?;
+    let body = crate::downloads::first_match(&urls, crate::downloads::Policy::Small)
+        .map_err(downloads_error_to_compat)?;
     write_cache_file(steam_dir, target, sha256, &body)
+}
+
+fn downloads_error_to_compat(e: crate::downloads::DownloadError) -> CompatError {
+    match e {
+        crate::downloads::DownloadError::NotFound404 => CompatError::Network("HTTP 404".into()),
+        crate::downloads::DownloadError::Network(d) => CompatError::Network(d),
+    }
 }
 
 #[cfg(test)]

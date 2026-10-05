@@ -20,10 +20,6 @@ const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const GLOBAL_TIMEOUT: Duration = Duration::from_secs(30);
-/// 下载 zip 超时：连接 10s 快速失败；总时长 10min——GitHub 资产经 302 重定向到 CDN，慢网络下 body 阶段可能超过 30s。
-const DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const DOWNLOAD_GLOBAL_TIMEOUT: Duration = Duration::from_secs(600);
-const DOWNLOAD_BODY_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct OnlineInfo {
@@ -96,16 +92,6 @@ fn agent() -> Agent {
         .into()
 }
 
-/// 下载专用 agent：连接快速失败，body 读取给足时间。
-pub(crate) fn download_agent() -> Agent {
-    Agent::config_builder()
-        .timeout_connect(Some(DOWNLOAD_CONNECT_TIMEOUT))
-        .timeout_global(Some(DOWNLOAD_GLOBAL_TIMEOUT))
-        .timeout_recv_body(Some(DOWNLOAD_BODY_TIMEOUT))
-        .build()
-        .into()
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub enum UpdateError {
     Network(String),
@@ -173,26 +159,19 @@ pub fn check_update() -> Result<OnlineInfo, UpdateError> {
 }
 
 pub fn download_and_extract(info: &OnlineInfo, dll_dir: &Path) -> Result<(), UpdateError> {
-    let mut resp = download_agent()
-        .get(&info.zip_url)
-        .header("User-Agent", USER_AGENT)
-        .call()
-        .map_err(|e| UpdateError::Network(e.to_string()))?;
-
-    let status = resp.status();
-    if !status.is_success() {
-        return Err(UpdateError::Network(format!("download HTTP {status}")));
-    }
-
-    // ureq 默认 body 上限 10MB，OpenSteamTool 的 zip 可能超过，显式放宽到 512MB。
-    let bytes = resp
-        .body_mut()
-        .with_config()
-        .limit(512 * 1024 * 1024)
-        .read_to_vec()
-        .map_err(|e| UpdateError::Network(format!("read body: {e}")))?;
-
+    // 下载语义收编至 downloads 模块（ADR-0021）：单 URL 也是长度为 1 的链；
+    // zip 走 Large 档（含 512MB body 上限，updater 侧不再自设）。
+    let urls = vec![info.zip_url.clone()];
+    let bytes = crate::downloads::first_match(&urls, crate::downloads::Policy::Large)
+        .map_err(download_error_to_update)?;
     extract_update(&bytes, dll_dir, &info.version)
+}
+
+fn download_error_to_update(e: crate::downloads::DownloadError) -> UpdateError {
+    match e {
+        crate::downloads::DownloadError::NotFound404 => UpdateError::Network("HTTP 404".into()),
+        crate::downloads::DownloadError::Network(d) => UpdateError::Network(d),
+    }
 }
 
 /// 从内存 zip 中仅提取目标 DLL 集合成员写入 `dll_dir`，成功后写 `version.txt`。
@@ -220,7 +199,7 @@ fn extract_update(bytes: &[u8], dll_dir: &Path, version: &str) -> Result<(), Upd
             use std::io::Read;
             file.read_to_end(&mut buf)
                 .map_err(|e| UpdateError::Parse(format!("extract {file_name}: {e}")))?;
-            std::fs::write(dll_dir.join(&file_name), buf)
+            crate::downloads::write_atomic(&dll_dir.join(&file_name), &buf)
                 .map_err(|e| UpdateError::Io(format!("write {file_name}: {e}")))?;
             extracted.push(file_name.to_string());
         }
@@ -230,7 +209,7 @@ fn extract_update(bytes: &[u8], dll_dir: &Path, version: &str) -> Result<(), Upd
         return Err(UpdateError::NoTargetDll);
     }
 
-    std::fs::write(dll_dir.join(VERSION_FILE), version)
+    crate::downloads::write_atomic(&dll_dir.join(VERSION_FILE), version.as_bytes())
         .map_err(|e| UpdateError::Io(format!("write version.txt: {e}")))?;
 
     Ok(())

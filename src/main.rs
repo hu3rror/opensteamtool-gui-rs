@@ -9,6 +9,7 @@ mod compat;
 mod compat_flow;
 mod config;
 mod dll;
+mod downloads;
 mod fsutil;
 mod i18n;
 mod main_page;
