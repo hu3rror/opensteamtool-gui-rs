@@ -18,7 +18,7 @@ Repo PowerShell scripts and commands target PowerShell 7+ (`pwsh`; CI already us
 
 ### Release
 
-Push a `v*` tag to trigger `release.yml` (tag name is the version; main push only triggers cache-warm). Always create the tag with `git tag -a vX.Y.Z -m "..."` — this repo sets `tag.gpgSign=true`, so a bare `git tag vX.Y.Z` opens an editor and hangs in non-interactive shells. Local packaging: `pwsh -File tools/build-release.ps1 -Version <v>`.
+Push a `v*` tag to trigger `release.yml` (tag name is the version; main push only triggers cache-warm). Always create the tag with `git tag -a vX.Y.Z -m "..."` — this repo sets `tag.gpgSign=true`, so a bare `git tag vX.Y.Z` opens an editor and hangs in non-interactive shells. Local packaging: `pwsh -File tools/build-release.ps1 -Version <v>`. Version bumps: edit the version in `Cargo.toml`, run `cargo check` (regenerates the root-package version in `Cargo.lock`), and commit both files together — a bump touching only `Cargo.toml` leaves the lockfile dirty.
 
 ## Commands
 
