@@ -9,7 +9,7 @@
 - **策略化 agent 两档**（现状 updater 下载档 10s/600s 与镜像 TOML 共用是错误归属）：
   - `Small`：connect 10s / global 30s / body 30s，body 上限 ureq 默认——镜像链签名 TOML 实测 4-6 KB，30s 两个数量级余量；
   - `Large`：connect 10s / global 10min / body 10min，body 上限显式 512MB——GitHub 更新 zip 经 302 到 CDN，慢网络 body 阶段可远超 30s，且 zip 必超 ureq 10MB 默认上限。
-- **原子落盘**：落盘门面复用 `fsutil::write_atomic`（临时文件 + rename）。`updater::extract_update` 的逐 DLL 写入与末尾 `version.txt`、`compat::write_cache_file` 全部经 `downloads::write_atomic`——消除「写盘中途失败留下『存在但截断』的文件、被文件本位判据（`is_file`）误判为完整」的中间态。
+- **原子落盘**：落盘门面复用 `fsutil::write_atomic`（临时文件 + rename）。`updater::extract_update` 的逐 DLL 写入与末尾 `version.txt`、`compat::write_cache_file` 全部经 `downloads::write_atomic`——消除「写盘中途失败留下『存在但截断』的文件、被文件本位判据（`is_file`）误判为完整」的中间态。`write_atomic` 不创建父目录（目录缺失以 `NotFound` 报错），目录存在性由调用方负责——`compat::write_cache_file` 与 `updater::extract_update` 均已在写入前 `create_dir_all`；本合同取代 #47 计划文本中的「parent-dir creation」。
 - **落点**：`updater::download_and_extract` = `first_match(&[zip_url], Large)` + 解压（单 URL 即长度为 1 的链）；`compat::precache` = `first_match(&urls, Small)` + 原子写；`compat::download_first` 与 `updater::download_agent`（pub(crate)）删除。
 - **边界**：镜像链 URL 构建 `build_urls` 留 compat（ADR-0006 镜像链语义不并入 downloads，downloads 只消费序列）；HEAD 探针（`probe_urls`/`head_probe`/`RemoteOutcome`/`probe_agent`）留 compat（三值结果喂体检决策矩阵）；updater 的 API JSON 查询（`check_update`/`check_app_update`）不入 downloads。
 - **外层错误类型不变**：`UpdateError` / `CompatError` 保留，`DownloadError` 在调用点映射。
@@ -30,7 +30,7 @@
 
 ## 验收
 
-- `cargo test --workspace`：253 通过 / 0 失败 / 2 忽略（新增 downloads 8 项：链回退次序、404 优先、错误记尾、空链、短路、原子写往返）。
+- `cargo test --workspace`：254 通过 / 0 失败 / 2 忽略（新增 downloads 9 项：链回退次序、404 优先、错误记尾、空链、短路、原子写往返、父目录缺失报错）。
 - `cargo check --all-targets` / `cargo clippy --all-targets` / `cargo fmt --all --check` 全绿。
 - `precache_e2e_known_hash`（真实网络）验证 Small 档首 URL 命中短路与原子落盘。
 - 行为等价手动验收：镜像链预热（成功 / 404 / 网络错误路径）与补丁更新下载在生产环境按预期工作（验收人 = 用户）。

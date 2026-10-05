@@ -1,5 +1,6 @@
 //! 下载链「取字节 → 原子落盘」深模块(ADR-0021):URL 链逐一下载,404 为权威信号(续链不终止),
 //! 其余错误记尾;超时档位按负载分档(镜像小文件 / 更新大 zip);落盘恒原子。
+//! 公开面:first_match / Policy::{Small, Large} / write_atomic / DownloadError::{NotFound404, Network}。
 
 use std::io;
 use std::path::Path;

@@ -470,7 +470,7 @@ mod tests {
         AppCore::new(facts(Some("1.4.7")), false, "Z:/fake/steam/nonexistent")
     }
 
-    // compat 域迁入编排核心（ADR-0019 主盘）
+    // compat 域事件（ADR-0019 主盘）
 
     #[test]
     fn compat_path_changed_emits_flat_probe_and_checking_snapshot() {
@@ -842,7 +842,7 @@ mod tests {
         }
     }
 
-    // 窗口显隐 Steam 联动决策在编排核心（auto-tray）
+    // 窗口显隐 Steam 联动决策（auto-tray）
 
     #[test]
     fn steam_started_hides_visible_window() {
