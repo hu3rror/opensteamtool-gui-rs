@@ -13,7 +13,7 @@
 - **落点**：`updater::download_and_extract` = `first_match(&[zip_url], Large)` + 解压（单 URL 即长度为 1 的链）；`compat::precache` = `first_match(&urls, Small)` + 原子写；`compat::download_first` 与 `updater::download_agent`（pub(crate)）删除。
 - **边界**：镜像链 URL 构建 `build_urls` 留 compat（ADR-0006 镜像链语义不并入 downloads，downloads 只消费序列）；HEAD 探针（`probe_urls`/`head_probe`/`RemoteOutcome`/`probe_agent`）留 compat（三值结果喂体检决策矩阵）；updater 的 API JSON 查询（`check_update`/`check_app_update`）不入 downloads。
 - **外层错误类型不变**：`UpdateError` / `CompatError` 保留，`DownloadError` 在调用点映射。
-- **行为变化**（有意为之，spec 记录在案）：整链失败时 404 优先于最后一个网络错误；zip 非 2xx 文案由「download HTTP {code}」统一为「HTTP {code}」；签名 TOML 下载超时 600s → 30s；DLL 与 version.txt 改原子写。
+- **行为变化**（有意为之，spec 记录在案）：整链失败时 404 优先于最后一个网络错误；zip 非 2xx 文案由「download HTTP {code}」统一为「HTTP {code}」；签名 TOML 下载超时 600s → 30s；DLL 与 version.txt 改原子写；下载请求统一附带浏览器 UA（原 updater zip 下载带、compat 镜像链不带，现两者一致）；compat 预热错误文案变化（404 不再附 URL，非 404 状态码以「HTTP {code}」呈现而非 ureq 原始文本）。
 
 ## 为什么做
 

@@ -16,7 +16,6 @@ const APP_RELEASES_URL: &str =
     "https://api.github.com/repos/hu3rror/opensteamtool-gui-rs/releases/latest";
 pub const APP_REPO_PAGE: &str = "https://github.com/hu3rror/opensteamtool-gui-rs";
 pub const APP_RELEASES_PAGE: &str = "https://github.com/hu3rror/opensteamtool-gui-rs/releases";
-const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36 OpenSteamTool-Manager";
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const GLOBAL_TIMEOUT: Duration = Duration::from_secs(30);
@@ -64,7 +63,7 @@ fn app_release_from_json(json: &Value, current: &str) -> Result<AppUpdateCheckRe
 pub fn check_app_update() -> Result<AppUpdateCheckResult, UpdateError> {
     let resp = agent()
         .get(APP_RELEASES_URL)
-        .header("User-Agent", USER_AGENT)
+        .header("User-Agent", crate::downloads::USER_AGENT)
         .header("Accept", "application/vnd.github+json")
         .call()
         .map_err(|e| UpdateError::Network(e.to_string()))?;
@@ -126,7 +125,7 @@ fn api_response_to_json(resp: ureq::http::Response<ureq::Body>) -> Result<Value,
 pub fn check_update() -> Result<OnlineInfo, UpdateError> {
     let resp = agent()
         .get(RELEASES_URL)
-        .header("User-Agent", USER_AGENT)
+        .header("User-Agent", crate::downloads::USER_AGENT)
         .header("Accept", "application/vnd.github+json")
         .call()
         .map_err(|e| UpdateError::Network(e.to_string()))?;

@@ -7,6 +7,9 @@ use std::time::Duration;
 
 use ureq::Agent;
 
+/// 请求 UA：Server 端辨识（浏览器指纹形态；updater 下载/API 与 compat 镜像链共用同一来源）。
+pub(crate) const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36 OpenSteamTool-Manager";
+
 /// 下载策略:超时档位与 body 上限。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Policy {
@@ -91,7 +94,11 @@ fn map_call_err(e: ureq::Error) -> DownloadError {
 
 /// 单 URL GET→bytes:2xx 读 body(按策略 body 上限),非 2xx 由错误映射区分 404 与其余状态码。
 fn get_bytes(agent: &Agent, url: &str, policy: Policy) -> Result<Vec<u8>, DownloadError> {
-    let mut resp = agent.get(url).call().map_err(map_call_err)?;
+    let mut resp = agent
+        .get(url)
+        .header("User-Agent", USER_AGENT)
+        .call()
+        .map_err(map_call_err)?;
     let read = match policy {
         Policy::Small => resp.into_body().read_to_vec(),
         Policy::Large => resp
@@ -182,6 +189,15 @@ mod tests {
         let urls = vec!["a".to_string()];
         let err = first_match_with(&urls, |_| Err(DownloadError::NotFound404)).unwrap_err();
         assert_eq!(err, DownloadError::NotFound404);
+    }
+
+    #[test]
+    fn write_atomic_missing_parent_dir_errors() {
+        let dir = std::env::temp_dir().join(format!("ost_downloads_wp_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("nested").join("sig.toml");
+        let err = write_atomic(&path, b"x").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
     }
 
     #[test]
