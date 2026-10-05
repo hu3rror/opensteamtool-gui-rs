@@ -12,7 +12,7 @@ use crate::busy::{BusyGate, BusyKind};
 use crate::compat;
 use crate::compat_flow::{self, CompatFlow, CompatSummary};
 use crate::config::{self, Config, Language, ThemePreference};
-use crate::dll::{self, DeployStatus};
+use crate::dll::{self, DeployStatus, DeploymentFacts};
 use crate::i18n::{Lang, Strings};
 use crate::main_page::{
     self, IconKind, MainPageVm, PrimaryAction, PrimaryKind, SecondaryAction, UpdateConclusion,
@@ -477,11 +477,10 @@ pub struct App {
     lang: Lang,
     strings: Strings,
     steam_path: String,
-    status: DeployStatus,
+    facts: DeploymentFacts,
     steam_running: bool,
     steam_monitor: SteamMonitor,
     steam_state: Arc<SteamState>,
-    local_version: Option<String>,
     /// 在线更新「检查更新」流程（唯一事实源 + 派生，见 GLOSSARY.md「更新流程」）。
     update_flow: UpdateFlow,
     /// 交互类后台操作互斥门禁（同时刻仅一个操作在途；见 GLOSSARY.md「忙碌门禁」）。
@@ -990,8 +989,7 @@ impl App {
             wizard::Wizard::new(lang_pref, config.theme, steam_path.clone(), dll::dll_dir())
         });
         let steam_dir = Path::new(&steam_path);
-        let status = dll::check_status(steam_dir);
-        let local_version = dll::read_local_version(&dll::dll_dir());
+        let facts = dll::probe_facts(steam_dir, &dll::dll_dir());
         let steam_state = Arc::new(SteamState::new());
         let steam_monitor = SteamMonitor::new(&steam_state);
         let steam_running = steam_monitor.is_running();
@@ -1028,11 +1026,10 @@ impl App {
             lang,
             strings,
             steam_path,
-            status,
+            facts,
             steam_running,
             steam_monitor,
             steam_state,
-            local_version,
             update_flow: UpdateFlow::new(),
             gate: BusyGate::new(),
             confirm: None,
@@ -1106,7 +1103,7 @@ impl App {
     /// 同步托盘「重启 Steam」可用性（路径无效置灰；未运行点击等价「直接启动」，见 workflow::plan）。
     fn sync_tray_restart_enabled(&mut self) {
         if let Some(tray) = &self.tray {
-            tray.set_restart_enabled(self.status != DeployStatus::InvalidPath);
+            tray.set_restart_enabled(self.facts.status != DeployStatus::InvalidPath);
         }
     }
 
@@ -1150,8 +1147,9 @@ impl App {
         }
     }
 
-    fn refresh_status(&mut self) {
-        self.status = dll::check_status(Path::new(self.steam_path.trim()));
+    /// 文件事实刷新点统一出口：探测快照 + 同步托盘「重启 Steam」可用性。
+    fn refresh_facts(&mut self) {
+        self.facts = dll::probe_facts(Path::new(self.steam_path.trim()), &dll::dll_dir());
         self.sync_tray_restart_enabled();
     }
 
@@ -1172,14 +1170,14 @@ impl App {
                     self.gate.clear();
                     self.notice = Some(Notice::Downloaded(res.clone()));
                     if let Ok(()) = res {
-                        self.local_version = dll::read_local_version(&dll::dll_dir());
+                        self.refresh_facts();
                     }
                 }
                 Msg::WorkflowDone(action, res) => {
                     self.gate.clear();
                     self.notice = Some(Notice::WorkflowDone(action, res.clone()));
                     if let Ok(()) = res {
-                        self.refresh_status();
+                        self.refresh_facts();
                     }
                     self.steam_running = self.steam_monitor.rescan();
                     self.hide_if_steam_running();
@@ -1201,9 +1199,8 @@ impl App {
                         let ctx = self.ctx.clone();
                         self.wizard_event(&ctx, wizard::Event::DownloadDone(res));
                     } else if res.is_ok() {
-                        // 向导已跳过/关窗但在途下载仍完成：刷新本地版本，避免主界面继续显示陈旧的「补丁缺失」（跳过不等于取消网络请求，以磁盘为准）。
-                        self.local_version = dll::read_local_version(&dll::dll_dir());
-                        self.refresh_status();
+                        // 向导已跳过/关窗但在途下载仍完成：刷新文件事实，避免主界面继续显示陈旧的「补丁缺失」（跳过不等于取消网络请求，以磁盘为准）。
+                        self.refresh_facts();
                     }
                 }
                 Msg::AppUpdateChecked(res) => {
@@ -1246,6 +1243,8 @@ impl App {
             Err(precheck) => {
                 self.confirm = None;
                 self.notice = Some(Notice::Precheck(precheck));
+                // plan 拒绝是「快照过期」信号（如补丁文件被外部删除）：顺手刷新事实，按钮立即归灰（spec #43 刷新点）。
+                self.refresh_facts();
                 return;
             }
         };
@@ -1368,7 +1367,7 @@ impl App {
                     self.config.steam_path = steam_path.clone();
                     self.persist_config();
                     self.steam_path = steam_path;
-                    self.refresh_status();
+                    self.refresh_facts();
                     self.wizard = None;
                     self.feed_path_changed(ctx);
                 }
@@ -1668,7 +1667,7 @@ impl App {
                 self.steam_path = p.clone();
                 self.config.steam_path = p;
                 self.persist_config();
-                self.refresh_status();
+                self.refresh_facts();
                 self.feed_path_changed(ctx);
             }
         }
@@ -2373,7 +2372,7 @@ impl App {
                     UpdateKind::Download => {
                         if let Some(info) = self
                             .update_flow
-                            .derived(self.local_known_version())
+                            .derived(self.facts.known_local_version())
                             .download
                         {
                             event = Some(MainEvent::Download(info.clone()));
@@ -2403,7 +2402,7 @@ impl App {
                         // 行内只显示词条；失败详情向 update_flow 现查做 hover（不占布局，§26.7）。
                         let detail = self
                             .update_flow
-                            .derived(self.local_known_version())
+                            .derived(self.facts.known_local_version())
                             .notice
                             .and_then(|n| match n {
                                 crate::update_flow::UpdateNotice::CheckFailed(e) => {
@@ -2526,12 +2525,6 @@ impl App {
         }
     }
 
-    fn local_known_version(&self) -> Option<&str> {
-        dll::dlls_present()
-            .then_some(self.local_version.as_deref())
-            .flatten()
-    }
-
     /// 状态栏 dock 内容高（上 11 + 行 18 + 下 9 = 38lp；分隔线手绘在面板顶不占布局高）。
     const STATUS_DOCK_H: f32 = 38.0;
 
@@ -2610,12 +2603,12 @@ impl App {
     /// 内容列：Hero → Health Warning → Secondary Group（spec §5/§24.1 定稿顺序）。
     fn build_main_column(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         // 检查结论快照：当场向 update_flow 查询并转 owned（版本永不渲染，ADR-0014）。
-        let derived = self.update_flow.derived(self.local_known_version());
+        let derived = self.update_flow.derived(self.facts.known_local_version());
         let input = crate::main_page::MainPageInput {
-            deploy: self.status,
+            deploy: self.facts.status,
             steam_running: self.steam_running,
             busy: self.gate.current(),
-            dlls_present: dll::dlls_present(),
+            dlls_present: self.facts.dlls_present,
             update_downloadable: derived.download.is_some(),
             update_notice: derived.notice.map(|n| match n {
                 crate::update_flow::UpdateNotice::UpToDate => UpdateConclusion::UpToDate,

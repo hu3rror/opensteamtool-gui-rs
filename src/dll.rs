@@ -37,8 +37,30 @@ pub fn target_dlls_present(dir: &Path) -> bool {
     TARGET_DLLS.iter().all(|d| dir.join(d).is_file())
 }
 
-pub fn dlls_present() -> bool {
-    target_dlls_present(&dll_dir())
+/// 文件事实快照：部署状态 + 本地版本 + DLL 齐全，单次探测产出（spec #43）。
+/// 渲染只消费快照，刷新时机由调用方（事件驱动）决定，零每帧文件 IO。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeploymentFacts {
+    pub status: DeployStatus,
+    pub local_version: Option<String>,
+    pub dlls_present: bool,
+}
+
+impl DeploymentFacts {
+    /// 本地版本仅在补丁 DLL 齐全时视为已知（「补丁已下载」是文件本位判据，ADR-0011）。
+    pub fn known_local_version(&self) -> Option<&str> {
+        self.dlls_present
+            .then_some(self.local_version.as_deref())
+            .flatten()
+    }
+}
+
+pub fn probe_facts(steam_dir: &Path, dll_dir: &Path) -> DeploymentFacts {
+    DeploymentFacts {
+        status: check_status(steam_dir),
+        local_version: read_local_version(dll_dir),
+        dlls_present: target_dlls_present(dll_dir),
+    }
 }
 
 /// 有效 Steam 目录判据：trim 后非空且为目录。空 = 未设置（ADR-0012 的合法终态）；
@@ -150,5 +172,84 @@ mod tests {
         fs::remove_file(dir.join(TARGET_DLLS[0])).unwrap();
         assert!(!target_dlls_present(&dir));
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn probe_facts_reflects_empty_dirs() {
+        let steam = std::env::temp_dir().join(format!("ost_facts_steam_{}", std::process::id()));
+        let dlldir = std::env::temp_dir().join(format!("ost_facts_dlls_{}", std::process::id()));
+        fs::create_dir_all(&steam).unwrap();
+        fs::create_dir_all(&dlldir).unwrap();
+        let facts = probe_facts(&steam, &dlldir);
+        assert_eq!(facts.status, DeployStatus::NotDeployed);
+        assert!(!facts.dlls_present);
+        assert_eq!(facts.local_version, None);
+        fs::remove_dir_all(&steam).ok();
+        fs::remove_dir_all(&dlldir).ok();
+    }
+
+    #[test]
+    fn probe_facts_sees_downloaded_patch() {
+        let steam = std::env::temp_dir().join(format!("ost_facts_steam2_{}", std::process::id()));
+        let dlldir = std::env::temp_dir().join(format!("ost_facts_dlls2_{}", std::process::id()));
+        fs::create_dir_all(&steam).unwrap();
+        fs::create_dir_all(&dlldir).unwrap();
+        for dll in TARGET_DLLS {
+            fs::write(dlldir.join(dll), b"x").unwrap();
+        }
+        fs::write(dlldir.join(VERSION_FILE), b"9.9.9").unwrap();
+        let facts = probe_facts(&steam, &dlldir);
+        assert!(facts.dlls_present);
+        assert_eq!(facts.local_version.as_deref(), Some("9.9.9"));
+        assert_eq!(facts.known_local_version(), Some("9.9.9"));
+        assert_eq!(facts.status, DeployStatus::NotDeployed);
+        fs::remove_dir_all(&steam).ok();
+        fs::remove_dir_all(&dlldir).ok();
+    }
+
+    #[test]
+    fn probe_facts_sees_deploy_status() {
+        let steam = std::env::temp_dir().join(format!("ost_facts_steam3_{}", std::process::id()));
+        let dlldir = std::env::temp_dir().join(format!("ost_facts_dlls3_{}", std::process::id()));
+        fs::create_dir_all(&steam).unwrap();
+        fs::create_dir_all(&dlldir).unwrap();
+        for dll in TARGET_DLLS {
+            fs::write(steam.join(dll), b"x").unwrap();
+        }
+        let facts = probe_facts(&steam, &dlldir);
+        assert_eq!(facts.status, DeployStatus::Deployed);
+        fs::remove_dir_all(&steam).ok();
+        fs::remove_dir_all(&dlldir).ok();
+    }
+
+    #[test]
+    fn probe_facts_invalid_steam_dir_is_invalid_path() {
+        let dlldir = std::env::temp_dir().join(format!("ost_facts_dlls4_{}", std::process::id()));
+        fs::create_dir_all(&dlldir).unwrap();
+        let facts = probe_facts(Path::new("Z:/definitely/not/a/real/dir_12345"), &dlldir);
+        assert_eq!(facts.status, DeployStatus::InvalidPath);
+        fs::remove_dir_all(&dlldir).ok();
+    }
+
+    #[test]
+    fn known_local_version_gates_on_dll_presence() {
+        let facts = DeploymentFacts {
+            status: DeployStatus::Deployed,
+            local_version: Some("1.2.3".to_string()),
+            dlls_present: false,
+        };
+        assert_eq!(facts.known_local_version(), None);
+        let facts = DeploymentFacts {
+            status: DeployStatus::NotDeployed,
+            local_version: Some("1.2.3".to_string()),
+            dlls_present: true,
+        };
+        assert_eq!(facts.known_local_version(), Some("1.2.3"));
+        let facts = DeploymentFacts {
+            status: DeployStatus::NotDeployed,
+            local_version: None,
+            dlls_present: true,
+        };
+        assert_eq!(facts.known_local_version(), None);
     }
 }
