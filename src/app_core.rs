@@ -186,7 +186,9 @@ impl AppCore {
                     return Vec::new();
                 }
                 self.update_flow.check_started();
-                return vec![AppEffect::SpawnUpdateCheck];
+                // 以当前磁盘为基准：文件在发起时若已缺失（如外部删除 dlls/），派生将反映为
+                // NewVersion + 可下载（修复动作），不会落在陈旧快照上误报「已是最新」（ADR-0011/#26）。
+                return vec![AppEffect::RefreshFacts, AppEffect::SpawnUpdateCheck];
             }
             AppEvent::Download => {
                 // 下载目标自查（payload 移除；版本永不渲染）：按钮可否点由快照派生保证，
@@ -281,7 +283,10 @@ mod tests {
     fn check_starts_gate_and_spawns_check() {
         let mut c = core();
         let effects = c.step(AppEvent::Check);
-        assert_eq!(effects, vec![AppEffect::SpawnUpdateCheck]);
+        assert_eq!(
+            effects,
+            vec![AppEffect::RefreshFacts, AppEffect::SpawnUpdateCheck]
+        );
         assert_eq!(c.snapshot().busy, Some(BusyKind::Checking));
     }
 
@@ -577,6 +582,39 @@ mod tests {
         assert_eq!(
             s.update.download.as_ref().map(|i| i.version.as_str()),
             Some("1.4.8")
+        );
+    }
+
+    #[test]
+    fn check_refreshes_facts_first_so_missing_dlls_never_report_up_to_date() {
+        // 回归（会话内删 dlls/ 后点检查更新）：Check 先发 RefreshFacts——即便磁盘事实
+        // 刷新晚于检查完成，也由 FactsRefreshed 喂回后派生（ADR-0011/#26：文件缺失不可落「已是最新」）。
+        let mut c = AppCore::new(
+            DeploymentFacts {
+                status: crate::dll::DeployStatus::Deployed,
+                local_version: Some("1.4.8".into()),
+                dlls_present: true,
+            },
+            false,
+        );
+        let effects = c.step(AppEvent::Check);
+        assert_eq!(
+            effects,
+            vec![AppEffect::RefreshFacts, AppEffect::SpawnUpdateCheck]
+        );
+        // 检查发起后、磁盘探测尚未回喂时：仍以旧快照派生（已是最新）——中间态允许；
+        c.step(AppEvent::UpdateChecked(Ok(online("1.4.8"))));
+        // 磁盘探测回喂（dlls 已删除）→ 派生必须翻转为 NewVersion + 可下载。
+        c.step(AppEvent::FactsRefreshed(DeploymentFacts {
+            status: crate::dll::DeployStatus::Deployed,
+            local_version: None,
+            dlls_present: false,
+        }));
+        let s = c.snapshot();
+        assert_eq!(s.update.notice, Some(SnapshotUpdateNotice::NewVersion));
+        assert!(
+            s.update.download.is_some(),
+            "文件缺失时下载按钮必须出现（修复动作）"
         );
     }
 
