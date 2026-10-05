@@ -354,8 +354,8 @@ impl AppCore {
             AppEvent::FactsRefreshed(facts) => self.facts = facts,
             AppEvent::SteamRunningChanged(running) => {
                 self.steam_running = running;
-                // 合成隐窗：待决 && 仍在运行 && 镜像可见 → 隐一次（一次性动作，已隐藏时不再产出）；
-                // Steam 退出或窗口已隐藏则仅清待决。
+                // 隐窗是一次性合成动作：待决（WorkflowDone 后重读运行状态）且窗口仍可见时才产出一次；
+                // Steam 已退出或窗口已隐藏则仅清待决。
                 if self.pending_auto_hide && running && self.window_visible {
                     self.pending_auto_hide = false;
                     return vec![AppEffect::SetWindowVisible(false)];

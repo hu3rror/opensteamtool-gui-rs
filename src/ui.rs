@@ -1044,30 +1044,25 @@ impl App {
         });
     }
 
-    /// 窗口显隐的唯一物理写入点（ViewportCommand::Visible 只在此触达；托盘/单实例/最小化/效果执行全走它）。
-    /// 每次变化回喂核心镜像（决策入参）；WindowVisibleChanged 固定无效果，壳直调路径是安全的新事件进入。
-    fn set_window_visible(&mut self, visible: bool) {
-        let changed = self.window_visible != visible;
+    /// 窗口显隐唯一物理写入体（ViewportCommand::Visible 只在此触达，含字段镜像与显式聚焦）。
+    /// 两条路径共用：壳驱动（托盘/单实例/最小化）经 set_window_visible，效果路径（exec 循环内）经队列回喂。
+    fn write_window_visible(&mut self, visible: bool) {
         self.window_visible = visible;
         self.ctx
             .send_viewport_cmd(egui::ViewportCommand::Visible(visible));
         if visible {
             self.pending_focus = true;
             self.ctx.request_repaint();
-        }
-        if changed {
-            self.on_core_event(AppEvent::WindowVisibleChanged(visible));
         }
     }
 
-    /// 窗口显隐物理应用（不涉及镜像同步；exec 循环内的 SetWindowVisible 分支用它 + 队列回喂）。
-    fn apply_window_visible(&mut self, visible: bool) {
-        self.window_visible = visible;
-        self.ctx
-            .send_viewport_cmd(egui::ViewportCommand::Visible(visible));
-        if visible {
-            self.pending_focus = true;
-            self.ctx.request_repaint();
+    /// 壳驱动显隐入口（托盘/单实例/最小化）：实际变化时同步核心镜像（WindowVisibleChanged 固定无效果，
+    /// 这是 exec 循环外的安全新事件进入；效果路径的镜像回喂走效果队列）。
+    fn set_window_visible(&mut self, visible: bool) {
+        let changed = self.window_visible != visible;
+        self.write_window_visible(visible);
+        if changed {
+            self.on_core_event(AppEvent::WindowVisibleChanged(visible));
         }
     }
 
@@ -1298,7 +1293,7 @@ impl App {
                 }
                 AppEffect::SetWindowVisible(visible) => {
                     // 效果路径（exec 循环内）：镜像回喂走效果队列（P5 统一；WindowVisibleChanged 幂等）。
-                    self.apply_window_visible(visible);
+                    self.write_window_visible(visible);
                     queue.extend(self.core.step(AppEvent::WindowVisibleChanged(visible)));
                 }
             }
