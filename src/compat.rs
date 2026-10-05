@@ -337,13 +337,9 @@ pub fn probe_all_refresh(steam_dir: &Path) -> OverallHealthReport {
     report
 }
 
-/// 工具自身目录（exe 旁）：`dlls/` 同级，验证缓存存放于此（`cache/` 子目录，后续工具状态类文件可复用）。
+/// `cache/` 子目录（工具目录下）：验证缓存存放于此，后续工具状态类文件可复用。
 fn tool_cache_dir() -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("cache")
+    crate::fsutil::exe_dir().join("cache")
 }
 
 /// 验证缓存文件路径：`<exe>/cache/verified.toml`。

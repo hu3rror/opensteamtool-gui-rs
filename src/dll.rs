@@ -16,11 +16,7 @@ pub enum DeployStatus {
 }
 
 pub fn dll_dir() -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("dlls")
+    crate::fsutil::exe_dir().join("dlls")
 }
 
 pub fn read_local_version(dll_dir: &Path) -> Option<String> {

@@ -5,7 +5,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::fsutil::write_atomic;
+use crate::fsutil::{exe_dir, write_atomic};
 use crate::i18n::{Lang, detect_system_lang};
 
 /// 当前配置格式版本（未来格式变更时递增并写迁移逻辑）。
@@ -118,11 +118,7 @@ impl Config {
 }
 
 pub fn config_path() -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(CONFIG_FILE)
+    exe_dir().join(CONFIG_FILE)
 }
 
 /// 读取配置：文件缺失 → 默认值；存在但非法 → 类型化错误（不 panic）。
