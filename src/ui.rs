@@ -14,9 +14,9 @@ use crate::app_core::{
 use crate::brand;
 use crate::busy::BusyKind;
 use crate::compat;
-use crate::compat_flow::{self, CompatFlow, CompatSummary};
+use crate::compat_flow::{self, CompatSummary};
 use crate::config::{self, Config, Language, ThemePreference};
-use crate::dll::{self, DeployStatus};
+use crate::dll::{self, DeployStatus, DeploymentFacts};
 use crate::i18n::{Lang, Strings};
 use crate::main_page::{
     self, IconKind, MainPageVm, PrimaryAction, PrimaryKind, SecondaryAction, UpdateConclusion,
@@ -442,18 +442,19 @@ struct CompatView {
 
 impl CompatView {
     fn snapshot(app: &App) -> Self {
-        let d = app.flow.display();
+        // 切片 3：体检域状态经编排核心快照（ADR-0019）；strings 文案映射留在渲染层（快照零 i18n）。
+        let d = app.core.snapshot().compat;
         Self {
             summary: d.summary,
             checking: d.checking,
             precaching: d.precaching,
             precache_done: d.precache_done,
-            precache_error: d.precache_error.map(|err| {
+            precache_error: d.precache_error.as_ref().map(|err| {
                 app.strings
                     .compat_precache_failed
                     .replace("{err}", &app.strings.compat_error_text(err))
             }),
-            detail_report: app.compat_details_open.then(|| d.report.cloned()).flatten(),
+            detail_report: app.compat_details_open.then(|| d.report.clone()).flatten(),
         }
     }
 }
@@ -495,7 +496,6 @@ pub struct App {
     /// 应用更新检查是否在途（自管忙碌：只读查询不进 Busy Gate，按钮在途自禁用）。
     app_update_checking: bool,
     wizard: Option<wizard::Wizard>,
-    flow: CompatFlow,
     /// 兼容性明细展开开关（纯 UI 状态，不属于流程）。
     compat_details_open: bool,
     compat_scroll_pending: bool,
@@ -917,15 +917,6 @@ fn wizard_steps_ui(
     (event, card_rect)
 }
 
-/// 自动隐身策略（ADR-0001）：Steam 边沿事件 + 当前窗口显隐 → 目标显隐。
-fn auto_tray_policy(event: SteamEvent, window_visible: bool) -> Option<bool> {
-    match (event, window_visible) {
-        (SteamEvent::Started, true) => Some(false),
-        (SteamEvent::Stopped, false) => Some(true),
-        _ => None,
-    }
-}
-
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, singleton: Singleton) -> Self {
         install_cjk_font(&cc.egui_ctx);
@@ -995,8 +986,6 @@ impl App {
             strings.tray_restart,
         );
 
-        let flow = CompatFlow::new();
-
         // 启动即应用持久化主题偏好（ADR-0016）：egui 默认 ThemePreference::System，
         // 不显式设置则固定 Dark/Light 会在首帧被 OS 主题覆盖，重启后恢复失效。
         cc.egui_ctx.set_theme(to_egui_theme_pref(theme_pref));
@@ -1026,7 +1015,6 @@ impl App {
             app_update: None,
             app_update_checking: false,
             wizard,
-            flow,
             compat_details_open: false,
             compat_scroll_pending: false,
             github_mark: load_github_mark(&cc.egui_ctx, palette),
@@ -1037,10 +1025,10 @@ impl App {
         // 标题栏沿用 ViewportBuilder 图标）。初始图标已按 config 主题选版（见 main.rs），
         // System 模式校正与后续主题切换走 ui() 的 palette 钩子/首帧同步。
         app.sync_tray_restart_enabled(app.core.snapshot().facts.status);
-        // 启动即喂首次路径：产出首次快速体检效果（初始 checking 骨架态，零白屏）。
-        // 工作路径在核心（ADR-0020），由快照取。
+        // 启动即喂首次路径：经统一事件入口产首次快速体检效果（初始 checking 骨架态，零白屏；
+        // 工作路径在核心（ADR-0020），由快照取；切片 3 后 compat 域在核心内部）。
         let initial_path = app.core.snapshot().steam_path.clone();
-        app.on_compat_event(&cc.egui_ctx, compat_flow::Event::PathChanged(initial_path));
+        app.on_core_event(AppEvent::CompatPathChanged(initial_path));
         app
     }
 
@@ -1058,12 +1046,18 @@ impl App {
     }
 
     fn set_window_visible(&mut self, visible: bool) {
+        let changed = self.window_visible != visible;
         self.window_visible = visible;
         self.ctx
             .send_viewport_cmd(egui::ViewportCommand::Visible(visible));
         if visible {
             self.pending_focus = true;
             self.ctx.request_repaint();
+        }
+        if changed {
+            // 镜像同步（切片 3 Q6）：物理显隐变化回喂核心镜像（决策入参）。
+            // 托盘/单实例/最小化决策仍留壳；核心产出的 SetWindowVisible 效果也经此唯一物理写入点。
+            self.on_core_event(AppEvent::WindowVisibleChanged(visible));
         }
     }
 
@@ -1116,13 +1110,13 @@ impl App {
         }
     }
 
-    /// 文件事实刷新点统一出口：探测 → 同步托盘 → 喂回编排核心（反馈环，ADR-0019）。
-    fn refresh_facts(&mut self) {
+    /// 文件事实探测：探测 → 同步托盘可见性，返回事实；回喂由调用者经效果队列完成（P5：观察回喂统一走队列，不嵌套调事件入口）。
+    fn probe_facts_and_sync(&mut self) -> DeploymentFacts {
         // 工作路径在核心（ADR-0020），探测从快照取（与渲染/seed 同源）。
         let steam_path = self.core.snapshot().steam_path.clone();
         let facts = dll::probe_facts(Path::new(&steam_path), &dll::dll_dir());
         self.sync_tray_restart_enabled(facts.status);
-        self.on_core_event(AppEvent::FactsRefreshed(facts));
+        facts
     }
 
     /// 消息泵：收发线程消息，核心事件经 `on_core_event` 进编排核心；壳拦截项就地处理。
@@ -1135,16 +1129,13 @@ impl App {
                     self.set_window_visible(true);
                 }
                 Msg::Compat { epoch, report } => {
-                    let ctx = self.ctx.clone();
-                    self.on_compat_event(&ctx, compat_flow::Event::ProbeDone { epoch, report });
+                    self.on_core_event(AppEvent::CompatProbeDone { epoch, report });
                 }
                 Msg::CompatRefreshed { epoch, report } => {
-                    let ctx = self.ctx.clone();
-                    self.on_compat_event(&ctx, compat_flow::Event::RefreshDone { epoch, report });
+                    self.on_core_event(AppEvent::CompatRefreshDone { epoch, report });
                 }
                 Msg::CompatPrecached { epoch, result } => {
-                    let ctx = self.ctx.clone();
-                    self.on_compat_event(&ctx, compat_flow::Event::PrecacheDone { epoch, result });
+                    self.on_core_event(AppEvent::CompatPrecacheDone { epoch, result });
                 }
                 Msg::WizardDownload(res) => {
                     if self.wizard.is_some() {
@@ -1152,7 +1143,8 @@ impl App {
                         self.wizard_event(&ctx, wizard::Event::DownloadDone(res));
                     } else if res.is_ok() {
                         // 向导已跳过/关窗但在途下载仍完成：刷新文件事实，避免主界面继续显示陈旧的「补丁缺失」（跳过不等于取消网络请求，以磁盘为准）。
-                        self.refresh_facts();
+                        let facts = self.probe_facts_and_sync();
+                        self.on_core_event(AppEvent::FactsRefreshed(facts));
                     }
                 }
                 Msg::AppUpdateChecked(res) => {
@@ -1163,14 +1155,20 @@ impl App {
         }
     }
 
-    /// 编排核心事件入口：决策 → 效果逐条执行；同步效果（plan/probe/rescan）喂回的观察
-    /// 事件新产出的效果追加进队尾（反馈环深度 ≤ 2，队列保证顺序）。
+    /// 编排核心事件入口：决策 → 效果进统一执行器；同步效果（plan/probe/rescan）喂回的观察
+    /// 事件续出的效果追加进队尾（P5：统一入口、固定顺序，队列深度 ≤ 3）。
     fn on_core_event(&mut self, evt: AppEvent) {
-        let mut queue: VecDeque<AppEffect> = self.core.step(evt).into();
+        let ctx = self.ctx.clone();
+        let queue = self.core.step(evt).into();
+        self.exec_app_effects(&ctx, queue);
+    }
+
+    /// 统一效果执行器（ADR-0019「外壳只有一个 executor」；wizard 效果经收编后也走这里）。
+    fn exec_app_effects(&mut self, ctx: &egui::Context, mut queue: VecDeque<AppEffect>) {
         while let Some(effect) = queue.pop_front() {
             match effect {
                 AppEffect::SpawnUpdateCheck => {
-                    let ctx = self.ctx.clone();
+                    let ctx = ctx.clone();
                     self.spawn(&ctx, || {
                         Msg::Core(AppEvent::UpdateChecked(updater::check_update()))
                     });
@@ -1226,21 +1224,69 @@ impl App {
                         })
                     });
                 }
-                AppEffect::RefreshFacts => self.refresh_facts(),
+                AppEffect::RefreshFacts => {
+                    // P5：观察回喂统一走效果队列（不嵌套调 on_core_event），顺序由队列保证。
+                    let facts = self.probe_facts_and_sync();
+                    queue.extend(self.core.step(AppEvent::FactsRefreshed(facts)));
+                }
                 AppEffect::RescanSteam => {
+                    // 重读运行状态并把观察喂回核心；隐窗决策在核心（Q6 合成，删除壳执行器隐窗）。
                     let running = self.steam_monitor.rescan();
-                    // 隐窗决策的不变量：RescanSteam 唯一发射者是 WorkflowDone（观察反馈环末环），
-                    // Steam 在工作流后仍在运行则隐窗；若未来出现其它发射者，再把该决策迁回核心观察反馈。
-                    if running {
-                        self.set_window_visible(false);
-                    }
                     queue.extend(self.core.step(AppEvent::SteamRunningChanged(running)));
                 }
                 AppEffect::FeedCompatPath(p) => {
-                    // 路径变更 → 体检重探（决策在核心、执行在壳子域，ADR-0020）。
-                    let ctx = self.ctx.clone();
-                    self.on_compat_event(&ctx, compat_flow::Event::PathChanged(p));
+                    // 路径变更 → 体检重探：决策在核心，回喂经效果队列（P5 统一入口，切片 3）。
+                    queue.extend(self.core.step(AppEvent::CompatPathChanged(p)));
                 }
+                AppEffect::CompatProbe { epoch, path } => {
+                    let ctx = self.ctx.clone();
+                    self.spawn(&ctx, move || Msg::Compat {
+                        epoch,
+                        report: compat::probe_all(Path::new(&path)),
+                    });
+                }
+                AppEffect::CompatRefresh { epoch, path } => {
+                    let ctx = self.ctx.clone();
+                    self.spawn(&ctx, move || Msg::CompatRefreshed {
+                        epoch,
+                        report: compat::probe_all_refresh(Path::new(&path)),
+                    });
+                }
+                AppEffect::CompatPrecache {
+                    epoch,
+                    path,
+                    targets,
+                } => {
+                    let ctx = ctx.clone();
+                    self.spawn(&ctx, move || {
+                        let result = targets.into_iter().try_for_each(|(target, sha)| {
+                            compat::precache(Path::new(&path), target, &sha)
+                        });
+                        Msg::CompatPrecached { epoch, result }
+                    });
+                }
+                AppEffect::WizardDownload => {
+                    let ctx2 = ctx.clone();
+                    self.spawn(&ctx2, || Msg::WizardDownload(wizard_download()));
+                }
+                AppEffect::WizardFinish {
+                    language,
+                    theme,
+                    steam_path,
+                } => {
+                    debug_assert!(
+                        self.wizard.as_ref().is_some_and(|w| w.finished()),
+                        "Finish 效果只能由已结束的向导产出"
+                    );
+                    self.config.language = language;
+                    self.config.theme = theme;
+                    self.config.steam_path = steam_path.clone();
+                    self.persist_config();
+                    self.wizard = None;
+                    // 向导终局与设置提交收缝到同一写入点（ADR-0020）。
+                    self.on_core_event(AppEvent::CommitPath(steam_path));
+                }
+                AppEffect::SetWindowVisible(visible) => self.set_window_visible(visible),
             }
         }
     }
@@ -1291,35 +1337,25 @@ impl App {
         if v.theme != self.theme_pref {
             self.set_theme(v.theme);
         }
-        self.exec_wizard_effects(ctx, effects);
-    }
-
-    fn exec_wizard_effects(&mut self, ctx: &egui::Context, effects: Vec<wizard::Effect>) {
-        for effect in effects {
-            match effect {
-                wizard::Effect::Download => {
-                    let ctx2 = ctx.clone();
-                    self.spawn(&ctx2, || Msg::WizardDownload(wizard_download()));
-                }
-                wizard::Effect::Finish {
-                    language,
-                    theme,
-                    steam_path,
-                } => {
-                    debug_assert!(
-                        self.wizard.as_ref().is_some_and(|w| w.finished()),
-                        "Finish 效果只能由已结束的向导产出"
-                    );
-                    self.config.language = language;
-                    self.config.theme = theme;
-                    self.config.steam_path = steam_path.clone();
-                    self.persist_config();
-                    self.wizard = None;
-                    // 向导终局与设置提交收缝到同一写入点（ADR-0020）。
-                    self.on_core_event(AppEvent::CommitPath(steam_path));
-                }
-            }
-        }
+        // 向导状态机留壳（内部文件系统判据 + 语言/主题副作用链），效果收编进统一执行器（ADR-0019 切片 3）。
+        self.exec_app_effects(
+            ctx,
+            effects
+                .into_iter()
+                .map(|e| match e {
+                    wizard::Effect::Download => AppEffect::WizardDownload,
+                    wizard::Effect::Finish {
+                        language,
+                        theme,
+                        steam_path,
+                    } => AppEffect::WizardFinish {
+                        language,
+                        theme,
+                        steam_path,
+                    },
+                })
+                .collect(),
+        );
     }
 
     fn open_settings(&mut self, tab: SettingsTab) {
@@ -1685,7 +1721,7 @@ impl App {
 
     /// Health Warning（spec §24）：仅「上游尚未适配 / 未找到核心 DLL」两态；Amber + 整行可点跳 Settings → Steam。
     fn health_warning_line(&mut self, ui: &mut egui::Ui) {
-        let summary = self.flow.display().summary;
+        let summary = self.core.snapshot().compat.summary;
         let Some(text) = health_warning(&self.strings, summary) else {
             return;
         };
@@ -1733,48 +1769,9 @@ impl App {
         ui.add_space(14.0);
     }
 
-    fn on_compat_event(&mut self, ctx: &egui::Context, event: compat_flow::Event) {
-        let (_, effects) = self.flow.step(event);
-        self.exec_compat_effects(ctx, effects);
-    }
-
-    /// 手动「一键缓存签名」：喂给体检流程（目标选择与在途去重由流程负责）。
-    fn request_precache(&mut self, ctx: &egui::Context) {
-        self.on_compat_event(ctx, compat_flow::Event::PrecacheRequested);
-    }
-
-    fn exec_compat_effects(&self, ctx: &egui::Context, effects: Vec<compat_flow::Effect>) {
-        for effect in effects {
-            match effect {
-                compat_flow::Effect::Probe { epoch, path } => {
-                    let ctx = ctx.clone();
-                    self.spawn(&ctx, move || Msg::Compat {
-                        epoch,
-                        report: compat::probe_all(Path::new(&path)),
-                    });
-                }
-                compat_flow::Effect::Refresh { epoch, path } => {
-                    let ctx = ctx.clone();
-                    self.spawn(&ctx, move || Msg::CompatRefreshed {
-                        epoch,
-                        report: compat::probe_all_refresh(Path::new(&path)),
-                    });
-                }
-                compat_flow::Effect::Precache {
-                    epoch,
-                    path,
-                    targets,
-                } => {
-                    let ctx = ctx.clone();
-                    self.spawn(&ctx, move || {
-                        let result = targets.into_iter().try_for_each(|(target, sha)| {
-                            compat::precache(Path::new(&path), target, &sha)
-                        });
-                        Msg::CompatPrecached { epoch, result }
-                    });
-                }
-            }
-        }
+    /// 手动「一键缓存签名」（目标选择与在途去重由体检流程承担；切片 3 后经统一事件入口）。
+    fn request_precache(&mut self) {
+        self.on_core_event(AppEvent::CompatPrecacheRequested);
     }
 
     fn compat_section(&mut self, ui: &mut egui::Ui) {
@@ -1827,8 +1824,7 @@ impl App {
                     )
                     .clicked()
                     {
-                        let ctx = self.ctx.clone();
-                        self.request_precache(&ctx);
+                        self.request_precache();
                     }
                 }
             });
@@ -1968,10 +1964,10 @@ impl App {
             });
         }
         // 详情内「一键缓存签名」：有未缓存项时提供（issue #23 §7.7）。
-        let precaching = self.flow.display().precaching;
-        if !compat_flow::precache_targets(report).is_empty() && !precaching {
-            let ctx = self.ctx.clone();
-            if styled_button(
+        let precaching = self.core.snapshot().compat.precaching;
+        if !compat_flow::precache_targets(report).is_empty()
+            && !precaching
+            && styled_button(
                 ui,
                 self.strings.compat_btn_precache_all,
                 ButtonStyle::Neutral,
@@ -1980,9 +1976,8 @@ impl App {
                 self.palette,
             )
             .clicked()
-            {
-                self.request_precache(&ctx);
-            }
+        {
+            self.request_precache();
         }
     }
 
@@ -2599,11 +2594,11 @@ impl eframe::App for App {
         self.handle_tray_events();
 
         if let Some(event) = self.steam_monitor.tick() {
-            // 运行状态经统一事件入口喂回编排核心（观察反馈环）；自动隐身策略仍由壳应用（需 window_visible）。
-            self.on_core_event(AppEvent::SteamRunningChanged(event == SteamEvent::Started));
-            if let Some(visible) = auto_tray_policy(event, self.window_visible) {
-                self.set_window_visible(visible);
-            }
+            // 边沿事件进核心（观察反馈环）：auto-tray 隐显决策在核心（切片 3 Q6，镜像 + 边沿语义）。
+            self.on_core_event(match event {
+                SteamEvent::Started => AppEvent::SteamStarted,
+                SteamEvent::Stopped => AppEvent::SteamStopped,
+            });
         }
 
         let repaint_interval = if self.window_visible {
@@ -2615,9 +2610,9 @@ impl eframe::App for App {
 
         let minimized = ctx.input(|i| i.viewport().minimized).unwrap_or(false);
         if minimized && !self.was_minimized && self.minimize_to_tray {
+            // 最小化隐身：非最小化命令保持，显隐收拢到唯一物理写入点（切片 3 Q6 收拢直写）。
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-            self.window_visible = false;
+            self.set_window_visible(false);
         }
         self.was_minimized = minimized;
 
@@ -2818,14 +2813,6 @@ mod tests {
         let mut fonts =
             egui::epaint::text::Fonts::new(egui::epaint::text::TextOptions::default(), defs);
         assert!(!fonts.has_glyph(&egui::FontId::proportional(14.0), '中'));
-    }
-
-    #[test]
-    fn auto_tray_policy_table() {
-        assert_eq!(auto_tray_policy(SteamEvent::Started, true), Some(false));
-        assert_eq!(auto_tray_policy(SteamEvent::Stopped, false), Some(true));
-        assert_eq!(auto_tray_policy(SteamEvent::Started, false), None);
-        assert_eq!(auto_tray_policy(SteamEvent::Stopped, true), None);
     }
 
     #[test]

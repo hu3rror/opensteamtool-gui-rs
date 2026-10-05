@@ -3,6 +3,8 @@
 //! 与 compat_flow / wizard 同构（ADR-0019，GLOSSARY「编排核心」）。
 
 use crate::busy::{BusyGate, BusyKind};
+use crate::compat::OverallHealthReport;
+use crate::compat_flow::{self, CompatFlow, CompatSummary, Epoch};
 use crate::dll::DeploymentFacts;
 use crate::update_flow::{UpdateFlow, UpdateNotice};
 use crate::updater::{OnlineInfo, UpdateError};
@@ -52,8 +54,33 @@ pub enum AppEvent {
     FactsRefreshed(DeploymentFacts),
     /// 壳侧 Steam 运行状态观察（monitor tick / 工作流后 rescan）。
     SteamRunningChanged(bool),
+    /// Steam 启动边沿（monitor tick 边沿事件）：auto-tray 决策入参（切片 3 Q6）。
+    SteamStarted,
+    /// Steam 退出边沿（monitor tick 边沿事件）：auto-tray 决策入参（切片 3 Q6）。
+    SteamStopped,
+    /// 窗口显隐镜像同步（壳物理写入点统一回喂；存态不产效果）。
+    WindowVisibleChanged(bool),
     /// 工作路径提交（唯一写入点；D4/ADR-0020）：设置页提交与向导终局收敛到这里。
     CommitPath(String),
+    /// 体检流程路径变更（含启动首次）：推进代数、防抖由流程内部承担（切片 3 迁入编排核心）。
+    CompatPathChanged(String),
+    /// 体检快速探针完成（观察回喂；迟到代数由流程丢弃）。
+    CompatProbeDone {
+        epoch: Epoch,
+        report: OverallHealthReport,
+    },
+    /// 体检网络刷新完成（观察回喂；迟到代数由流程丢弃）。
+    CompatRefreshDone {
+        epoch: Epoch,
+        report: OverallHealthReport,
+    },
+    /// 体检预热完成（观察回喂；迟到代数由流程丢弃）。
+    CompatPrecacheDone {
+        epoch: Epoch,
+        result: Result<(), crate::compat::CompatError>,
+    },
+    /// 手动「一键缓存签名」按钮（目标选择与在途去重由流程承担）。
+    CompatPrecacheRequested,
 }
 
 /// 效果：壳执行（spawn / plan / probe / rescan），观察结果以事件喂回。
@@ -76,8 +103,34 @@ pub enum AppEffect {
     },
     RefreshFacts,
     RescanSteam,
-    /// 路径变更后重探体检流程（壳子域仍由壳执行，决策在核心）。
+    /// 路径变更后重探体检流程（决策在核心；切片 3 后体检流程已并入核心）。
     FeedCompatPath(String),
+    /// 体检快速探针（扁平效果：compat_flow::Effect 收编进家族，ADR-0019）。
+    CompatProbe {
+        epoch: Epoch,
+        path: String,
+    },
+    /// 体检网络刷新（扁平效果）。
+    CompatRefresh {
+        epoch: Epoch,
+        path: String,
+    },
+    /// 体检预热（扁平效果）。
+    CompatPrecache {
+        epoch: Epoch,
+        path: String,
+        targets: Vec<(crate::compat::ProbeTarget, String)>,
+    },
+    /// 向导下载补丁并解压（向导状态机留壳，效果收编进家族——ADR-0019 切片 3）。
+    WizardDownload,
+    /// 向导终局：壳持久化语言/主题/路径三字段后收敛 CommitPath（ADR-0020；原子写留壳）。
+    WizardFinish {
+        language: crate::config::Language,
+        theme: crate::config::ThemePreference,
+        steam_path: String,
+    },
+    /// 窗口显隐执行（auto-tray 决策产出；壳执行 ViewportCommand 并回喂镜像，切片 3 Q6）。
+    SetWindowVisible(bool),
 }
 
 /// 通知（状态栏文案判定；UpdateChecked 无 payload，结果文案由 update_flow 派生——单一事实源）。
@@ -98,6 +151,17 @@ pub enum SnapshotUpdateNotice {
 }
 
 /// 渲染只读快照（属主拷贝，每帧一次由壳构建）。
+/// 体检域快照（切片 3 迁入编排核心；渲染只消费快照，strings 映射留壳）。
+#[derive(Clone, Debug)]
+pub struct SnapshotCompat {
+    pub report: Option<OverallHealthReport>,
+    pub checking: bool,
+    pub precaching: bool,
+    pub precache_error: Option<crate::compat::CompatError>,
+    pub precache_done: bool,
+    pub summary: CompatSummary,
+}
+
 #[derive(Clone, Debug)]
 pub struct Snapshot {
     pub facts: DeploymentFacts,
@@ -107,6 +171,7 @@ pub struct Snapshot {
     pub notice: Option<Notice>,
     pub confirm: Option<Action>,
     pub update: SnapshotUpdate,
+    pub compat: SnapshotCompat,
 }
 
 #[derive(Clone, Debug)]
@@ -124,6 +189,34 @@ pub struct AppCore {
     steam_running: bool,
     steam_path: String,
     facts: DeploymentFacts,
+    /// 体检流程：内部 seam 第三台子域状态机（切片 3 迁入，ADR-0019）。
+    flow: CompatFlow,
+    /// 窗口显隐镜像（决策入参；物理写入点在壳，经 WindowVisibleChanged 同步——切片 3 Q6）。
+    window_visible: bool,
+    /// RescanSteam 合成隐窗的待决标志：WorkflowDone 置位，下次 SteamRunningChanged 决定是否隐（一次性）。
+    pending_auto_hide: bool,
+}
+
+/// compat 域效果扁平映射（切片 3）：compat_flow::Effect 作为内部枚举被包裹，不进 interface（ADR-0019）。
+fn compat_effects(effects: Vec<compat_flow::Effect>) -> Vec<AppEffect> {
+    effects
+        .into_iter()
+        .map(|e| match e {
+            compat_flow::Effect::Probe { epoch, path } => AppEffect::CompatProbe { epoch, path },
+            compat_flow::Effect::Refresh { epoch, path } => {
+                AppEffect::CompatRefresh { epoch, path }
+            }
+            compat_flow::Effect::Precache {
+                epoch,
+                path,
+                targets,
+            } => AppEffect::CompatPrecache {
+                epoch,
+                path,
+                targets,
+            },
+        })
+        .collect()
 }
 
 impl AppCore {
@@ -138,6 +231,9 @@ impl AppCore {
             // 启动注入值也归一到 trim（与 CommitPath 同一视界：快照恒干净，ADR-0020）。
             steam_path: steam_path.trim().to_string(),
             facts,
+            flow: CompatFlow::new(),
+            window_visible: true,
+            pending_auto_hide: false,
         }
     }
 
@@ -160,6 +256,9 @@ impl AppCore {
             AppEvent::WorkflowDone { action, result } => {
                 self.gate.clear();
                 self.notice = Some(Notice::WorkflowDone(action, result.clone()));
+                // RescanSteam 合成隐窗（切片 3 Q6）：工作流结束后若 Steam 仍在运行则隐窗一次——
+                // 置待决标志，由下个 SteamRunningChanged 观察结果决定（Steam 已退出则自然不隐）。
+                self.pending_auto_hide = true;
                 let mut effects = Vec::new();
                 if result.is_ok() {
                     effects.push(AppEffect::RefreshFacts);
@@ -253,7 +352,31 @@ impl AppCore {
                 return vec![AppEffect::RefreshFacts];
             }
             AppEvent::FactsRefreshed(facts) => self.facts = facts,
-            AppEvent::SteamRunningChanged(running) => self.steam_running = running,
+            AppEvent::SteamRunningChanged(running) => {
+                self.steam_running = running;
+                // auto-tray 合成（切片 3 Q6）：待决隐窗 + Steam 仍在运行 + 窗口可见 → 隐一次；
+                // Steam 已退出 / 窗口已隐（用户手动）→ 只清待决，不产效果。
+                if self.pending_auto_hide && running && self.window_visible {
+                    self.pending_auto_hide = false;
+                    return vec![AppEffect::SetWindowVisible(false)];
+                }
+                self.pending_auto_hide = false;
+            }
+            // auto-tray 边沿决策（表语义自 壳 auto_tray_policy 迁入，切片 3 Q6）：
+            AppEvent::SteamStarted => {
+                self.steam_running = true;
+                if self.window_visible {
+                    return vec![AppEffect::SetWindowVisible(false)];
+                }
+            }
+            AppEvent::SteamStopped => {
+                self.steam_running = false;
+                if !self.window_visible {
+                    return vec![AppEffect::SetWindowVisible(true)];
+                }
+            }
+            // 镜像同步事件：存态即可（幂等；不产效果防回环）。
+            AppEvent::WindowVisibleChanged(visible) => self.window_visible = visible,
             AppEvent::CommitPath(p) => {
                 // 唯一写入点：trim 单一职责归此（ADR-0020）。
                 self.steam_path = p.trim().to_string();
@@ -262,6 +385,33 @@ impl AppCore {
                     AppEffect::FeedCompatPath(self.steam_path.clone()),
                 ];
             }
+            // 切片 3：compat 路径变更 → 内部 seam 转发 CompatFlow，效果扁平映射（防抖/代数由流程承担）。
+            AppEvent::CompatPathChanged(path) => {
+                let (_display, effects) = self.flow.step(compat_flow::Event::PathChanged(path));
+                return compat_effects(effects);
+            }
+            AppEvent::CompatProbeDone { epoch, report } => {
+                let (_display, effects) = self
+                    .flow
+                    .step(compat_flow::Event::ProbeDone { epoch, report });
+                return compat_effects(effects);
+            }
+            AppEvent::CompatRefreshDone { epoch, report } => {
+                let (_display, effects) = self
+                    .flow
+                    .step(compat_flow::Event::RefreshDone { epoch, report });
+                return compat_effects(effects);
+            }
+            AppEvent::CompatPrecacheDone { epoch, result } => {
+                let (_display, effects) = self
+                    .flow
+                    .step(compat_flow::Event::PrecacheDone { epoch, result });
+                return compat_effects(effects);
+            }
+            AppEvent::CompatPrecacheRequested => {
+                let (_display, effects) = self.flow.step(compat_flow::Event::PrecacheRequested);
+                return compat_effects(effects);
+            }
         }
         Vec::new()
     }
@@ -269,6 +419,8 @@ impl AppCore {
     /// 渲染消费只读快照（每帧属主拷贝；更新派生当场计算，零 IO）。
     pub fn snapshot(&self) -> Snapshot {
         let derived = self.update_flow.derived(self.facts.known_local_version());
+        // 体检快照（切片 3）：域状态进快照，渲染零 IO（strings 映射留壳）。
+        let compat_display = self.flow.display();
         Snapshot {
             facts: self.facts.clone(),
             steam_running: self.steam_running,
@@ -283,6 +435,14 @@ impl AppCore {
                     UpdateNotice::CheckFailed(e) => SnapshotUpdateNotice::CheckFailed(e.clone()),
                 }),
                 download: derived.download.cloned(),
+            },
+            compat: SnapshotCompat {
+                report: compat_display.report.cloned(),
+                checking: compat_display.checking,
+                precaching: compat_display.precaching,
+                precache_error: compat_display.precache_error.cloned(),
+                precache_done: compat_display.precache_done,
+                summary: compat_display.summary,
             },
         }
     }
@@ -309,6 +469,397 @@ mod tests {
 
     fn core() -> AppCore {
         AppCore::new(facts(Some("1.4.7")), false, "Z:/fake/steam/nonexistent")
+    }
+
+    // —— 切片 3：compat 域迁入编排核心（ADR-0019 主盘）——
+
+    #[test]
+    fn compat_path_changed_emits_flat_probe_and_checking_snapshot() {
+        let mut c = core();
+        let effects = c.step(AppEvent::CompatPathChanged(
+            "Z:/fake/steam/nonexistent".to_string(),
+        ));
+        assert_eq!(
+            effects,
+            vec![AppEffect::CompatProbe {
+                epoch: Epoch(1),
+                path: "Z:/fake/steam/nonexistent".to_string(),
+            }]
+        );
+        assert!(c.snapshot().compat.checking);
+        assert_eq!(c.snapshot().compat.summary, CompatSummary::Checking);
+    }
+
+    #[test]
+    fn compat_path_changed_same_path_is_deduped() {
+        let mut c = core();
+        c.step(AppEvent::CompatPathChanged(
+            "Z:/fake/steam/nonexistent".to_string(),
+        ));
+        let effects = c.step(AppEvent::CompatPathChanged(
+            "Z:/fake/steam/nonexistent".to_string(),
+        ));
+        assert!(effects.is_empty());
+    }
+
+    fn probe_report(
+        target: crate::compat::ProbeTarget,
+        status: crate::compat::ProbeStatus,
+    ) -> crate::compat::ProbeReport {
+        crate::compat::ProbeReport {
+            target,
+            sha256: Some("abc".into()),
+            status,
+            signature_cached: false,
+        }
+    }
+
+    fn report_with(
+        statuses: [crate::compat::ProbeStatus; 3],
+        has_missing_cache: bool,
+    ) -> OverallHealthReport {
+        use crate::compat::ProbeTarget::*;
+        OverallHealthReport {
+            steamclient_pattern: probe_report(PatternSteamClient, statuses[0].clone()),
+            steamui_pattern: probe_report(PatternSteamUi, statuses[1].clone()),
+            steamclient_ipc: probe_report(IpcSteamClient, statuses[2].clone()),
+            is_all_compatible: !has_missing_cache,
+            has_missing_cache,
+        }
+    }
+
+    fn all_cached_report() -> OverallHealthReport {
+        use crate::compat::ProbeStatus::*;
+        report_with(
+            [
+                RemoteAvailable { cached: true },
+                RemoteAvailable { cached: true },
+                RemoteAvailable { cached: true },
+            ],
+            false,
+        )
+    }
+
+    #[test]
+    fn compat_probe_done_ready_report_updates_snapshot_without_effects() {
+        let mut c = core();
+        c.step(AppEvent::CompatPathChanged(
+            "Z:/fake/steam/nonexistent".to_string(),
+        ));
+        let effects = c.step(AppEvent::CompatProbeDone {
+            epoch: Epoch(1),
+            report: all_cached_report(),
+        });
+        assert!(effects.is_empty());
+        let s = c.snapshot();
+        assert!(!s.compat.checking);
+        assert_eq!(s.compat.summary, CompatSummary::Ready);
+        assert!(s.compat.report.is_some(), "报告须进快照供渲染");
+    }
+
+    #[test]
+    fn compat_stale_epoch_completions_are_dropped() {
+        let mut c = core();
+        c.step(AppEvent::CompatPathChanged(
+            "Z:/fake/steam/nonexistent".to_string(),
+        ));
+        // 路径再次变更：代数推进到 2，旧代数在途结果全部作废。
+        c.step(AppEvent::CompatPathChanged("Z:/other/steam".to_string()));
+        assert!(
+            c.step(AppEvent::CompatProbeDone {
+                epoch: Epoch(1),
+                report: all_cached_report(),
+            })
+            .is_empty()
+        );
+        assert!(
+            c.step(AppEvent::CompatRefreshDone {
+                epoch: Epoch(1),
+                report: all_cached_report(),
+            })
+            .is_empty()
+        );
+        assert!(
+            c.step(AppEvent::CompatPrecacheDone {
+                epoch: Epoch(1),
+                result: Ok(()),
+            })
+            .is_empty()
+        );
+        let s = c.snapshot();
+        assert!(s.compat.checking, "迟到的旧结果不得改写当前体检状态");
+        assert!(s.compat.report.is_none());
+    }
+
+    #[test]
+    fn compat_probe_done_online_refreshes_then_precaches() {
+        use crate::compat::ProbeStatus::*;
+        let mut c = core();
+        c.step(AppEvent::CompatPathChanged(
+            "Z:/fake/steam/nonexistent".to_string(),
+        ));
+        let effects = c.step(AppEvent::CompatProbeDone {
+            epoch: Epoch(1),
+            report: report_with(
+                [
+                    RemoteAvailable { cached: false },
+                    RemoteAvailable { cached: true },
+                    RemoteAvailable { cached: true },
+                ],
+                true,
+            ),
+        });
+        // 效果序契约：先后台网络刷新，再自动预热（compat_flow 既有语义）。
+        assert_eq!(effects.len(), 2);
+        assert!(matches!(
+            &effects[0],
+            AppEffect::CompatRefresh { epoch: Epoch(1), path }
+            if path == "Z:/fake/steam/nonexistent"
+        ));
+        // 三者均为 RemoteAvailable 且签名未缓存（signature_cached=false）→ 全部入预热目标。
+        assert!(matches!(
+            &effects[1],
+            AppEffect::CompatPrecache {
+                epoch: Epoch(1),
+                targets,
+                ..
+            } if targets.len() == 3
+        ));
+        let s = c.snapshot();
+        assert_eq!(s.compat.summary, CompatSummary::Online);
+        assert!(s.compat.precaching, "自动预热在途");
+    }
+
+    #[test]
+    fn compat_refresh_done_merges_report_keeping_inflight_precache() {
+        use crate::compat::ProbeStatus::*;
+        let mut c = core();
+        c.step(AppEvent::CompatPathChanged(
+            "Z:/fake/steam/nonexistent".to_string(),
+        ));
+        c.step(AppEvent::CompatProbeDone {
+            epoch: Epoch(1),
+            report: report_with(
+                [
+                    RemoteAvailable { cached: false },
+                    RemoteAvailable { cached: true },
+                    RemoteAvailable { cached: true },
+                ],
+                true,
+            ),
+        });
+        let effects = c.step(AppEvent::CompatRefreshDone {
+            epoch: Epoch(1),
+            report: all_cached_report(),
+        });
+        assert!(effects.is_empty(), "合并报告不额外产效果");
+        let s = c.snapshot();
+        assert!(s.compat.precaching, "刷新不得抹掉在途预热");
+        assert!(s.compat.report.is_some());
+    }
+
+    #[test]
+    fn compat_precache_done_ok_reprobes_within_epoch() {
+        use crate::compat::ProbeStatus::*;
+        let mut c = core();
+        c.step(AppEvent::CompatPathChanged(
+            "Z:/fake/steam/nonexistent".to_string(),
+        ));
+        c.step(AppEvent::CompatProbeDone {
+            epoch: Epoch(1),
+            report: report_with(
+                [
+                    RemoteAvailable { cached: false },
+                    RemoteAvailable { cached: true },
+                    RemoteAvailable { cached: true },
+                ],
+                true,
+            ),
+        });
+        // 预热成功后同一代数复检（刷新预算已消耗 → 不再产网络刷新）。
+        assert!(
+            matches!(
+                c.step(AppEvent::CompatPrecacheDone {
+                    epoch: Epoch(1),
+                    result: Ok(()),
+                })
+                .as_slice(),
+                [AppEffect::CompatProbe {
+                    epoch: Epoch(1),
+                    ..
+                }]
+            ),
+            "复检快速探针应产出 CompatProbe"
+        );
+    }
+
+    #[test]
+    fn compat_precache_requested_dedupes_and_requires_report() {
+        use crate::compat::ProbeStatus::*;
+        // 无报告：手动预热无可预热目标 → 无动作。
+        let mut c = core();
+        assert!(c.step(AppEvent::CompatPrecacheRequested).is_empty());
+        // 报告 Online 且自动预热已在途：手动入口被去重。
+        c.step(AppEvent::CompatPathChanged(
+            "Z:/fake/steam/nonexistent".to_string(),
+        ));
+        c.step(AppEvent::CompatProbeDone {
+            epoch: Epoch(1),
+            report: report_with(
+                [
+                    RemoteAvailable { cached: false },
+                    RemoteAvailable { cached: true },
+                    RemoteAvailable { cached: true },
+                ],
+                true,
+            ),
+        });
+        assert!(c.step(AppEvent::CompatPrecacheRequested).is_empty());
+        assert!(c.snapshot().compat.precaching);
+    }
+
+    #[test]
+    fn compat_precache_done_auto_failure_silent_manual_visible() {
+        use crate::compat::{CompatError, ProbeStatus::*};
+        let mut c = core();
+        c.step(AppEvent::CompatPathChanged(
+            "Z:/fake/steam/nonexistent".to_string(),
+        ));
+        c.step(AppEvent::CompatProbeDone {
+            epoch: Epoch(1),
+            report: report_with(
+                [
+                    RemoteAvailable { cached: false },
+                    RemoteAvailable { cached: true },
+                    RemoteAvailable { cached: true },
+                ],
+                true,
+            ),
+        });
+        assert!(c.snapshot().compat.precaching, "自动预热在途");
+        // 自动预热失败：静默（徽章保持 Online、错误不进快照）。
+        assert!(
+            c.step(AppEvent::CompatPrecacheDone {
+                epoch: Epoch(1),
+                result: Err(CompatError::Network("auto".into())),
+            })
+            .is_empty()
+        );
+        assert!(!c.snapshot().compat.precaching);
+        assert!(c.snapshot().compat.precache_error.is_none(), "自动失败静默");
+        // 同一报告下手动入口重新触发：失败就地呈现。
+        assert!(matches!(
+            c.step(AppEvent::CompatPrecacheRequested).as_slice(),
+            [AppEffect::CompatPrecache { .. }]
+        ));
+        assert!(
+            c.step(AppEvent::CompatPrecacheDone {
+                epoch: Epoch(1),
+                result: Err(CompatError::Network("manual".into())),
+            })
+            .is_empty()
+        );
+        assert!(
+            matches!(
+                c.snapshot().compat.precache_error,
+                Some(crate::compat::CompatError::Network(ref m)) if m == "manual"
+            ),
+            "手动失败错误进快照供渲染"
+        );
+    }
+
+    // —— 切片 3：窗口显隐 Steam 联动决策迁入编排核心（auto-tray，Q6）——
+
+    #[test]
+    fn steam_started_hides_visible_window() {
+        let mut c = core();
+        let effects = c.step(AppEvent::SteamStarted);
+        assert_eq!(effects, vec![AppEffect::SetWindowVisible(false)]);
+        assert!(c.snapshot().steam_running);
+    }
+
+    #[test]
+    fn steam_stopped_restores_hidden_window() {
+        let mut c = core();
+        c.step(AppEvent::SteamStarted); // 隐窗效果已产出
+        c.step(AppEvent::WindowVisibleChanged(false)); // 壳执行后回喂镜像
+        let effects = c.step(AppEvent::SteamStopped);
+        assert_eq!(effects, vec![AppEffect::SetWindowVisible(true)]);
+        assert!(!c.snapshot().steam_running);
+    }
+
+    #[test]
+    fn steam_started_while_hidden_does_nothing() {
+        let mut c = core();
+        c.step(AppEvent::WindowVisibleChanged(false));
+        let effects = c.step(AppEvent::SteamStarted);
+        assert!(effects.is_empty());
+        assert!(c.snapshot().steam_running);
+    }
+
+    #[test]
+    fn steam_stopped_while_visible_does_nothing() {
+        let mut c = core();
+        let effects = c.step(AppEvent::SteamStopped);
+        assert!(effects.is_empty());
+        assert!(!c.snapshot().steam_running);
+    }
+
+    #[test]
+    fn window_visible_change_is_state_only_and_manual_show_not_retracted() {
+        let mut c = core();
+        // 镜像同步事件：只存状态，不产效果。
+        assert!(c.step(AppEvent::WindowVisibleChanged(false)).is_empty());
+        assert!(c.step(AppEvent::WindowVisibleChanged(true)).is_empty());
+        // auto-tray 首次 Started 隐窗，随后用户从托盘手动 Show：
+        c.step(AppEvent::SteamStarted);
+        c.step(AppEvent::WindowVisibleChanged(false));
+        c.step(AppEvent::WindowVisibleChanged(true)); // 用户显式 Show
+        // 没有新边沿：运行中状态回喂（如工作流 rescan）不得把显式 Show 收回。
+        let effects = c.step(AppEvent::SteamRunningChanged(true));
+        assert!(effects.is_empty(), "显式 Show 后不得被状态回喂收回");
+    }
+
+    #[test]
+    fn workdone_rescan_hides_once_when_steam_still_running() {
+        let mut c = core();
+        c.step(AppEvent::WorkflowDone {
+            action: Action::ApplyAndLaunch,
+            result: Ok(()),
+        });
+        let effects = c.step(AppEvent::SteamRunningChanged(true));
+        assert_eq!(effects, vec![AppEffect::SetWindowVisible(false)]);
+        // 同一待决标志只隐一次。
+        assert!(c.step(AppEvent::SteamRunningChanged(true)).is_empty());
+    }
+
+    #[test]
+    fn workdone_rescan_no_hide_when_steam_exited() {
+        let mut c = core();
+        c.step(AppEvent::WorkflowDone {
+            action: Action::UninstallAndRestart,
+            result: Ok(()),
+        });
+        // 工作流后 Steam 已退出（如卸载）：rescan 回喂 false，不含隐窗。
+        assert!(c.step(AppEvent::SteamRunningChanged(false)).is_empty());
+    }
+
+    #[test]
+    fn rescan_without_pending_never_hides() {
+        let mut c = core();
+        assert!(c.step(AppEvent::SteamRunningChanged(true)).is_empty());
+    }
+
+    #[test]
+    fn workdone_rescan_no_hide_when_window_already_hidden() {
+        let mut c = core();
+        // 窗口早已隐藏（如用户手动）：职责最小化，不重复产效果。
+        c.step(AppEvent::WindowVisibleChanged(false));
+        c.step(AppEvent::WorkflowDone {
+            action: Action::Launch,
+            result: Ok(()),
+        });
+        assert!(c.step(AppEvent::SteamRunningChanged(true)).is_empty());
     }
 
     fn busy_gate_start(c: &mut AppCore, kind: BusyKind) {
