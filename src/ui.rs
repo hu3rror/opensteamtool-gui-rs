@@ -442,7 +442,7 @@ struct CompatView {
 
 impl CompatView {
     fn snapshot(app: &App) -> Self {
-        // 切片 3：体检域状态经编排核心快照（ADR-0019）；strings 文案映射留在渲染层（快照零 i18n）。
+        // 体检域状态经编排核心快照（ADR-0019）；strings 文案映射留在渲染层（快照零 i18n）。
         let d = app.core.snapshot().compat;
         Self {
             summary: d.summary,
@@ -1025,8 +1025,7 @@ impl App {
         // 标题栏沿用 ViewportBuilder 图标）。初始图标已按 config 主题选版（见 main.rs），
         // System 模式校正与后续主题切换走 ui() 的 palette 钩子/首帧同步。
         app.sync_tray_restart_enabled(app.core.snapshot().facts.status);
-        // 启动即喂首次路径：经统一事件入口产首次快速体检效果（初始 checking 骨架态，零白屏；
-        // 工作路径在核心（ADR-0020），由快照取；切片 3 后 compat 域在核心内部）。
+        // 启动即喂首次路径：经统一事件入口产首次快速体检效果（初始 checking 骨架态，零白屏；工作路径在核心（ADR-0020），由快照取）。
         let initial_path = app.core.snapshot().steam_path.clone();
         app.on_core_event(AppEvent::CompatPathChanged(initial_path));
         app
@@ -1045,6 +1044,8 @@ impl App {
         });
     }
 
+    /// 窗口显隐的唯一物理写入点（ViewportCommand::Visible 只在此触达；托盘/单实例/最小化/效果执行全走它）。
+    /// 每次变化回喂核心镜像（决策入参）；WindowVisibleChanged 固定无效果，壳直调路径是安全的新事件进入。
     fn set_window_visible(&mut self, visible: bool) {
         let changed = self.window_visible != visible;
         self.window_visible = visible;
@@ -1055,9 +1056,18 @@ impl App {
             self.ctx.request_repaint();
         }
         if changed {
-            // 镜像同步（切片 3 Q6）：物理显隐变化回喂核心镜像（决策入参）。
-            // 托盘/单实例/最小化决策仍留壳；核心产出的 SetWindowVisible 效果也经此唯一物理写入点。
             self.on_core_event(AppEvent::WindowVisibleChanged(visible));
+        }
+    }
+
+    /// 窗口显隐物理应用（不涉及镜像同步；exec 循环内的 SetWindowVisible 分支用它 + 队列回喂）。
+    fn apply_window_visible(&mut self, visible: bool) {
+        self.window_visible = visible;
+        self.ctx
+            .send_viewport_cmd(egui::ViewportCommand::Visible(visible));
+        if visible {
+            self.pending_focus = true;
+            self.ctx.request_repaint();
         }
     }
 
@@ -1230,12 +1240,12 @@ impl App {
                     queue.extend(self.core.step(AppEvent::FactsRefreshed(facts)));
                 }
                 AppEffect::RescanSteam => {
-                    // 重读运行状态并把观察喂回核心；隐窗决策在核心（Q6 合成，删除壳执行器隐窗）。
+                    // 重读运行状态并把观察喂回核心；隐窗决策在核心（一次性合成）。
                     let running = self.steam_monitor.rescan();
                     queue.extend(self.core.step(AppEvent::SteamRunningChanged(running)));
                 }
                 AppEffect::FeedCompatPath(p) => {
-                    // 路径变更 → 体检重探：决策在核心，回喂经效果队列（P5 统一入口，切片 3）。
+                    // 路径变更 → 体检重探：决策在核心，回喂经效果队列（P5 统一入口）。
                     queue.extend(self.core.step(AppEvent::CompatPathChanged(p)));
                 }
                 AppEffect::CompatProbe { epoch, path } => {
@@ -1286,7 +1296,11 @@ impl App {
                     // 向导终局与设置提交收缝到同一写入点（ADR-0020）。
                     self.on_core_event(AppEvent::CommitPath(steam_path));
                 }
-                AppEffect::SetWindowVisible(visible) => self.set_window_visible(visible),
+                AppEffect::SetWindowVisible(visible) => {
+                    // 效果路径（exec 循环内）：镜像回喂走效果队列（P5 统一；WindowVisibleChanged 幂等）。
+                    self.apply_window_visible(visible);
+                    queue.extend(self.core.step(AppEvent::WindowVisibleChanged(visible)));
+                }
             }
         }
     }
@@ -1337,7 +1351,7 @@ impl App {
         if v.theme != self.theme_pref {
             self.set_theme(v.theme);
         }
-        // 向导状态机留壳（内部文件系统判据 + 语言/主题副作用链），效果收编进统一执行器（ADR-0019 切片 3）。
+        // 向导状态机留壳（内部文件系统判据 + 语言/主题副作用链），效果收编进统一执行器（ADR-0019）。
         self.exec_app_effects(
             ctx,
             effects
@@ -1769,7 +1783,7 @@ impl App {
         ui.add_space(14.0);
     }
 
-    /// 手动「一键缓存签名」（目标选择与在途去重由体检流程承担；切片 3 后经统一事件入口）。
+    /// 手动「一键缓存签名」（目标选择与在途去重由体检流程承担；经统一事件入口）。
     fn request_precache(&mut self) {
         self.on_core_event(AppEvent::CompatPrecacheRequested);
     }
@@ -2594,7 +2608,7 @@ impl eframe::App for App {
         self.handle_tray_events();
 
         if let Some(event) = self.steam_monitor.tick() {
-            // 边沿事件进核心（观察反馈环）：auto-tray 隐显决策在核心（切片 3 Q6，镜像 + 边沿语义）。
+            // 边沿事件进核心（观察反馈环）：auto-tray 隐显决策在核心（镜像 + 边沿语义）。
             self.on_core_event(match event {
                 SteamEvent::Started => AppEvent::SteamStarted,
                 SteamEvent::Stopped => AppEvent::SteamStopped,
@@ -2610,7 +2624,7 @@ impl eframe::App for App {
 
         let minimized = ctx.input(|i| i.viewport().minimized).unwrap_or(false);
         if minimized && !self.was_minimized && self.minimize_to_tray {
-            // 最小化隐身：非最小化命令保持，显隐收拢到唯一物理写入点（切片 3 Q6 收拢直写）。
+            // 最小化隐身：非最小化命令保持，显隐经唯一物理写入点（含镜像同步）。
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
             self.set_window_visible(false);
         }

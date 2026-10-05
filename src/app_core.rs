@@ -54,15 +54,15 @@ pub enum AppEvent {
     FactsRefreshed(DeploymentFacts),
     /// 壳侧 Steam 运行状态观察（monitor tick / 工作流后 rescan）。
     SteamRunningChanged(bool),
-    /// Steam 启动边沿（monitor tick 边沿事件）：auto-tray 决策入参（切片 3 Q6）。
+    /// Steam 启动边沿（monitor tick）：auto-tray 决策入参。
     SteamStarted,
-    /// Steam 退出边沿（monitor tick 边沿事件）：auto-tray 决策入参（切片 3 Q6）。
+    /// Steam 退出边沿（monitor tick）：auto-tray 决策入参。
     SteamStopped,
     /// 窗口显隐镜像同步（壳物理写入点统一回喂；存态不产效果）。
     WindowVisibleChanged(bool),
     /// 工作路径提交（唯一写入点；D4/ADR-0020）：设置页提交与向导终局收敛到这里。
     CommitPath(String),
-    /// 体检流程路径变更（含启动首次）：推进代数、防抖由流程内部承担（切片 3 迁入编排核心）。
+    /// 体检流程路径变更（含启动首次）：推进代数、防抖由流程内部承担。
     CompatPathChanged(String),
     /// 体检快速探针完成（观察回喂；迟到代数由流程丢弃）。
     CompatProbeDone {
@@ -103,7 +103,7 @@ pub enum AppEffect {
     },
     RefreshFacts,
     RescanSteam,
-    /// 路径变更后重探体检流程（决策在核心；切片 3 后体检流程已并入核心）。
+    /// 路径变更后重探体检流程（决策在核心，回喂经效果队列）。
     FeedCompatPath(String),
     /// 体检快速探针（扁平效果：compat_flow::Effect 收编进家族，ADR-0019）。
     CompatProbe {
@@ -121,7 +121,7 @@ pub enum AppEffect {
         path: String,
         targets: Vec<(crate::compat::ProbeTarget, String)>,
     },
-    /// 向导下载补丁并解压（向导状态机留壳，效果收编进家族——ADR-0019 切片 3）。
+    /// 向导下载补丁并解压（向导留壳，效果收编进家族——ADR-0019）。
     WizardDownload,
     /// 向导终局：壳持久化语言/主题/路径三字段后收敛 CommitPath（ADR-0020；原子写留壳）。
     WizardFinish {
@@ -129,7 +129,7 @@ pub enum AppEffect {
         theme: crate::config::ThemePreference,
         steam_path: String,
     },
-    /// 窗口显隐执行（auto-tray 决策产出；壳执行 ViewportCommand 并回喂镜像，切片 3 Q6）。
+    /// 窗口显隐执行（auto-tray/工作流决策产出；壳执行 ViewportCommand 并回喂镜像）。
     SetWindowVisible(bool),
 }
 
@@ -151,7 +151,7 @@ pub enum SnapshotUpdateNotice {
 }
 
 /// 渲染只读快照（属主拷贝，每帧一次由壳构建）。
-/// 体检域快照（切片 3 迁入编排核心；渲染只消费快照，strings 映射留壳）。
+/// 体检域快照：渲染只消费快照，strings 映射留壳（零 i18n）。
 #[derive(Clone, Debug)]
 pub struct SnapshotCompat {
     pub report: Option<OverallHealthReport>,
@@ -189,15 +189,15 @@ pub struct AppCore {
     steam_running: bool,
     steam_path: String,
     facts: DeploymentFacts,
-    /// 体检流程：内部 seam 第三台子域状态机（切片 3 迁入，ADR-0019）。
+    /// 体检流程：内部 seam 子域状态机（ADR-0019）。
     flow: CompatFlow,
-    /// 窗口显隐镜像（决策入参；物理写入点在壳，经 WindowVisibleChanged 同步——切片 3 Q6）。
+    /// 窗口显隐镜像（决策入参；物理写入点在壳，经 WindowVisibleChanged 同步）。
     window_visible: bool,
     /// RescanSteam 合成隐窗的待决标志：WorkflowDone 置位，下次 SteamRunningChanged 决定是否隐（一次性）。
     pending_auto_hide: bool,
 }
 
-/// compat 域效果扁平映射（切片 3）：compat_flow::Effect 作为内部枚举被包裹，不进 interface（ADR-0019）。
+/// compat 域效果扁平映射：compat_flow::Effect 作为内部枚举被包裹，不进 interface（ADR-0019）。
 fn compat_effects(effects: Vec<compat_flow::Effect>) -> Vec<AppEffect> {
     effects
         .into_iter()
@@ -256,8 +256,8 @@ impl AppCore {
             AppEvent::WorkflowDone { action, result } => {
                 self.gate.clear();
                 self.notice = Some(Notice::WorkflowDone(action, result.clone()));
-                // RescanSteam 合成隐窗（切片 3 Q6）：工作流结束后若 Steam 仍在运行则隐窗一次——
-                // 置待决标志，由下个 SteamRunningChanged 观察结果决定（Steam 已退出则自然不隐）。
+                // RescanSteam 合成隐窗：工作流结束后若 Steam 仍在运行则隐窗一次——置待决标志，
+                // 由下个 SteamRunningChanged 观察结果决定（Steam 已退出则自然不隐）。
                 self.pending_auto_hide = true;
                 let mut effects = Vec::new();
                 if result.is_ok() {
@@ -354,15 +354,15 @@ impl AppCore {
             AppEvent::FactsRefreshed(facts) => self.facts = facts,
             AppEvent::SteamRunningChanged(running) => {
                 self.steam_running = running;
-                // auto-tray 合成（切片 3 Q6）：待决隐窗 + Steam 仍在运行 + 窗口可见 → 隐一次；
-                // Steam 已退出 / 窗口已隐（用户手动）→ 只清待决，不产效果。
+                // 合成隐窗：待决 && 仍在运行 && 镜像可见 → 隐一次（一次性动作，已隐藏时不再产出）；
+                // Steam 退出或窗口已隐藏则仅清待决。
                 if self.pending_auto_hide && running && self.window_visible {
                     self.pending_auto_hide = false;
                     return vec![AppEffect::SetWindowVisible(false)];
                 }
                 self.pending_auto_hide = false;
             }
-            // auto-tray 边沿决策（表语义自 壳 auto_tray_policy 迁入，切片 3 Q6）：
+            // auto-tray 边沿决策（表语义）：
             AppEvent::SteamStarted => {
                 self.steam_running = true;
                 if self.window_visible {
@@ -385,7 +385,6 @@ impl AppCore {
                     AppEffect::FeedCompatPath(self.steam_path.clone()),
                 ];
             }
-            // 切片 3：compat 路径变更 → 内部 seam 转发 CompatFlow，效果扁平映射（防抖/代数由流程承担）。
             AppEvent::CompatPathChanged(path) => {
                 let (_display, effects) = self.flow.step(compat_flow::Event::PathChanged(path));
                 return compat_effects(effects);
@@ -419,7 +418,7 @@ impl AppCore {
     /// 渲染消费只读快照（每帧属主拷贝；更新派生当场计算，零 IO）。
     pub fn snapshot(&self) -> Snapshot {
         let derived = self.update_flow.derived(self.facts.known_local_version());
-        // 体检快照（切片 3）：域状态进快照，渲染零 IO（strings 映射留壳）。
+        // 体检快照：域状态进快照，渲染零 IO（strings 映射留壳）。
         let compat_display = self.flow.display();
         Snapshot {
             facts: self.facts.clone(),
@@ -471,7 +470,7 @@ mod tests {
         AppCore::new(facts(Some("1.4.7")), false, "Z:/fake/steam/nonexistent")
     }
 
-    // —— 切片 3：compat 域迁入编排核心（ADR-0019 主盘）——
+    // compat 域迁入编排核心（ADR-0019 主盘）
 
     #[test]
     fn compat_path_changed_emits_flat_probe_and_checking_snapshot() {
@@ -768,7 +767,82 @@ mod tests {
         );
     }
 
-    // —— 切片 3：窗口显隐 Steam 联动决策迁入编排核心（auto-tray，Q6）——
+    #[test]
+    fn path_commit_feed_chain_is_flat_at_the_seam() {
+        let mut c = core();
+        // 提交路径：编排效果序固定（先文件事实再体检重探，ADR-0020）。
+        let effects = c.step(AppEvent::CommitPath("Z:/fake/steam/committed".into()));
+        assert_eq!(
+            effects,
+            vec![
+                AppEffect::RefreshFacts,
+                AppEffect::FeedCompatPath("Z:/fake/steam/committed".to_string()),
+            ]
+        );
+        // P5 全链（队列机制在壳执行器）：facts 回喂空效果（FactsRefreshed 无效果）；
+        // 体检回喂产快速探针（首次进入 → 代数 1）。
+        assert!(
+            c.step(AppEvent::FactsRefreshed(facts(Some("1.4.7"))))
+                .is_empty()
+        );
+        assert_eq!(
+            c.step(AppEvent::CompatPathChanged(
+                "Z:/fake/steam/committed".to_string()
+            )),
+            vec![AppEffect::CompatProbe {
+                epoch: Epoch(1),
+                path: "Z:/fake/steam/committed".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn compat_summary_covers_pending_missing_network_at_seam() {
+        use crate::compat::ProbeStatus::*;
+        // 六态在 seam 全覆盖：Checking/Ready/Online 已有专测，这里补缺的三个汇总态。
+        let cases: [([crate::compat::ProbeStatus; 3], bool, CompatSummary); 3] = [
+            (
+                [
+                    IncompatiblePending,
+                    NetworkError("x".into()),
+                    RemoteAvailable { cached: false },
+                ],
+                true,
+                CompatSummary::Pending,
+            ),
+            (
+                [
+                    FileNotFound,
+                    RemoteAvailable { cached: true },
+                    RemoteAvailable { cached: true },
+                ],
+                false,
+                CompatSummary::Missing,
+            ),
+            (
+                [
+                    NetworkError("timeout".into()),
+                    CompatibleOffline,
+                    RemoteAvailable { cached: true },
+                ],
+                false,
+                CompatSummary::Network,
+            ),
+        ];
+        for (statuses, has_missing_cache, expect) in cases {
+            let mut c = core();
+            c.step(AppEvent::CompatPathChanged(
+                "Z:/fake/steam/nonexistent".to_string(),
+            ));
+            c.step(AppEvent::CompatProbeDone {
+                epoch: Epoch(1),
+                report: report_with(statuses, has_missing_cache),
+            });
+            assert_eq!(c.snapshot().compat.summary, expect);
+        }
+    }
+
+    // 窗口显隐 Steam 联动决策在编排核心（auto-tray）
 
     #[test]
     fn steam_started_hides_visible_window() {
