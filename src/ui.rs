@@ -1050,10 +1050,13 @@ impl App {
     /// 窗口显隐唯一物理写入体（ViewportCommand::Visible 只在此触达，含字段镜像与显式聚焦）。
     /// 两条路径共用：壳驱动（托盘/单实例/最小化）经 set_window_visible，效果路径（exec 循环内）经队列回喂。
     fn write_window_visible(&mut self, visible: bool) {
+        let was_visible = self.window_visible;
         self.window_visible = visible;
         self.ctx
             .send_viewport_cmd(egui::ViewportCommand::Visible(visible));
-        if visible {
+        if visible && !was_visible {
+            // 窗口已可见时补发 Focus 会触发 winit 的「模拟 Alt 键抢前台」（force_window_active）：
+            // 注入的 Alt 命中当时前台窗口的菜单栏/命令栏首项（如资源管理器「新建」被选中）。
             self.pending_focus = true;
             self.ctx.request_repaint();
         }

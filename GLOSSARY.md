@@ -200,7 +200,7 @@ _Avoid_: 主控制器、应用逻辑、核心控制器
 _Avoid_: 窗口状态、可见标志
 
 **单实例（Single Instance）**:
-同一登录会话内只允许一个应用实例（Windows 命名互斥体 `Local\OpenSteamToolManager.Singleton` 裁决）：重复启动的 exe 直接退出，并置位命名唤醒事件（`Local\OpenSteamToolManager.Activate`）让既有窗口（含托盘隐藏中）恢复显示并聚焦；会话级作用域保证远程桌面等多会话各自独立。守卫随唤醒线程存活至进程退出（ADR-0017）。
+同一登录会话内只允许一个应用实例（Windows 命名互斥体 `Local\OpenSteamToolManager.Singleton` 裁决）：重复启动的 exe 直接退出，并置位命名唤醒事件（`Local\OpenSteamToolManager.Activate`）让既有窗口（含托盘隐藏中）恢复显示并聚焦；窗口已可见时不再补聚焦（避免 winit 注入 Alt 键误选当时前台窗口菜单栏首项）；会话级作用域保证远程桌面等多会话各自独立。守卫随唤醒线程存活至进程退出（ADR-0017）。
 _Avoid_: 防多开、唯一实例锁
 
 ## Rules

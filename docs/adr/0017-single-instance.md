@@ -22,9 +22,16 @@
 - **命名事件唤醒首实例**（`CreateEventW`，auto-reset，
   `Local\OpenSteamToolManager.Activate`）：重复启动方置位后退出；首实例持有一行后台
   线程 `WaitForSingleObject(INFINITE)` 阻塞等待，每次置位向 UI 发 `Msg::ActivateRequested`，
-  UI 走既有 `set_window_visible(true)`（恢复显示 + 聚焦）路径——与托盘「显示」同一
-  机制，前台唤起由 winit 的 `focus_window`（Alt 键前台夺取）保证，不受 Windows 前台
-  锁限制。
+  UI 走既有 `set_window_visible(true)` 路径——与托盘「显示」同一机制，前台唤起由
+  winit 的 `focus_window`（Alt 键前台夺取）保证，不受 Windows 前台锁限制。
+- **已可见不再补聚焦**：`write_window_visible` 仅在窗口由隐藏转为可见时置
+  `pending_focus`，窗口已可见时不发 `ViewportCommand::Focus`。winit 的
+  `force_window_active` 用「模拟 Alt 键」绕过前台锁（`SendInput` 注入 Alt +
+  `SetForegroundWindow`），注入的 Alt 会命中当时前台窗口的菜单栏/命令栏首项——
+  实测在资源管理器窗口上表现为「新建」键被选中（仅选中、不触发点击）；重复双击
+  图标等唤起场景下前台恰被资源管理器先抢占，副作用不可避免且 `SetForegroundWindow`
+  本身并不可靠。托盘隐藏→恢复仍走「恢复显示 + 聚焦」（`SW_SHOW` 自行激活窗口，
+  后续 Focus 因已在前台不再注入 Alt），行为不变。
 - **启动竞态**：首实例建互斥体后、建事件前的窗口期极小；重复启动方此时会先建出事件，
   置位会因随后无其他句柄而随对象销毁丢失。处理：重复启动方循环重试（≤50 次 × 5ms），
   直到观察到事件已由首实例持有（`ERROR_ALREADY_EXISTS`）再置位；超时放弃（首实例
@@ -50,7 +57,9 @@
 ## 验收
 
 - 首实例运行中再次启动 exe：第二进程立即退出（退出码 0），无第二个窗口/托盘图标；
-  既有窗口（含托盘隐藏状态）恢复显示并聚焦。
+  托盘隐藏状态恢复显示并聚焦（`SW_SHOW` 激活路径）；窗口已可见时不再补聚焦，
+  且不注入任何击键（低层键盘钩子断言：修复前后对比实测，可见未聚焦/最小化两场景
+  在修复前均会注入 Alt，修复后全绿，回归脚本保留在 `target/debug/alt-focus-loop9.ps1`）。
 - 首实例退出后可正常再次启动；崩溃（进程被杀）后不残留锁（互斥体句柄随进程关闭，
   对象随之销毁），无需清理。
 - 多会话（远程桌面另开会话）各自可启动独立实例。
