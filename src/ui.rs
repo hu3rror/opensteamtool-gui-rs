@@ -1123,10 +1123,10 @@ impl App {
     fn refresh_facts(&mut self) {
         let facts = dll::probe_facts(Path::new(self.steam_path.trim()), &dll::dll_dir());
         self.sync_tray_restart_enabled(facts.status);
-        self.core.step(AppEvent::FactsRefreshed(facts));
+        self.on_core_event(AppEvent::FactsRefreshed(facts));
     }
 
-    /// #36：Steam 运行中「应用补丁并启动」不再弹确认框，直接放行优雅退出 → 部署 → 拉起；两个卸载类动作保留确认框，「重启 Steam」恒不弹。
+    /// 消息泵：收发线程消息，核心事件经 `on_core_event` 进编排核心；壳拦截项就地处理。
     fn handle_messages(&mut self) {
         while let Ok(msg) = self.rx.try_recv() {
             match msg {
@@ -2476,7 +2476,8 @@ impl App {
     /// 返回内容净高（header + 内容列，不含 dock 与弹性留白），供首帧窗口自适应。
     fn main_content(&mut self, ui: &mut egui::Ui) -> f32 {
         let ctx = ui.ctx().clone();
-        // 渲染只消费核心快照（ADR-0019）：每帧一次属主拷贝，版本永不渲染。
+        // 渲染只消费核心快照（ADR-0019）：内容列每帧一份贯穿视图链；
+        // 对话框等独立区域各自取值（纯内存拷贝，零 IO）。
         let snap = self.core.snapshot();
         let items = status_bar_items(
             snap.steam_running,
@@ -2596,9 +2597,8 @@ impl eframe::App for App {
         self.handle_tray_events();
 
         if let Some(event) = self.steam_monitor.tick() {
-            // 运行状态经事件喂回编排核心（观察反馈环）；自动隐身策略仍由壳应用（需 window_visible）。
-            self.core
-                .step(AppEvent::SteamRunningChanged(event == SteamEvent::Started));
+            // 运行状态经统一事件入口喂回编排核心（观察反馈环）；自动隐身策略仍由壳应用（需 window_visible）。
+            self.on_core_event(AppEvent::SteamRunningChanged(event == SteamEvent::Started));
             if let Some(visible) = auto_tray_policy(event, self.window_visible) {
                 self.set_window_visible(visible);
             }

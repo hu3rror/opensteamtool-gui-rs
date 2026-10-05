@@ -170,7 +170,8 @@ impl AppCore {
                 }];
             }
             AppEvent::ActionConfirmed(action) => {
-                self.confirm = None; // 确认即收弹窗（弹窗只在卸载类动作且 Steam 运行时出现，§20.3）。
+                // 弹窗只在卸载类动作且 Steam 运行时出现（§20.3）；确认后必须落下，避免悬挂。
+                self.confirm = None;
                 // 确认框只承载 asks_to_close_steam 动作：同意即带 kill_first 执行。
                 return vec![AppEffect::RunPlan {
                     action,
