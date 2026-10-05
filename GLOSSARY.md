@@ -111,6 +111,14 @@ _Avoid_: 当前目录、工作目录、exe 目录
 exe 同目录 `config.toml`（`config` 模块）持久化的便携设置：`version`（格式版本，预留迁移）/ `steam_path`（空 = 未设置，启动回退注册表检测）/ `language`（三态）/ `minimize_to_tray`（最小化隐身偏好，布尔；缺省启用，老配置缺字段不迁移不 bump 版本）/ `theme`（主题偏好，三态；缺省跟随系统，老配置缺字段不迁移不 bump 版本，ADR-0016）。随目录拷贝即迁移设置，不落 `%APPDATA%`；写入恒走原子写，损坏/版本不符时启动降级默认值不崩溃。只存用户选择，不存派生状态（补丁是否已下载是文件系统事实，见 ADR-0011 与 ADR-0012）；最小化隐身是用户选择（#37），不是由窗口状态派生的值。
 _Avoid_: 配置文件、设置文件
 
+**Steam 路径（Steam Path）**:
+补丁部署/卸载的目标 Steam 安装目录（`config.toml` 的 `steam_path` 字段；ADR-0020）。工作值是编排核心的状态（快照暴露，启动回退注册表检测，空 = 未设置），编辑缓冲在壳的 `SteamPathEditor`：缓冲≠工作值，提交（失焦/回车）才判定合法性并落缝。
+_Avoid_: 路径设置、路径字段
+
+**路径提交（Path Commit）**:
+编辑缓冲提交后，经 `AppEvent::CommitPath` 进入编排核心的工作路径变更——唯一写缝（ADR-0020）：核心 trim 存储并编排「刷新文件事实 + 重探体检」（`[RefreshFacts, FeedCompatPath]`）；config 镜像与原子持久化在壳调用点（设置页提交 / 向导终局）完成。
+_Avoid_: 保存路径、路径写入
+
 **语言偏好（Language Preference）**:
 `config.toml` 的 `language` 三态（auto / zh / en）：`auto` 跟随系统检测（`GetUserDefaultUILanguage`），`zh`/`en` 固定；修改入口为设置对话框「通用」页签与首次运行向导步骤 1 的语言下拉菜单（共用同一份语言选项表，新语言只加一行），即选即存，重启后恢复。
 _Avoid_: 语言设置、界面语言

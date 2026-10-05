@@ -7,6 +7,7 @@ use crate::dll::DeploymentFacts;
 use crate::update_flow::{UpdateFlow, UpdateNotice};
 use crate::updater::{OnlineInfo, UpdateError};
 use crate::workflow::{self, Action, Op, Precheck};
+use std::path::PathBuf;
 
 /// 渲染层交互意图（Hero / Secondary / Update 按钮位收集后统一处理）：
 /// Action/Check/Download 映射为 AppEvent；FixPath 是壳导航（打开设置页），不进编排核心。
@@ -51,17 +52,32 @@ pub enum AppEvent {
     FactsRefreshed(DeploymentFacts),
     /// 壳侧 Steam 运行状态观察（monitor tick / 工作流后 rescan）。
     SteamRunningChanged(bool),
+    /// 工作路径提交（唯一写入点；D4/ADR-0020）：设置页提交与向导终局收敛到这里。
+    CommitPath(String),
 }
 
 /// 效果：壳执行（spawn / plan / probe / rescan），观察结果以事件喂回。
 #[derive(Clone, Debug, PartialEq)]
 pub enum AppEffect {
     SpawnUpdateCheck,
-    SpawnUpdateDownload { info: OnlineInfo },
-    RunPlan { action: Action, kill_first: bool },
-    SpawnWorkflow { action: Action, ops: Vec<Op> },
+    SpawnUpdateDownload {
+        info: OnlineInfo,
+    },
+    RunPlan {
+        action: Action,
+        kill_first: bool,
+        /// 决策时注入的 Steam 工作目录（效果自足，执行不二次派生——ADR-0020）。
+        steam_dir: PathBuf,
+    },
+    SpawnWorkflow {
+        action: Action,
+        ops: Vec<Op>,
+        steam_dir: PathBuf,
+    },
     RefreshFacts,
     RescanSteam,
+    /// 路径变更后重探体检流程（壳子域仍由壳执行，决策在核心）。
+    FeedCompatPath(String),
 }
 
 /// 通知（状态栏文案判定；UpdateChecked 无 payload，结果文案由 update_flow 派生——单一事实源）。
@@ -86,6 +102,7 @@ pub enum SnapshotUpdateNotice {
 pub struct Snapshot {
     pub facts: DeploymentFacts,
     pub steam_running: bool,
+    pub steam_path: String,
     pub busy: Option<BusyKind>,
     pub notice: Option<Notice>,
     pub confirm: Option<Action>,
@@ -105,17 +122,21 @@ pub struct AppCore {
     confirm: Option<Action>,
     notice: Option<Notice>,
     steam_running: bool,
+    steam_path: String,
     facts: DeploymentFacts,
 }
 
 impl AppCore {
-    pub fn new(facts: DeploymentFacts, steam_running: bool) -> Self {
+    pub fn new(facts: DeploymentFacts, steam_running: bool, steam_path: impl Into<String>) -> Self {
+        let steam_path = steam_path.into();
         Self {
             update_flow: UpdateFlow::new(),
             gate: BusyGate::new(),
             confirm: None,
             notice: None,
             steam_running,
+            // 启动注入值也归一到 trim（与 CommitPath 同一视界：快照恒干净，ADR-0020）。
+            steam_path: steam_path.trim().to_string(),
             facts,
         }
     }
@@ -157,7 +178,11 @@ impl AppCore {
                     return Vec::new();
                 }
                 let kill_first = self.steam_running && action == Action::ApplyAndLaunch;
-                return vec![AppEffect::RunPlan { action, kill_first }];
+                return vec![AppEffect::RunPlan {
+                    action,
+                    kill_first,
+                    steam_dir: PathBuf::from(&self.steam_path),
+                }];
             }
             AppEvent::ActionRequestedQuiet(action) => {
                 if self.gate.is_busy() {
@@ -167,6 +192,7 @@ impl AppCore {
                 return vec![AppEffect::RunPlan {
                     action,
                     kill_first: false,
+                    steam_dir: PathBuf::from(&self.steam_path),
                 }];
             }
             AppEvent::ActionConfirmed(action) => {
@@ -176,6 +202,7 @@ impl AppCore {
                 return vec![AppEffect::RunPlan {
                     action,
                     kill_first: true,
+                    steam_dir: PathBuf::from(&self.steam_path),
                 }];
             }
             AppEvent::ConfirmCanceled => {
@@ -213,7 +240,11 @@ impl AppCore {
                     // 竞态拒绝（确认框悬挂期 Modal 阻断交互，Release 下理论上到不了这里）。
                     return Vec::new();
                 }
-                return vec![AppEffect::SpawnWorkflow { action, ops }];
+                return vec![AppEffect::SpawnWorkflow {
+                    action,
+                    ops,
+                    steam_dir: PathBuf::from(&self.steam_path),
+                }];
             }
             AppEvent::PlanRejected(precheck) => {
                 self.confirm = None;
@@ -223,6 +254,14 @@ impl AppCore {
             }
             AppEvent::FactsRefreshed(facts) => self.facts = facts,
             AppEvent::SteamRunningChanged(running) => self.steam_running = running,
+            AppEvent::CommitPath(p) => {
+                // 唯一写入点：trim 单一职责归此（ADR-0020）。
+                self.steam_path = p.trim().to_string();
+                return vec![
+                    AppEffect::RefreshFacts,
+                    AppEffect::FeedCompatPath(self.steam_path.clone()),
+                ];
+            }
         }
         Vec::new()
     }
@@ -233,6 +272,7 @@ impl AppCore {
         Snapshot {
             facts: self.facts.clone(),
             steam_running: self.steam_running,
+            steam_path: self.steam_path.clone(),
             busy: self.gate.current(),
             notice: self.notice.clone(),
             confirm: self.confirm,
@@ -268,7 +308,7 @@ mod tests {
     }
 
     fn core() -> AppCore {
-        AppCore::new(facts(Some("1.4.7")), false)
+        AppCore::new(facts(Some("1.4.7")), false, "Z:/fake/steam/nonexistent")
     }
 
     fn busy_gate_start(c: &mut AppCore, kind: BusyKind) {
@@ -435,7 +475,8 @@ mod tests {
             effects,
             vec![AppEffect::RunPlan {
                 action: Action::ApplyAndLaunch,
-                kill_first: false
+                kill_first: false,
+                steam_dir: PathBuf::from("Z:/fake/steam/nonexistent")
             }]
         );
         assert_eq!(c.snapshot().confirm, None);
@@ -450,7 +491,8 @@ mod tests {
             effects,
             vec![AppEffect::RunPlan {
                 action: Action::ApplyAndLaunch,
-                kill_first: true
+                kill_first: true,
+                steam_dir: PathBuf::from("Z:/fake/steam/nonexistent")
             }]
         );
     }
@@ -474,7 +516,8 @@ mod tests {
             effects,
             vec![AppEffect::RunPlan {
                 action: Action::ExitAndUninstall,
-                kill_first: true
+                kill_first: true,
+                steam_dir: PathBuf::from("Z:/fake/steam/nonexistent")
             }]
         );
         assert_eq!(c.snapshot().confirm, None, "确认后弹窗落下");
@@ -489,7 +532,8 @@ mod tests {
             effects,
             vec![AppEffect::RunPlan {
                 action: Action::ExitAndUninstall,
-                kill_first: false
+                kill_first: false,
+                steam_dir: PathBuf::from("Z:/fake/steam/nonexistent")
             }]
         );
         assert_eq!(c.snapshot().confirm, None);
@@ -528,7 +572,8 @@ mod tests {
             effects,
             vec![AppEffect::SpawnWorkflow {
                 action: Action::ExitAndUninstall,
-                ops: vec![Op::Uninstall]
+                ops: vec![Op::Uninstall],
+                steam_dir: PathBuf::from("Z:/fake/steam/nonexistent")
             }]
         );
         assert_eq!(c.snapshot().confirm, None);
@@ -596,6 +641,7 @@ mod tests {
                 dlls_present: true,
             },
             false,
+            "Z:/fake/steam/nonexistent",
         );
         let effects = c.step(AppEvent::Check);
         assert_eq!(
@@ -641,6 +687,61 @@ mod tests {
     }
 
     #[test]
+    fn commit_path_trims_stores_and_orchestrates() {
+        let mut c = AppCore::new(facts(Some("1.4.7")), false, "Z:/fake/steam/nonexistent");
+        let effects = c.step(AppEvent::CommitPath(
+            "  Z:/fake/steam/committed  ".to_string(),
+        ));
+        // 效果顺序契约：先刷文件事实再重探体检（ADR-0020）。
+        assert_eq!(
+            effects,
+            vec![
+                AppEffect::RefreshFacts,
+                AppEffect::FeedCompatPath("Z:/fake/steam/committed".to_string())
+            ]
+        );
+        assert_eq!(c.snapshot().steam_path, "Z:/fake/steam/committed");
+    }
+
+    #[test]
+    fn commit_path_only_mutates_working_path() {
+        let mut c = core();
+        // 其它域状态不受提交影响：门禁/通知/确认与更新派生保持原样。
+        c.step(AppEvent::Check);
+        c.step(AppEvent::CommitPath("Z:/fake/steam/committed".to_string()));
+        let s = c.snapshot();
+        assert_eq!(s.steam_path, "Z:/fake/steam/committed");
+        assert_eq!(s.busy, Some(BusyKind::Checking));
+    }
+
+    #[test]
+    fn later_non_path_event_keeps_committed_path() {
+        let mut c = core();
+        c.step(AppEvent::CommitPath("Z:/fake/steam/committed".to_string()));
+        // 提交后的普通事件（如事实刷新）不得抹掉已提交的工作路径。
+        c.step(AppEvent::FactsRefreshed(facts(Some("1.4.7"))));
+        assert_eq!(c.snapshot().steam_path, "Z:/fake/steam/committed");
+    }
+
+    #[test]
+    fn trim_only_commit_stores_trimmed_value() {
+        // 与当前值仅差首尾空白的提交：仍触发编排（壳侧 submit 已按 trim 后相等判 Unchanged 过滤，
+        // 此处防御核心契约——CommitPath 到达即无条件产效果）。
+        let mut c = AppCore::new(facts(Some("1.4.7")), false, "Z:/fake/steam/nonexistent");
+        let effects = c.step(AppEvent::CommitPath(
+            "  Z:/fake/steam/nonexistent  ".to_string(),
+        ));
+        assert_eq!(
+            effects,
+            vec![
+                AppEffect::RefreshFacts,
+                AppEffect::FeedCompatPath("Z:/fake/steam/nonexistent".to_string())
+            ]
+        );
+        assert_eq!(c.snapshot().steam_path, "Z:/fake/steam/nonexistent");
+    }
+
+    #[test]
     fn run_plan_flow_end_to_end() {
         let mut c = core();
         let evts = vec![
@@ -660,11 +761,13 @@ mod tests {
             vec![
                 AppEffect::RunPlan {
                     action: Action::ApplyAndLaunch,
-                    kill_first: false
+                    kill_first: false,
+                    steam_dir: PathBuf::from("Z:/fake/steam/nonexistent")
                 },
                 AppEffect::SpawnWorkflow {
                     action: Action::ApplyAndLaunch,
-                    ops: vec![Op::Deploy, Op::Launch]
+                    ops: vec![Op::Deploy, Op::Launch],
+                    steam_dir: PathBuf::from("Z:/fake/steam/nonexistent")
                 },
             ]
         );

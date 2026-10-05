@@ -1,7 +1,7 @@
 //! egui 界面：主页面（部署状态 + 操作按钮组 + 健康风险警示）+ 设置对话框 + 向导 + 确认弹窗。
 
 use std::collections::VecDeque;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 
@@ -463,7 +463,6 @@ pub struct App {
     lang_pref: Language,
     lang: Lang,
     strings: Strings,
-    steam_path: String,
     /// 编排核心：消息决策纯状态机（ADR-0019 切片 1；渲染只读其快照）。
     core: AppCore,
     steam_monitor: SteamMonitor,
@@ -1006,8 +1005,7 @@ impl App {
             lang_pref,
             lang,
             strings,
-            steam_path,
-            core: AppCore::new(facts, steam_running),
+            core: AppCore::new(facts, steam_running, steam_path.clone()),
             steam_monitor,
             steam_state,
             tx,
@@ -1040,10 +1038,9 @@ impl App {
         // System 模式校正与后续主题切换走 ui() 的 palette 钩子/首帧同步。
         app.sync_tray_restart_enabled(app.core.snapshot().facts.status);
         // 启动即喂首次路径：产出首次快速体检效果（初始 checking 骨架态，零白屏）。
-        app.on_compat_event(
-            &cc.egui_ctx,
-            compat_flow::Event::PathChanged(app.steam_path.clone()),
-        );
+        // 工作路径在核心（ADR-0020），由快照取。
+        let initial_path = app.core.snapshot().steam_path.clone();
+        app.on_compat_event(&cc.egui_ctx, compat_flow::Event::PathChanged(initial_path));
         app
     }
 
@@ -1121,7 +1118,9 @@ impl App {
 
     /// 文件事实刷新点统一出口：探测 → 同步托盘 → 喂回编排核心（反馈环，ADR-0019）。
     fn refresh_facts(&mut self) {
-        let facts = dll::probe_facts(Path::new(self.steam_path.trim()), &dll::dll_dir());
+        // 工作路径在核心（ADR-0020），探测从快照取（与渲染/seed 同源）。
+        let steam_path = self.core.snapshot().steam_path.clone();
+        let facts = dll::probe_facts(Path::new(&steam_path), &dll::dll_dir());
         self.sync_tray_restart_enabled(facts.status);
         self.on_core_event(AppEvent::FactsRefreshed(facts));
     }
@@ -1164,11 +1163,6 @@ impl App {
         }
     }
 
-    /// 效果执行共用的工作路径（dll 目录恒定 + 当前 Steam 路径）。
-    fn work_paths(&self) -> (PathBuf, PathBuf) {
-        (dll::dll_dir(), PathBuf::from(self.steam_path.trim()))
-    }
-
     /// 编排核心事件入口：决策 → 效果逐条执行；同步效果（plan/probe/rescan）喂回的观察
     /// 事件新产出的效果追加进队尾（反馈环深度 ≤ 2，队列保证顺序）。
     fn on_core_event(&mut self, evt: AppEvent) {
@@ -1182,7 +1176,7 @@ impl App {
                     });
                 }
                 AppEffect::SpawnUpdateDownload { info } => {
-                    let (dll_dir, _) = self.work_paths();
+                    let dll_dir = dll::dll_dir();
                     let ctx = self.ctx.clone();
                     self.spawn(&ctx, move || {
                         Msg::Core(AppEvent::Downloaded(updater::download_and_extract(
@@ -1190,16 +1184,24 @@ impl App {
                         )))
                     });
                 }
-                AppEffect::RunPlan { action, kill_first } => {
-                    let (dll_dir, steam_dir) = self.work_paths();
+                AppEffect::RunPlan {
+                    action,
+                    kill_first,
+                    steam_dir,
+                } => {
+                    let dll_dir = dll::dll_dir();
                     let evt = match workflow::plan(action, kill_first, &steam_dir, &dll_dir) {
                         Ok(ops) => AppEvent::PlanOk { action, ops },
                         Err(precheck) => AppEvent::PlanRejected(precheck),
                     };
                     queue.extend(self.core.step(evt));
                 }
-                AppEffect::SpawnWorkflow { action, ops } => {
-                    let (dll_dir, steam_dir) = self.work_paths();
+                AppEffect::SpawnWorkflow {
+                    action,
+                    ops,
+                    steam_dir,
+                } => {
+                    let dll_dir = dll::dll_dir();
                     let ctx2 = self.ctx.clone();
                     let tx = self.tx.clone();
                     let steam = self.steam_state.clone();
@@ -1232,6 +1234,11 @@ impl App {
                         self.set_window_visible(false);
                     }
                     queue.extend(self.core.step(AppEvent::SteamRunningChanged(running)));
+                }
+                AppEffect::FeedCompatPath(p) => {
+                    // 路径变更 → 体检重探（决策在核心、执行在壳子域，ADR-0020）。
+                    let ctx = self.ctx.clone();
+                    self.on_compat_event(&ctx, compat_flow::Event::PathChanged(p));
                 }
             }
         }
@@ -1306,10 +1313,9 @@ impl App {
                     self.config.theme = theme;
                     self.config.steam_path = steam_path.clone();
                     self.persist_config();
-                    self.steam_path = steam_path;
-                    self.refresh_facts();
                     self.wizard = None;
-                    self.feed_path_changed(ctx);
+                    // 向导终局与设置提交收缝到同一写入点（ADR-0020）。
+                    self.on_core_event(AppEvent::CommitPath(steam_path));
                 }
             }
         }
@@ -1318,7 +1324,7 @@ impl App {
     fn open_settings(&mut self, tab: SettingsTab) {
         self.settings_open = true;
         self.settings_tab = tab;
-        self.settings_steam = SteamPathEditor::new(&self.steam_path);
+        self.settings_steam = SteamPathEditor::new(&self.core.snapshot().steam_path);
     }
 
     /// 无 OK/Cancel（即改即存）；补丁更新检查 / 下载并解压走忙碌门禁互斥。
@@ -1358,7 +1364,7 @@ impl App {
                             && self.settings_tab != tab
                         {
                             if self.settings_tab == SettingsTab::Steam {
-                                self.commit_settings_steam_path(ctx);
+                                self.commit_settings_steam_path();
                             }
                             self.settings_tab = tab;
                         }
@@ -1378,7 +1384,7 @@ impl App {
                         match self.settings_tab {
                             SettingsTab::General => self.settings_general(ui),
                             SettingsTab::About => self.settings_about(ui, ctx),
-                            SettingsTab::Steam => self.settings_steam(ui, ctx),
+                            SettingsTab::Steam => self.settings_steam(ui),
                         }
                     });
                 ui.add_space(16.0);
@@ -1403,7 +1409,7 @@ impl App {
             });
         if close_clicked {
             // 关闭前提交未落地编辑（兜底：无论焦点时序，有效提交都不丢失）；未变更的判定让重复提交是 no-op。
-            self.commit_settings_steam_path(ctx);
+            self.commit_settings_steam_path();
             self.settings_open = false;
         }
     }
@@ -1570,7 +1576,7 @@ impl App {
         }
     }
 
-    fn settings_steam(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+    fn settings_steam(&mut self, ui: &mut egui::Ui) {
         card_title(ui, self.strings.settings_steam_title, self.palette);
         ui.add_space(10.0);
         let mut do_commit = false;
@@ -1587,7 +1593,7 @@ impl App {
             do_commit = true;
         }
         if do_commit {
-            self.commit_settings_steam_path(ctx);
+            self.commit_settings_steam_path();
         }
         if self.settings_steam.invalid {
             ui.add_space(6.0);
@@ -1600,15 +1606,16 @@ impl App {
         self.compat_section(ui);
     }
 
-    fn commit_settings_steam_path(&mut self, ctx: &egui::Context) {
-        match self.settings_steam.submit(&self.steam_path) {
+    fn commit_settings_steam_path(&mut self) {
+        // 基准 = 工作路径（核心快照，ADR-0020）。
+        let current = self.core.snapshot().steam_path;
+        match self.settings_steam.submit(&current) {
             SteamPathCommit::Invalid | SteamPathCommit::Unchanged => {}
             SteamPathCommit::Changed(p) => {
-                self.steam_path = p.clone();
-                self.config.steam_path = p;
+                // config 镜像 + 持久化在壳调用点（config 属壳，ADR-0020）。
+                self.config.steam_path = p.clone();
                 self.persist_config();
-                self.refresh_facts();
-                self.feed_path_changed(ctx);
+                self.on_core_event(AppEvent::CommitPath(p));
             }
         }
     }
@@ -1618,7 +1625,7 @@ impl App {
         self.wizard = Some(wizard::Wizard::new(
             self.lang_pref,
             self.theme_pref,
-            self.steam_path.clone(),
+            self.core.snapshot().steam_path.clone(),
             dll::dll_dir(),
         ));
     }
@@ -1728,12 +1735,6 @@ impl App {
     fn on_compat_event(&mut self, ctx: &egui::Context, event: compat_flow::Event) {
         let (_, effects) = self.flow.step(event);
         self.exec_compat_effects(ctx, effects);
-    }
-
-    /// 路径输入变化时喂给体检流程（防抖与代数推进在流程模块内）。
-    fn feed_path_changed(&mut self, ctx: &egui::Context) {
-        let path = self.steam_path.trim().to_string();
-        self.on_compat_event(ctx, compat_flow::Event::PathChanged(path));
     }
 
     /// 手动「一键缓存签名」：喂给体检流程（目标选择与在途去重由流程负责）。
