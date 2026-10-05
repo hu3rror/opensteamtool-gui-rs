@@ -26,6 +26,14 @@ sha2 = "0.10"
 
 [build-dependencies]
 embed-resource = "3.0"
+# ADR-0022：dev 默认 limited 调试信息（行号/回溯可用，无变量查看）；完整调试用 --profile dev-full
+[profile.dev]
+debug = "limited"
+
+[profile.dev-full]
+inherits = "dev"
+debug = "full"
+
 [profile.release]
 opt-level = "z"
 lto = "fat"
