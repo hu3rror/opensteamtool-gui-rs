@@ -740,8 +740,11 @@ fn wizard_steps_ui(
     strings: Strings,
     view: &wizard::View,
     palette: Palette,
-) -> (Option<wizard::Event>, egui::Rect) {
-    let mut event: Option<wizard::Event> = None;
+) -> (Vec<wizard::Event>, egui::Rect) {
+    // 事件按序收集（PathEdited 先于 PathSubmitted 送达状态机）：
+    // 步骤 3 同帧「输入路径 + 点下一步」时，提交必须先应用本帧编辑后的值，
+    // 否则 PathSubmitted 会用上一帧的旧路径校验——把用户输入静默丢弃（旧实现 Option 覆盖）。
+    let mut events: Vec<wizard::Event> = Vec::new();
     let mut card_rect = egui::Rect::NOTHING;
 
     ui.add_space(24.0);
@@ -782,7 +785,7 @@ fn wizard_steps_ui(
                                 "wizard_language",
                                 palette,
                             ) {
-                                event = Some(wizard::Event::LanguageChosen(lang));
+                                events.push(wizard::Event::LanguageChosen(lang));
                             }
                             ui.add_space(14.0);
                             if styled_button(
@@ -795,7 +798,7 @@ fn wizard_steps_ui(
                             )
                             .clicked()
                             {
-                                event = Some(wizard::Event::LanguageSubmitted);
+                                events.push(wizard::Event::LanguageSubmitted);
                             }
                         }
                         WizardStep::Theme => {
@@ -809,7 +812,7 @@ fn wizard_steps_ui(
                                 "wizard_theme",
                                 palette,
                             ) {
-                                event = Some(wizard::Event::ThemeChosen(theme));
+                                events.push(wizard::Event::ThemeChosen(theme));
                             }
                             ui.add_space(14.0);
                             if styled_button(
@@ -822,7 +825,7 @@ fn wizard_steps_ui(
                             )
                             .clicked()
                             {
-                                event = Some(wizard::Event::ThemeSubmitted);
+                                events.push(wizard::Event::ThemeSubmitted);
                             }
                         }
                         WizardStep::SteamPath => {
@@ -831,7 +834,7 @@ fn wizard_steps_ui(
                             let mut buf = view.steam_path.clone();
                             let row = path_edit_row(ui, strings, &mut buf, palette);
                             if row.changed {
-                                event = Some(wizard::Event::PathEdited(buf.clone()));
+                                events.push(wizard::Event::PathEdited(buf.clone()));
                             }
                             if !view.path_valid && !view.steam_path.trim().is_empty() {
                                 ui.add_space(6.0);
@@ -852,7 +855,7 @@ fn wizard_steps_ui(
                             )
                             .clicked()
                             {
-                                event = Some(wizard::Event::PathSubmitted);
+                                events.push(wizard::Event::PathSubmitted);
                             }
                         }
                         WizardStep::Download => {
@@ -891,7 +894,7 @@ fn wizard_steps_ui(
                                     )
                                     .clicked()
                                 {
-                                    event = Some(ev.clone());
+                                    events.push(ev.clone());
                                 }
                                 if content.show_skip
                                     && styled_button(
@@ -904,7 +907,7 @@ fn wizard_steps_ui(
                                     )
                                     .clicked()
                                 {
-                                    event = Some(wizard::Event::SkipDownload);
+                                    events.push(wizard::Event::SkipDownload);
                                 }
                             });
                         }
@@ -914,7 +917,7 @@ fn wizard_steps_ui(
             },
         );
     });
-    (event, card_rect)
+    (events, card_rect)
 }
 
 impl App {
@@ -1333,8 +1336,8 @@ impl App {
             return;
         };
         let strings = self.strings; // Copy：渲染期自由借用 self。
-        let (event, _) = wizard_steps_ui(ui, strings, &view, self.palette);
-        if let Some(event) = event {
+        let (events, _) = wizard_steps_ui(ui, strings, &view, self.palette);
+        for event in events {
             self.wizard_event(ctx, event);
         }
     }
@@ -3169,8 +3172,10 @@ mod tests {
                     path_valid: false,
                     download: wizard::DownloadState::Idle,
                 };
-                let (_, rect) = wizard_steps_ui(ui, Strings::new(Lang::Zh), &view, Palette::dark());
+                let (evs, rect) =
+                    wizard_steps_ui(ui, Strings::new(Lang::Zh), &view, Palette::dark());
                 card = Some(rect);
+                let _ = evs;
             });
         });
         full.textures_delta.clear();
@@ -3190,6 +3195,184 @@ mod tests {
             rect.width() < 500.0,
             "卡片不应是整窗宽（实际 {}",
             rect.width()
+        );
+    }
+
+    #[test]
+    fn wizard_step3_next_button_disabled_for_invalid_path() {
+        // 契约测试：路径无效时「下一步」不可点（点击不产出 PathSubmitted）；有效路径扫射同一区域必须点到（对照，证明坐标覆盖按钮）。
+        fn sweep(valid: bool) -> Vec<wizard::Event> {
+            let mut events = Vec::new();
+            for y_step in 0..=14 {
+                let (x, y) = (320.0, 140.0 + y_step as f32 * 9.0);
+                let ctx = egui::Context::default();
+                for pass in 0..3 {
+                    let evs = match pass {
+                        0 => vec![egui::Event::PointerMoved(egui::Pos2::new(x, y))],
+                        1 => vec![egui::Event::PointerButton {
+                            pos: egui::Pos2::new(x, y),
+                            button: egui::PointerButton::Primary,
+                            pressed: true,
+                            modifiers: Default::default(),
+                        }],
+                        _ => vec![egui::Event::PointerButton {
+                            pos: egui::Pos2::new(x, y),
+                            button: egui::PointerButton::Primary,
+                            pressed: false,
+                            modifiers: Default::default(),
+                        }],
+                    };
+                    let raw = egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(640.0, 520.0),
+                        )),
+                        events: evs,
+                        ..Default::default()
+                    };
+                    let mut full = ctx.run_ui(raw, |ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            let view = wizard::View {
+                                step: WizardStep::SteamPath,
+                                language: Language::Auto,
+                                theme: ThemePreference::System,
+                                steam_path: if valid {
+                                    "C:/Steam".into()
+                                } else {
+                                    String::new()
+                                },
+                                path_valid: valid,
+                                download: wizard::DownloadState::Idle,
+                            };
+                            let (evs_now, _) =
+                                wizard_steps_ui(ui, Strings::new(Lang::Zh), &view, Palette::dark());
+                            if pass == 2 {
+                                for ev in evs_now {
+                                    events.push(ev);
+                                }
+                            }
+                        });
+                    });
+                    full.textures_delta.clear();
+                }
+            }
+            events
+        }
+        let valid_evs = sweep(true);
+        let invalid_evs = sweep(false);
+        assert!(
+            valid_evs
+                .iter()
+                .any(|e| matches!(e, wizard::Event::PathSubmitted)),
+            "对照：有效路径扫射应能点到「下一步」（坐标需覆盖按钮）"
+        );
+        assert!(
+            invalid_evs.is_empty(),
+            "无效路径时「下一步」不应响应点击，实际收到 {invalid_evs:?}"
+        );
+    }
+
+    #[test]
+    fn wizard_step3_same_frame_edit_and_click_keeps_order() {
+        // 同帧「输入路径 + 点下一步」：PathEdited 必须先于 PathSubmitted 送达状态机，提交校验本帧编辑后的值。
+        // 旧实现 Option 覆盖丢失 PathEdited，提交用上一帧旧路径——「填了不存在的路径也能点下一步过去」的机制。
+        let ctx = egui::Context::default();
+        let mut events: Vec<wizard::Event> = Vec::new();
+        for (frame, evs) in [
+            (
+                0_usize,
+                vec![egui::Event::PointerMoved(egui::Pos2::new(220.0, 150.0))],
+            ),
+            (
+                1,
+                vec![
+                    egui::Event::PointerButton {
+                        pos: egui::Pos2::new(220.0, 150.0),
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: Default::default(),
+                    },
+                    egui::Event::PointerButton {
+                        pos: egui::Pos2::new(220.0, 150.0),
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: Default::default(),
+                    },
+                ],
+            ),
+            (
+                2,
+                vec![
+                    egui::Event::Text("x".into()),
+                    egui::Event::PointerMoved(egui::Pos2::new(320.0, 190.0)),
+                    egui::Event::PointerButton {
+                        pos: egui::Pos2::new(320.0, 190.0),
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: Default::default(),
+                    },
+                    egui::Event::PointerButton {
+                        pos: egui::Pos2::new(320.0, 190.0),
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: Default::default(),
+                    },
+                ],
+            ),
+        ] {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(640.0, 520.0),
+                )),
+                events: evs,
+                ..Default::default()
+            };
+            let mut full = ctx.run_ui(raw, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let view = wizard::View {
+                        step: WizardStep::SteamPath,
+                        language: Language::Auto,
+                        theme: ThemePreference::System,
+                        steam_path: "C:/Steam".into(),
+                        path_valid: true,
+                        download: wizard::DownloadState::Idle,
+                    };
+                    let (evs_now, _) =
+                        wizard_steps_ui(ui, Strings::new(Lang::Zh), &view, Palette::dark());
+                    if frame == 2 {
+                        for ev in evs_now {
+                            events.push(ev);
+                        }
+                    }
+                });
+            });
+            full.textures_delta.clear();
+        }
+        let edited = events
+            .iter()
+            .filter_map(|e| match e {
+                wizard::Event::PathEdited(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            !edited.is_empty() && edited.iter().any(|s| s != "C:/Steam"),
+            "同帧输入应先收集到 PathEdited（新值），实际 {events:?}"
+        );
+        assert!(
+            events.contains(&wizard::Event::PathSubmitted),
+            "同帧点击应收集到 PathSubmitted，实际 {events:?}"
+        );
+        let pi = events
+            .iter()
+            .position(|e| matches!(e, wizard::Event::PathEdited(_)));
+        let ps = events
+            .iter()
+            .position(|e| matches!(e, wizard::Event::PathSubmitted));
+        assert!(
+            matches!((pi, ps), (Some(a), Some(b)) if a < b),
+            "PathEdited 应先于 PathSubmitted（旧实现覆盖丢失输入），实际 {events:?}"
         );
     }
 

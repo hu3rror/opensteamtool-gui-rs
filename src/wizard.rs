@@ -613,6 +613,38 @@ mod tests {
         std::fs::remove_dir_all(&steam).ok();
     }
 
+    #[test]
+    fn edit_then_submit_in_same_stream_uses_latest_value() {
+        // UI 层同一帧可先后送达 PathEdited 与 PathSubmitted（ADR-0013 修订）：
+        // 提交必须基于本帧编辑后的值，而非步骤进入时的旧快照——旧实现丢失 PathEdited 后
+        // 会拿旧有效路径免检通过（「填不存在的路径也能下一步」），输入被静默丢弃。
+        let steam = tmp_dir("same_stream");
+        let mut w = Wizard::new(
+            Language::En,
+            ThemePreference::System,
+            String::new(),
+            tmp_dir("same_stream_dlls"),
+        );
+        w.step(Event::LanguageChosen(Language::En));
+        w.step(Event::LanguageSubmitted);
+        w.step(Event::ThemeChosen(ThemePreference::Dark));
+        w.step(Event::ThemeSubmitted);
+
+        // 同流：编辑为无效路径 → 提交 → 停留且输入保留（用户可继续改）。
+        w.step(Event::PathEdited("Z:/nope_abc42".into()));
+        let (v, fx) = w.step(Event::PathSubmitted);
+        assert_eq!(v.step, Step::SteamPath, "无效路径不得推进");
+        assert_eq!(v.steam_path, "Z:/nope_abc42", "输入不能被丢弃");
+        assert!(fx.is_empty());
+
+        // 同流：编辑为有效路径 → 提交 → 推进。
+        w.step(Event::PathEdited(steam.display().to_string()));
+        let (v, _) = w.step(Event::PathSubmitted);
+        assert_eq!(v.step, Step::Download);
+
+        std::fs::remove_dir_all(&steam).ok();
+    }
+
     fn entered_download(steam: &Path, language: Language, theme: ThemePreference) -> Wizard {
         let dlls = std::env::temp_dir().join(format!(
             "ost_wiz_{}_dlls_{}",
