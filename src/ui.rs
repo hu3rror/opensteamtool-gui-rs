@@ -359,7 +359,7 @@ fn health_warning(s: &Strings, summary: CompatSummary) -> Option<&'static str> {
 /// 跨线程消息（spawn 线程 → UI 线程）：核心决策事件经 `Core` 包装进 AppCore；
 /// 其余为壳侧自留（窗口 / 体检 / 向导 / 应用更新，ADR-0019 切片 1 壳拦截）。
 enum Msg {
-    /// 核心决策事件（AppCore 输入，feedback loop 的入口）。
+    /// 核心决策事件（AppCore 输入，反馈环的入口）。
     Core(AppEvent),
     /// 重复启动（另一实例已置位唤醒事件）：把窗口带回前台。
     ActivateRequested,
@@ -1202,11 +1202,12 @@ impl App {
                     steam_dir,
                 } => {
                     let dll_dir = dll::dll_dir();
-                    let ctx2 = self.ctx.clone();
+                    // 一个句柄移入闭包（phase 回调 repaint），一个借给 spawn（其内部 clone 后移入线程）。
+                    let repaint_ctx = self.ctx.clone();
+                    let spawn_ctx = repaint_ctx.clone();
                     let tx = self.tx.clone();
                     let steam = self.steam_state.clone();
-                    let ctx3 = ctx2.clone();
-                    self.spawn(&ctx3, move || {
+                    self.spawn(&spawn_ctx, move || {
                         let res = workflow::execute(
                             &ops,
                             &workflow::WorkflowCtx {
@@ -1216,7 +1217,7 @@ impl App {
                             },
                             |phase| {
                                 let _ = tx.send(Msg::Core(AppEvent::Phase(phase)));
-                                ctx2.request_repaint();
+                                repaint_ctx.request_repaint();
                             },
                         );
                         Msg::Core(AppEvent::WorkflowDone {

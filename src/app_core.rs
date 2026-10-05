@@ -115,7 +115,7 @@ pub struct SnapshotUpdate {
     pub download: Option<OnlineInfo>,
 }
 
-/// 消息决策核心：门禁 / 通知 / 更新流程 / 事实反馈 / 运行状态（纯状态机）。
+/// 消息决策纯状态机（模块头 doc 已述契约；ADR-0019）。
 pub struct AppCore {
     update_flow: UpdateFlow,
     gate: BusyGate,
