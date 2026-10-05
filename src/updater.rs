@@ -25,7 +25,7 @@ const DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const DOWNLOAD_GLOBAL_TIMEOUT: Duration = Duration::from_secs(600);
 const DOWNLOAD_BODY_TIMEOUT: Duration = Duration::from_secs(600);
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct OnlineInfo {
     pub version: String,
     pub zip_url: String,

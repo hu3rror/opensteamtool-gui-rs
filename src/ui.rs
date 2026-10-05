@@ -1,5 +1,6 @@
 //! egui 界面：主页面（部署状态 + 操作按钮组 + 健康风险警示）+ 设置对话框 + 向导 + 确认弹窗。
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -7,12 +8,15 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use eframe::egui;
 use egui::Frame;
 
+use crate::app_core::{
+    self, AppCore, AppEffect, AppEvent, MainEvent, Notice, SnapshotUpdateNotice,
+};
 use crate::brand;
-use crate::busy::{BusyGate, BusyKind};
+use crate::busy::BusyKind;
 use crate::compat;
 use crate::compat_flow::{self, CompatFlow, CompatSummary};
 use crate::config::{self, Config, Language, ThemePreference};
-use crate::dll::{self, DeployStatus, DeploymentFacts};
+use crate::dll::{self, DeployStatus};
 use crate::i18n::{Lang, Strings};
 use crate::main_page::{
     self, IconKind, MainPageVm, PrimaryAction, PrimaryKind, SecondaryAction, UpdateConclusion,
@@ -24,8 +28,7 @@ use crate::steam;
 use crate::steam_state::SteamState;
 use crate::theme::{self, ButtonPalette, ButtonStyle, Palette};
 use crate::tray::{Tray, TrayAction};
-use crate::update_flow::UpdateFlow;
-use crate::updater::{self, OnlineInfo, UpdateError};
+use crate::updater::{self, UpdateError};
 use crate::wizard::{self, Step as WizardStep};
 use crate::workflow::{self, Action};
 
@@ -353,13 +356,13 @@ fn health_warning(s: &Strings, summary: CompatSummary) -> Option<&'static str> {
     }
 }
 
+/// 跨线程消息（spawn 线程 → UI 线程）：核心决策事件经 `Core` 包装进 AppCore；
+/// 其余为壳侧自留（窗口 / 体检 / 向导 / 应用更新，ADR-0019 切片 1 壳拦截）。
 enum Msg {
-    Phase(BusyKind),
+    /// 核心决策事件（AppCore 输入，feedback loop 的入口）。
+    Core(AppEvent),
     /// 重复启动（另一实例已置位唤醒事件）：把窗口带回前台。
     ActivateRequested,
-    UpdateChecked(Result<OnlineInfo, UpdateError>),
-    Downloaded(Result<(), UpdateError>),
-    WorkflowDone(Action, Result<(), workflow::WorkflowError>),
     /// Steam 核心兼容性体检完成（携带发起时代数，陈旧结果由流程丢弃）。
     Compat {
         epoch: compat_flow::Epoch,
@@ -376,22 +379,6 @@ enum Msg {
     WizardDownload(Result<(), UpdateError>),
     /// 应用更新检查完成（Settings — 关于页签；只读查询，不进忙碌门禁）。
     AppUpdateChecked(Result<updater::AppUpdateCheckResult, UpdateError>),
-}
-
-enum Notice {
-    /// 检查更新完成标记（无 payload）：结果文案由「更新流程」派生（单一事实源）。
-    UpdateChecked,
-    Downloaded(Result<(), UpdateError>),
-    WorkflowDone(Action, Result<(), workflow::WorkflowError>),
-    Precheck(workflow::Precheck),
-}
-
-/// 主页面交互意图（Hero / Secondary / Update 按钮位收集后统一处理）。
-enum MainEvent {
-    Action(Action),
-    FixPath,
-    Check,
-    Download(OnlineInfo),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -477,16 +464,10 @@ pub struct App {
     lang: Lang,
     strings: Strings,
     steam_path: String,
-    facts: DeploymentFacts,
-    steam_running: bool,
+    /// 编排核心：消息决策纯状态机（ADR-0019 切片 1；渲染只读其快照）。
+    core: AppCore,
     steam_monitor: SteamMonitor,
     steam_state: Arc<SteamState>,
-    /// 在线更新「检查更新」流程（唯一事实源 + 派生，见 GLOSSARY.md「更新流程」）。
-    update_flow: UpdateFlow,
-    /// 交互类后台操作互斥门禁（同时刻仅一个操作在途；见 GLOSSARY.md「忙碌门禁」）。
-    gate: BusyGate,
-    confirm: Option<Action>,
-    notice: Option<Notice>,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
     ctx: egui::Context,
@@ -1026,14 +1007,9 @@ impl App {
             lang,
             strings,
             steam_path,
-            facts,
-            steam_running,
+            core: AppCore::new(facts, steam_running),
             steam_monitor,
             steam_state,
-            update_flow: UpdateFlow::new(),
-            gate: BusyGate::new(),
-            confirm: None,
-            notice: None,
             tx,
             rx,
             ctx: cc.egui_ctx.clone(),
@@ -1062,7 +1038,7 @@ impl App {
         // 窗口图标不在 App::new 发送：ViewportCommand::Icon 在窗口显示前不生效（实测被吞，
         // 标题栏沿用 ViewportBuilder 图标）。初始图标已按 config 主题选版（见 main.rs），
         // System 模式校正与后续主题切换走 ui() 的 palette 钩子/首帧同步。
-        app.sync_tray_restart_enabled();
+        app.sync_tray_restart_enabled(app.core.snapshot().facts.status);
         // 启动即喂首次路径：产出首次快速体检效果（初始 checking 骨架态，零白屏）。
         app.on_compat_event(
             &cc.egui_ctx,
@@ -1094,16 +1070,10 @@ impl App {
         }
     }
 
-    fn hide_if_steam_running(&mut self) {
-        if self.steam_running {
-            self.set_window_visible(false);
-        }
-    }
-
     /// 同步托盘「重启 Steam」可用性（路径无效置灰；未运行点击等价「直接启动」，见 workflow::plan）。
-    fn sync_tray_restart_enabled(&mut self) {
+    fn sync_tray_restart_enabled(&mut self, status: DeployStatus) {
         if let Some(tray) = &self.tray {
-            tray.set_restart_enabled(self.facts.status != DeployStatus::InvalidPath);
+            tray.set_restart_enabled(status != DeployStatus::InvalidPath);
         }
     }
 
@@ -1127,7 +1097,6 @@ impl App {
     }
     fn handle_tray_events(&mut self) {
         let Some(tray) = &self.tray else { return };
-        let ctx = self.ctx.clone(); // 避免 `&self.ctx` 与 `&mut self` 借用冲突。
         let mut actions = Vec::new();
         while let Some(action) = tray.poll() {
             actions.push(action);
@@ -1142,45 +1111,29 @@ impl App {
                     std::process::exit(0);
                 }
                 TrayAction::ToggleMinimizeToTray => self.set_minimize_to_tray(minimize_checked),
-                TrayAction::RestartSteam => self.request_action(&ctx, Action::Restart),
+                TrayAction::RestartSteam => {
+                    // 托盘「重启 Steam」走同一编排入口（切片 1 提前收敛，见 #44 实现决策）。
+                    self.on_core_event(AppEvent::ActionRequested(Action::Restart));
+                }
             }
         }
     }
 
-    /// 文件事实刷新点统一出口：探测快照 + 同步托盘「重启 Steam」可用性。
+    /// 文件事实刷新点统一出口：探测 → 同步托盘 → 喂回编排核心（反馈环，ADR-0019）。
     fn refresh_facts(&mut self) {
-        self.facts = dll::probe_facts(Path::new(self.steam_path.trim()), &dll::dll_dir());
-        self.sync_tray_restart_enabled();
+        let facts = dll::probe_facts(Path::new(self.steam_path.trim()), &dll::dll_dir());
+        self.sync_tray_restart_enabled(facts.status);
+        self.core.step(AppEvent::FactsRefreshed(facts));
     }
 
+    /// #36：Steam 运行中「应用补丁并启动」不再弹确认框，直接放行优雅退出 → 部署 → 拉起；两个卸载类动作保留确认框，「重启 Steam」恒不弹。
     fn handle_messages(&mut self) {
         while let Ok(msg) = self.rx.try_recv() {
             match msg {
-                Msg::Phase(kind) => self.gate.replace(kind),
+                Msg::Core(evt) => self.on_core_event(evt),
                 Msg::ActivateRequested => {
                     // 重复启动（含托盘隐藏中的窗口）：恢复显示并聚焦到前台。
                     self.set_window_visible(true);
-                }
-                Msg::UpdateChecked(res) => {
-                    self.gate.clear();
-                    self.update_flow.check_done(res); // 结果只存这一份（单一事实源）
-                    self.notice = Some(Notice::UpdateChecked);
-                }
-                Msg::Downloaded(res) => {
-                    self.gate.clear();
-                    self.notice = Some(Notice::Downloaded(res.clone()));
-                    if let Ok(()) = res {
-                        self.refresh_facts();
-                    }
-                }
-                Msg::WorkflowDone(action, res) => {
-                    self.gate.clear();
-                    self.notice = Some(Notice::WorkflowDone(action, res.clone()));
-                    if let Ok(()) = res {
-                        self.refresh_facts();
-                    }
-                    self.steam_running = self.steam_monitor.rescan();
-                    self.hide_if_steam_running();
                 }
                 Msg::Compat { epoch, report } => {
                     let ctx = self.ctx.clone();
@@ -1211,72 +1164,77 @@ impl App {
         }
     }
 
-    /// #36：Steam 运行中「应用补丁并启动」不再弹确认框，直接放行优雅退出 → 部署 → 拉起；两个卸载类动作保留确认框，「重启 Steam」恒不弹。
-    fn request_action(&mut self, ctx: &egui::Context, action: Action) {
-        if self.gate.is_busy() {
-            return;
-        }
-        if action.asks_to_close_steam() && self.steam_running {
-            self.confirm = Some(action);
-            return;
-        }
-        // #36：Steam 运行中「应用补丁并启动」免除确认框，但部署前仍需先关 Steam（DLL 被占用；plan 在 kill_first 时首插 CloseSteam）。
-        let kill_first = self.steam_running && action == Action::ApplyAndLaunch;
-        self.start_action(ctx, action, kill_first);
+    /// 效果执行共用的工作路径（dll 目录恒定 + 当前 Steam 路径）。
+    fn work_paths(&self) -> (PathBuf, PathBuf) {
+        (dll::dll_dir(), PathBuf::from(self.steam_path.trim()))
     }
 
-    /// 免确认执行：仅「卸载补丁」行使用（spec §45 卸载补丁确认 No；
-    /// §20.3 确认框不得扩散到 Steam 未运行时的卸载——该行渲染即未运行态，点击瞬间也不因竞态误弹）。
-    fn request_action_quiet(&mut self, ctx: &egui::Context, action: Action) {
-        if self.gate.is_busy() {
-            return;
-        }
-        self.start_action(ctx, action, false);
-    }
-
-    fn start_action(&mut self, ctx: &egui::Context, action: Action, kill_first: bool) {
-        let dll_dir = dll::dll_dir();
-        let steam_dir = PathBuf::from(self.steam_path.trim());
-
-        let ops = match workflow::plan(action, kill_first, &steam_dir, &dll_dir) {
-            Ok(ops) => ops,
-            Err(precheck) => {
-                self.confirm = None;
-                self.notice = Some(Notice::Precheck(precheck));
-                // plan 拒绝是「快照过期」信号（如补丁文件被外部删除）：顺手刷新事实，按钮立即归灰（spec #43 刷新点）。
-                self.refresh_facts();
-                return;
+    /// 编排核心事件入口：决策 → 效果逐条执行；同步效果（plan/probe/rescan）喂回的观察
+    /// 事件新产出的效果追加进队尾（反馈环深度 ≤ 2，队列保证顺序）。
+    fn on_core_event(&mut self, evt: AppEvent) {
+        let mut queue: VecDeque<AppEffect> = self.core.step(evt).into();
+        while let Some(effect) = queue.pop_front() {
+            match effect {
+                AppEffect::SpawnUpdateCheck => {
+                    let ctx = self.ctx.clone();
+                    self.spawn(&ctx, || {
+                        Msg::Core(AppEvent::UpdateChecked(updater::check_update()))
+                    });
+                }
+                AppEffect::SpawnUpdateDownload { info } => {
+                    let (dll_dir, _) = self.work_paths();
+                    let ctx = self.ctx.clone();
+                    self.spawn(&ctx, move || {
+                        Msg::Core(AppEvent::Downloaded(updater::download_and_extract(
+                            &info, &dll_dir,
+                        )))
+                    });
+                }
+                AppEffect::RunPlan { action, kill_first } => {
+                    let (dll_dir, steam_dir) = self.work_paths();
+                    let evt = match workflow::plan(action, kill_first, &steam_dir, &dll_dir) {
+                        Ok(ops) => AppEvent::PlanOk { action, ops },
+                        Err(precheck) => AppEvent::PlanRejected(precheck),
+                    };
+                    queue.extend(self.core.step(evt));
+                }
+                AppEffect::SpawnWorkflow { action, ops } => {
+                    let (dll_dir, steam_dir) = self.work_paths();
+                    let ctx2 = self.ctx.clone();
+                    let tx = self.tx.clone();
+                    let steam = self.steam_state.clone();
+                    let ctx3 = ctx2.clone();
+                    self.spawn(&ctx3, move || {
+                        let res = workflow::execute(
+                            &ops,
+                            &workflow::WorkflowCtx {
+                                dll_dir,
+                                steam_dir,
+                                steam,
+                            },
+                            |phase| {
+                                let _ = tx.send(Msg::Core(AppEvent::Phase(phase)));
+                                ctx2.request_repaint();
+                            },
+                        );
+                        Msg::Core(AppEvent::WorkflowDone {
+                            action,
+                            result: res,
+                        })
+                    });
+                }
+                AppEffect::RefreshFacts => self.refresh_facts(),
+                AppEffect::RescanSteam => {
+                    let running = self.steam_monitor.rescan();
+                    // 隐窗决策的不变量：RescanSteam 唯一发射者是 WorkflowDone（观察反馈环末环），
+                    // Steam 在工作流后仍在运行则隐窗；若未来出现其它发射者，再把该决策迁回核心观察反馈。
+                    if running {
+                        self.set_window_visible(false);
+                    }
+                    queue.extend(self.core.step(AppEvent::SteamRunningChanged(running)));
+                }
             }
-        };
-
-        // 门禁此刻应空闲（request_action 已查过、确认弹窗悬挂期 Modal 阻断交互）；Release 下仍被占用则放弃并记日志。
-        let first_phase = ops.first().expect("plan never returns empty").phase();
-        self.confirm = None; // 无论门禁是否放行都收掉确认弹窗，避免悬挂。
-        if !self.gate.start(first_phase) {
-            log_warn(format!(
-                "start_action 被忙碌门禁拒绝（phase={first_phase:?}）"
-            ));
-            return;
         }
-
-        let ctx2 = ctx.clone();
-        let tx = self.tx.clone();
-        let steam = self.steam_state.clone();
-        self.spawn(ctx, move || {
-            let res = workflow::execute(
-                &ops,
-                &workflow::WorkflowCtx {
-                    dll_dir,
-                    steam_dir,
-                    steam,
-                },
-                |phase| {
-                    let _ = tx.send(Msg::Phase(phase));
-                    ctx2.request_repaint();
-                },
-            );
-            Msg::WorkflowDone(action, res)
-        });
     }
 
     fn set_language(&mut self, pref: Language) {
@@ -1293,24 +1251,6 @@ impl App {
         if let Err(e) = config::save(&config::config_path(), &self.config) {
             log_warn(format!("persist config: {e}"));
         }
-    }
-
-    fn check_update(&mut self, ctx: &egui::Context) {
-        if !self.gate.start(BusyKind::Checking) {
-            return;
-        }
-        self.update_flow.check_started();
-        self.spawn(ctx, || Msg::UpdateChecked(updater::check_update()));
-    }
-
-    fn download_update(&mut self, ctx: &egui::Context, info: OnlineInfo) {
-        if !self.gate.start(BusyKind::Downloading) {
-            return;
-        }
-        let dll_dir = dll::dll_dir();
-        self.spawn(ctx, move || {
-            Msg::Downloaded(updater::download_and_extract(&info, &dll_dir))
-        });
     }
 
     /// 应用更新检查：查询本仓库最新发布并与当前程序版本比较。只读查询，不进忙碌门禁
@@ -1621,7 +1561,7 @@ impl App {
             self.strings.settings_btn_rerun_wizard,
             ButtonStyle::Neutral,
             egui::vec2(160.0, 32.0),
-            !self.gate.is_busy(),
+            self.core.snapshot().busy.is_none(),
             self.palette,
         )
         .clicked()
@@ -2045,7 +1985,13 @@ impl App {
     }
 
     /// Hero Surface：eyebrow → 状态 → supporting → Primary CTA → Patch Update Check（spec §13/§14 顺序）。
-    fn hero_surface(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, vm: &MainPageVm) {
+    fn hero_surface(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        vm: &MainPageVm,
+        snap: &app_core::Snapshot,
+    ) {
         let mut event: Option<MainEvent> = None;
         egui::Frame::new()
             .fill(self.palette.card)
@@ -2056,7 +2002,7 @@ impl App {
                 ui.set_width(ui.available_width());
                 self.hero_eyebrow(ui);
                 ui.add_space(8.0);
-                self.hero_status(ui, vm);
+                self.hero_status(ui, vm, snap.busy);
                 // 状态 → Supporting / Primary（原型节奏：status→primary 22，有 supporting 时 10 + 22）。
                 let (gap_to_sup, gap_after_sup) = if vm.supporting.is_some() {
                     (10.0, 22.0)
@@ -2066,19 +2012,21 @@ impl App {
                 ui.add_space(gap_to_sup);
                 self.hero_supporting(ui, vm);
                 ui.add_space(gap_after_sup);
-                if let Some(e) = self.hero_primary(ui, ctx, vm) {
+                if let Some(e) = self.hero_primary(ui, ctx, vm, snap) {
                     event = Some(e);
                 }
                 ui.add_space(14.0);
-                if let Some(e) = self.patch_update_check(ui, ctx, vm) {
+                if let Some(e) = self.patch_update_check(ui, ctx, vm, snap) {
                     event = Some(e);
                 }
             });
         match event {
-            Some(MainEvent::Action(action)) => self.request_action(ctx, action),
+            Some(MainEvent::Action(action)) => {
+                self.on_core_event(AppEvent::ActionRequested(action))
+            }
             Some(MainEvent::FixPath) => self.open_settings(SettingsTab::Steam),
-            Some(MainEvent::Check) => self.check_update(ctx),
-            Some(MainEvent::Download(info)) => self.download_update(ctx, info),
+            Some(MainEvent::Check) => self.on_core_event(AppEvent::Check),
+            Some(MainEvent::Download) => self.on_core_event(AppEvent::Download),
             None => {}
         }
     }
@@ -2099,7 +2047,7 @@ impl App {
     }
 
     /// Hero 状态大字（spec §15/§27/§30/§37：正常态中性主色，语义色只做点缀）。
-    fn hero_status(&self, ui: &mut egui::Ui, vm: &MainPageVm) {
+    fn hero_status(&self, ui: &mut egui::Ui, vm: &MainPageVm, busy: Option<BusyKind>) {
         use main_page::HeroStatus::*;
         match vm.hero {
             Applied => {
@@ -2133,7 +2081,7 @@ impl App {
             }
             Busy => {
                 ui.label(
-                    egui::RichText::new(self.busy_stage_text())
+                    egui::RichText::new(self.busy_stage_text(busy))
                         .size(36.0)
                         .strong()
                         .color(self.palette.sub),
@@ -2151,8 +2099,8 @@ impl App {
     }
 
     /// 当前 busy 阶段文案（Hero 与 Primary busy 共享；描述阶段而非按钮名，spec §27）。
-    fn busy_stage_text(&self) -> String {
-        let kind = self.gate.current().expect("busy hero 必有忙碌种类");
+    fn busy_stage_text(&self, busy: Option<BusyKind>) -> String {
+        let kind = busy.expect("busy hero 必有忙碌种类");
         self.strings.busy_label(kind).to_string()
     }
 
@@ -2188,12 +2136,13 @@ impl App {
         ui: &mut egui::Ui,
         ctx: &egui::Context,
         vm: &MainPageVm,
+        snap: &app_core::Snapshot,
     ) -> Option<MainEvent> {
         let (label, icon, enabled, phase) = match vm.primary.kind {
             PrimaryKind::BusyStage => {
                 ctx.request_repaint(); // spinner 动画
                 (
-                    self.busy_stage_text(),
+                    self.busy_stage_text(snap.busy),
                     IconKind::Spinner,
                     false,
                     ctx.input(|i| i.time) as f32,
@@ -2295,6 +2244,7 @@ impl App {
         ui: &mut egui::Ui,
         ctx: &egui::Context,
         vm: &MainPageVm,
+        snap: &app_core::Snapshot,
     ) -> Option<MainEvent> {
         let spin = matches!(
             vm.update.kind,
@@ -2369,15 +2319,8 @@ impl App {
             if response.clicked() && enabled {
                 match vm.update.kind {
                     UpdateKind::Check => event = Some(MainEvent::Check),
-                    UpdateKind::Download => {
-                        if let Some(info) = self
-                            .update_flow
-                            .derived(self.facts.known_local_version())
-                            .download
-                        {
-                            event = Some(MainEvent::Download(info.clone()));
-                        }
-                    }
+                    // Download 去 payload：AppCore 自查更新流程派生（版本永不渲染，ADR-0014）。
+                    UpdateKind::Download => event = Some(MainEvent::Download),
                     _ => {}
                 }
             }
@@ -2399,13 +2342,13 @@ impl App {
                         );
                     }
                     UpdateConclusion::CheckFailed => {
-                        // 行内只显示词条；失败详情向 update_flow 现查做 hover（不占布局，§26.7）。
-                        let detail = self
-                            .update_flow
-                            .derived(self.facts.known_local_version())
+                        // 行内只显示词条；失败详情从快照派生读（不占布局，§26.7）。
+                        let detail = snap
+                            .update
                             .notice
+                            .as_ref()
                             .and_then(|n| match n {
-                                crate::update_flow::UpdateNotice::CheckFailed(e) => {
+                                SnapshotUpdateNotice::CheckFailed(e) => {
                                     Some(self.strings.update_error(e))
                                 }
                                 _ => None,
@@ -2426,7 +2369,7 @@ impl App {
 
     /// Secondary Action Group（spec §21-§23）：纵向 Inline 行，Visual Weight 低、整行可点；
     /// 警示行（退出 Steam 并卸载）专用 Warning Secondary Blue（ADR-0010 警戒组）。
-    fn secondary_group(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, vm: &MainPageVm) {
+    fn secondary_group(&mut self, ui: &mut egui::Ui, _ctx: &egui::Context, vm: &MainPageVm) {
         if vm.secondary.rows.is_empty() {
             return;
         }
@@ -2507,18 +2450,20 @@ impl App {
             if response.clicked() && row.enabled {
                 match row.action {
                     // 未运行时「卸载补丁」：退出无进程可退 → no-op，等效纯卸载（workflow::plan 语义）；
-                    // 走免确认路径（§45），不被点击瞬间 Steam 已运行的状态误引入确认框（§20.3）。
+                    // 免确认路径（§45/§20.3）：点击瞬间 Steam 已启动也不弹确认框。
                     SecondaryAction::Uninstall => {
-                        self.request_action_quiet(ctx, Action::ExitAndUninstall);
+                        self.on_core_event(AppEvent::ActionRequestedQuiet(
+                            Action::ExitAndUninstall,
+                        ));
                     }
                     SecondaryAction::LaunchNormal => {
-                        self.request_action(ctx, Action::Launch);
+                        self.on_core_event(AppEvent::ActionRequested(Action::Launch));
                     }
                     SecondaryAction::ExitAndUninstall => {
-                        self.request_action(ctx, Action::ExitAndUninstall);
+                        self.on_core_event(AppEvent::ActionRequested(Action::ExitAndUninstall));
                     }
                     SecondaryAction::UninstallAndRestart => {
-                        self.request_action(ctx, Action::UninstallAndRestart);
+                        self.on_core_event(AppEvent::ActionRequested(Action::UninstallAndRestart));
                     }
                 }
             }
@@ -2531,10 +2476,12 @@ impl App {
     /// 返回内容净高（header + 内容列，不含 dock 与弹性留白），供首帧窗口自适应。
     fn main_content(&mut self, ui: &mut egui::Ui) -> f32 {
         let ctx = ui.ctx().clone();
+        // 渲染只消费核心快照（ADR-0019）：每帧一次属主拷贝，版本永不渲染。
+        let snap = self.core.snapshot();
         let items = status_bar_items(
-            self.steam_running,
-            self.gate.current(),
-            self.notice.as_ref(),
+            snap.steam_running,
+            snap.busy,
+            snap.notice.as_ref(),
             &self.strings,
             self.palette,
         );
@@ -2590,7 +2537,7 @@ impl App {
                 ui.vertical(|ui| {
                     ui.set_width(col_w);
                     let c0 = ui.cursor().top();
-                    self.build_main_column(ui, &ctx);
+                    self.build_main_column(ui, &ctx, &snap);
                     col_h = ui.cursor().top() - c0;
                 });
             });
@@ -2601,27 +2548,30 @@ impl App {
     }
 
     /// 内容列：Hero → Health Warning → Secondary Group（spec §5/§24.1 定稿顺序）。
-    fn build_main_column(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        // 检查结论快照：当场向 update_flow 查询并转 owned（版本永不渲染，ADR-0014）。
-        let derived = self.update_flow.derived(self.facts.known_local_version());
+    fn build_main_column(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        snap: &app_core::Snapshot,
+    ) {
         let input = crate::main_page::MainPageInput {
-            deploy: self.facts.status,
-            steam_running: self.steam_running,
-            busy: self.gate.current(),
-            dlls_present: self.facts.dlls_present,
-            update_downloadable: derived.download.is_some(),
-            update_notice: derived.notice.map(|n| match n {
-                crate::update_flow::UpdateNotice::UpToDate => UpdateConclusion::UpToDate,
-                crate::update_flow::UpdateNotice::NewVersion => UpdateConclusion::NewVersion,
-                crate::update_flow::UpdateNotice::CheckFailed(_) => UpdateConclusion::CheckFailed,
+            deploy: snap.facts.status,
+            steam_running: snap.steam_running,
+            busy: snap.busy,
+            dlls_present: snap.facts.dlls_present,
+            update_downloadable: snap.update.download.is_some(),
+            update_notice: snap.update.notice.as_ref().map(|n| match n {
+                SnapshotUpdateNotice::UpToDate => UpdateConclusion::UpToDate,
+                SnapshotUpdateNotice::NewVersion => UpdateConclusion::NewVersion,
+                SnapshotUpdateNotice::CheckFailed(_) => UpdateConclusion::CheckFailed,
             }),
             apply_failed: matches!(
-                self.notice,
+                snap.notice,
                 Some(Notice::WorkflowDone(Action::ApplyAndLaunch, Err(_)))
             ),
         };
         let vm = main_page::derive(&input);
-        self.hero_surface(ui, ctx, &vm);
+        self.hero_surface(ui, ctx, &vm, snap);
         // 内容列统一 14 间隙（原型 content gap）：hero→health→secondary。
         ui.add_space(14.0);
         self.health_warning_line(ui);
@@ -2646,7 +2596,9 @@ impl eframe::App for App {
         self.handle_tray_events();
 
         if let Some(event) = self.steam_monitor.tick() {
-            self.steam_running = event == SteamEvent::Started;
+            // 运行状态经事件喂回编排核心（观察反馈环）；自动隐身策略仍由壳应用（需 window_visible）。
+            self.core
+                .step(AppEvent::SteamRunningChanged(event == SteamEvent::Started));
             if let Some(visible) = auto_tray_policy(event, self.window_visible) {
                 self.set_window_visible(visible);
             }
@@ -2734,7 +2686,7 @@ impl eframe::App for App {
             }
         }
 
-        if let Some(action) = self.confirm {
+        if let Some(action) = self.core.snapshot().confirm {
             let mut confirmed = false;
             let mut cancelled = false;
             egui::Modal::new(egui::Id::new("confirm_close_steam")).show(&ctx, |ui| {
@@ -2772,9 +2724,10 @@ impl eframe::App for App {
                 });
             });
             if confirmed {
-                self.start_action(&ctx, action, true);
+                // 确认即放行：核心已完成确认流收弹窗 + 以 kill_first 编排（见 app_core）。
+                self.on_core_event(AppEvent::ActionConfirmed(action));
             } else if cancelled {
-                self.confirm = None;
+                self.on_core_event(AppEvent::ConfirmCanceled);
             }
         }
 
