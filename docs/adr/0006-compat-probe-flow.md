@@ -4,7 +4,7 @@
 
 ## 决策
 
-- **镜像链**：用户自定义模板 `<Steam>/opensteamtool.toml` 的 `[remote].url_template` 存在即**替代**（非追加）内置源，不再回退 GitHub/jsDelivr；否则 GitHub Raw → jsDelivr CDN。占位符 `{channel}`/`{component}`/`{sha256}`。
+- **镜像链**：用户自定义模板 `<Steam>/opensteamtool.toml` 的 `[remote].url_template` 存在即**替代**（非追加）内置源，不再回退 GitHub/jsDelivr；否则 GitHub Raw → jsDelivr CDN。占位符 `{channel}`/`{component}`/`{sha256}`。（下载实现收编至 downloads 模块，ADR-0021；本 ADR 的探针/HEAD 语义不变。）
 - **探针只读、不进忙碌门禁**：compat 探针/刷新/预热是只读后台操作（零点击、不冻结 UI），与交互类互斥（ADR-0007）无关；互斥由编排层在途去重承担。
 - **三权分立**：算子层 `compat.rs` 无状态探测、编排层 `compat_flow.rs` 纯状态机（无 IO，App 只喂事件、执行返回的 Effect、渲染展示态）、渲染层 `ui.rs`。路径防抖（路径事件流程内去重）与陈旧丢弃（代数戳）都在编排层完成。
 - **每代数至多一次全量网络探测**：刷新预算按体检代数（`Epoch`）计，产出即置位、无隐式重试——弱网下不因复检/预热事件反复打上游镜像；刷新完成无论成败（含 `NetworkError`）都视为已消耗本代数预算。路径变更推进代数，迟到结果按代数戳丢弃。
