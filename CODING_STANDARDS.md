@@ -1,12 +1,42 @@
 # Coding Standards
 
-Rules for code written in this repository. Agent behavior rules live in `AGENTS.md`; trade-off rationale and rejected alternatives live in ADRs. Extend this file as the repo's conventions crystallize.
+Rules for code written in this repository. Agent behavior rules live in `AGENTS.md`. Extend this file as the repo's conventions crystallize.
 
 ## Comments
 
-- Default to no comments. Let names and structure make the code self-explanatory.
-- Write comments only for reasons the code itself cannot express: hidden constraints, counterintuitive behavior, historical pitfalls, and special compatibility requirements.
-- Put trade-off rationale and rejected alternatives in ADRs, not in code comments.
+- The code is the source of truth; a comment never is. When a comment and the code disagree, the code wins: fix the comment or delete it.
+- Default to no comments for what the code already says — names and structure should be the explanation.
+- Comment only what the code cannot express, as a constraint that still binds: hidden constraints, counterintuitive behavior, deliberate deviations, compatibility requirements. When the code changes, update or delete the comment; keep no comment that describes code as it once was.
+- Document exported API — symbols other code or packages consume — with doc comments that state the contract (purpose, invariants, units, thread-safety, caller obligations).
+- Trade-off rationale and rejected alternatives live in ADRs, not in code comments.
+
+## Error handling
+
+- Handle errors, or propagate them with context (what failed, with what input); silently swallowing an error is a defect. Let tooling flag the mechanical forms (empty `catch`, ignored error returns).
+- Errors surfaced to users never leak internals — stack traces, internal paths, queries, secrets. Return a generic message and log the detail.
+
+## Resources
+
+- Acquired resources (handles, connections, locks, temp files) are released on every path, including error paths; prefer scoped owners (`defer`, `with`, RAII, `Drop`) over manual release.
+
+## Tests
+
+- Behavior ships with a test that fails without it; a test that always passes is waste.
+
+## Consistency
+
+- Match the convention of the file you are editing; surrounding style settles style debates, not taste.
+
+## Concurrency
+
+- Shared mutable state has one owner or one synchronization mechanism; keep critical sections minimal, and never hold a lock across blocking work.
+
+## Out of scope
+
+- Updating or merging an existing standards file: the human decides what changes.
+- Writing ADRs: rationale belongs in ADRs, and the doc points there.
+
+<!-- end of baseline v1; repo-owned content below survives baseline updates -->
 
 ## Comments: repo rules
 
@@ -18,16 +48,11 @@ Delete the comment in your head and re-read the code. If a reader would still wr
 
 ### Allowed
 
-- A doc comment on an item whose contract is not visible in its name and signature: invariants, panics, error and degradation behavior, or special compatibility requirements.
-- An implementation comment for a hidden constraint, counterintuitive behavior, historical pitfall, or compatibility requirement — state the reason, not the mechanics.
+- A doc comment for an item whose contract is not visible in its name and signature: panics, error and degradation behavior.
 - A short in-line pointer to where the full reasoning lives: `ADR-0012`, `GLOSSARY.md「忙碌门禁」`, `#26`. Cite it; do not reproduce it in the source.
 
 ### Not allowed
 
-- Restating the code: narrating the next statement (`// 启动 → 隐藏。`), summarizing the function body, or echoing the signature and parameter names.
-- Section and banner dividers (`// ---------- 派生函数 ----------`, `// ==================== 状态机转移 ====================`). Extract a function, module, or file instead.
-- Commented-out code. Git keeps the history; delete it.
-- Changelog and provenance narration in source (`此前…`, `旧实现…`, `自 ui.rs 迁入`, `previously…`, `moved from…`). The commit message, ADR, or `GLOSSARY.md` owns that.
 - `TODO` / `FIXME` with no owner and issue. New ones are `TODO(#NN): …`; never add a bare one.
 - A doc comment on every field, variant, or constant by reflex. Document the type once, then only the members whose meaning the name does not carry.
 
