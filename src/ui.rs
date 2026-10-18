@@ -2613,12 +2613,14 @@ impl eframe::App for App {
             });
         }
 
-        let repaint_interval = if self.window_visible {
-            process::STEAM_REFRESH_INTERVAL
-        } else {
-            std::time::Duration::from_millis(100)
-        };
-        ctx.request_repaint_after(repaint_interval);
+        // repaint 续命：窗口可见/隐藏统一 2s 间隔。
+        // 背景：隐藏分支曾用 100ms，但最小化隐身会让 egui 的 `viewport.info.visible`
+        // 缓存停留在 true（eframe 只有 Occluded -> info.occluded，无回写 visible），
+        // 窗口物理隐藏后 eframe 仍判定 show_ui=true 照常渲染：100ms 间隔 = 10fps
+        // 持续渲染 -> GPU 持续 ~1%。统一为 2s 后，任何状态下空闲渲染仅 0.5fps，
+        // GPU 占用归零（托盘事件经 tray-icon 全局 receiver 由 logic 轮询消费，
+        // 2s 轮询对托盘操作响应足够，见 #38 复现记录）。
+        ctx.request_repaint_after(process::STEAM_REFRESH_INTERVAL);
 
         let minimized = ctx.input(|i| i.viewport().minimized).unwrap_or(false);
         if minimized && !self.was_minimized && self.minimize_to_tray {
