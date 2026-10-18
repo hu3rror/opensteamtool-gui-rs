@@ -4,6 +4,7 @@ use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::time::Duration;
 
 use eframe::egui;
 use egui::Frame;
@@ -42,6 +43,9 @@ const SETTINGS_DIALOG_WIDTH: f32 = 580.0;
 /// 旧 6/6 menu_margin 时代为 208，settings_dialog_frame 内边距上调后 +28）。
 const SETTINGS_DIALOG_SKELETON_H: f32 = 236.0;
 const SETTINGS_SCROLL_MIN_H: f32 = 200.0;
+
+/// 隐藏窗口的安全网心跳（见 `App::logic` repaint 调度）：事件路径全失败时的兜底恢复频率。
+const HIDDEN_REPAINT_HEARTBEAT: Duration = Duration::from_secs(60);
 
 /// 主页面内容列最大宽度（spec §40 Tunable 基线：Hero max-width 600 lp）。
 const MAIN_COLUMN_WIDTH: f32 = 600.0;
@@ -2626,14 +2630,6 @@ impl eframe::App for App {
             self.wizard_event(ctx, wizard::Event::Closed);
         }
 
-        // repaint 续命：窗口可见/隐藏统一 2s 间隔（空闲回退刷新）。
-        // 背景：隐藏分支曾用 100ms，但最小化隐身会让 egui 的 `viewport.info.visible`
-        // 缓存停留在 true（eframe 只有 Occluded -> info.occluded，无回写 visible），
-        // 窗口物理隐藏后 eframe 仍判定 show_ui=true 照常渲染：100ms 间隔 = 10fps
-        // 持续渲染 -> GPU 持续 ~1%。统一为 2s 后，任何状态下空闲渲染仅 0.5fps，GPU 占用归零。
-        // 托盘事件不依赖本间隔：set_event_handler 回调经 Msg 转发 + request_repaint 即时唤醒（#51）。
-        ctx.request_repaint_after(process::STEAM_REFRESH_INTERVAL);
-
         let minimized = ctx.input(|i| i.viewport().minimized).unwrap_or(false);
         if minimized && !self.was_minimized && self.minimize_to_tray {
             // 最小化隐身：非最小化命令保持，显隐经唯一物理写入点（含镜像同步）。
@@ -2643,6 +2639,13 @@ impl eframe::App for App {
         self.was_minimized = minimized;
 
         self.handle_messages();
+        // repaint 续命：可见窗口 2s 空闲回退刷新（保持不变）；隐藏窗口不发周期 repaint，
+        // 仅 60s 安全网心跳兜底，隐藏期唤醒只走事件（#51）。背景分析见 ADR-0001（#52）。
+        if self.window_visible {
+            ctx.request_repaint_after(process::STEAM_REFRESH_INTERVAL);
+        } else {
+            ctx.request_repaint_after(HIDDEN_REPAINT_HEARTBEAT);
+        }
 
         // 每帧同步当前色板（放在 logic 而非 ui：窗口隐藏/托盘隐身期 ui() 不调用，托盘图标
         // 仍需随 System 模式 OS 切深浅换版）。mark 按模式重载（Dark 烤白 / L1 保留黑 mark）。
