@@ -1,4 +1,7 @@
 //! Windows 系统托盘：图标、菜单与事件。
+//! 事件经 `set_event_handler` 回调转发（与全局 receiver 互斥，替代轮询；#51）。
+
+use std::sync::Arc;
 
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder, TrayIconEvent};
@@ -14,13 +17,17 @@ pub enum TrayAction {
 pub struct Tray {
     _icon: TrayIcon,
     _menu: Menu,
-    show_item: MenuItem,
-    quit_item: MenuItem,
     minimize_item: CheckMenuItem,
     restart_item: MenuItem,
 }
 
 impl Tray {
+    /// 创建托盘并注册事件回调（`set_event_handler`，与全局 receiver 互斥）。
+    /// `sink` 在托盘事件线程被调用（非 UI 线程），须 `Send + Sync`；收到已映射的
+    /// `TrayAction` 后由调用方负责转发进消息通道并唤醒 UI 线程。
+    /// 创建失败（托盘不可用）返回 `None`，此时不注册回调。
+    /// 8 个参数均为互不相同的单一值，无自然归并（clippy::too_many_arguments）。
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         icon: Option<Icon>,
         tooltip: &str,
@@ -29,6 +36,7 @@ impl Tray {
         minimize_label: &str,
         minimize_checked: bool,
         restart_label: &str,
+        sink: impl Fn(TrayAction) + Send + Sync + 'static,
     ) -> Option<Self> {
         let show_item = MenuItem::new(show_label, true, None);
         let quit_item = MenuItem::new(quit_label, true, None);
@@ -48,11 +56,42 @@ impl Tray {
             .build()
             .ok()?;
 
+        // 与全局 receiver 互斥：注册后 receiver 不再收到事件。
+        let sink = Arc::new(sink);
+        let icon_sink = sink.clone();
+        TrayIconEvent::set_event_handler(Some(move |event| match event {
+            TrayIconEvent::Click {
+                button,
+                button_state,
+                ..
+            } if button == tray_icon::MouseButton::Left
+                && button_state == tray_icon::MouseButtonState::Up =>
+            {
+                icon_sink(TrayAction::ToggleVisible);
+            }
+            TrayIconEvent::DoubleClick { .. } => icon_sink(TrayAction::ToggleVisible),
+            _ => {}
+        }));
+        let show_id = show_item.id().clone();
+        let minimize_id = minimize_item.id().clone();
+        let restart_id = restart_item.id().clone();
+        let quit_id = quit_item.id().clone();
+        let menu_sink = sink.clone();
+        MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
+            if event.id == show_id {
+                menu_sink(TrayAction::Show);
+            } else if event.id == minimize_id {
+                menu_sink(TrayAction::ToggleMinimizeToTray);
+            } else if event.id == restart_id {
+                menu_sink(TrayAction::RestartSteam);
+            } else if event.id == quit_id {
+                menu_sink(TrayAction::Quit);
+            }
+        }));
+
         Some(Self {
             _icon: tray,
             _menu: menu,
-            show_item,
-            quit_item,
             minimize_item,
             restart_item,
         })
@@ -75,38 +114,5 @@ impl Tray {
 
     pub fn set_minimize_to_tray(&self, checked: bool) {
         self.minimize_item.set_checked(checked);
-    }
-
-    pub fn poll(&self) -> Option<TrayAction> {
-        while let Ok(event) = TrayIconEvent::receiver().try_recv() {
-            match event {
-                TrayIconEvent::Click {
-                    button,
-                    button_state,
-                    ..
-                } if button == tray_icon::MouseButton::Left
-                    && button_state == tray_icon::MouseButtonState::Up =>
-                {
-                    return Some(TrayAction::ToggleVisible);
-                }
-                TrayIconEvent::DoubleClick { .. } => return Some(TrayAction::ToggleVisible),
-                _ => {}
-            }
-        }
-        while let Ok(event) = MenuEvent::receiver().try_recv() {
-            if event.id == self.show_item.id() {
-                return Some(TrayAction::Show);
-            }
-            if event.id == self.minimize_item.id() {
-                return Some(TrayAction::ToggleMinimizeToTray);
-            }
-            if event.id == self.restart_item.id() {
-                return Some(TrayAction::RestartSteam);
-            }
-            if event.id == self.quit_item.id() {
-                return Some(TrayAction::Quit);
-            }
-        }
-        None
     }
 }

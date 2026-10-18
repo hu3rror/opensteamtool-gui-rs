@@ -357,12 +357,15 @@ fn health_warning(s: &Strings, summary: CompatSummary) -> Option<&'static str> {
 }
 
 /// 跨线程消息（spawn 线程 → UI 线程）：核心决策事件经 `Core` 包装进 AppCore；
-/// 其余为壳侧自留（窗口 / 体检 / 向导 / 应用更新，ADR-0019 切片 1 壳拦截）。
+/// 其余为壳侧自留（窗口 / 托盘 / 体检 / 向导 / 应用更新，ADR-0019 切片 1 壳拦截）。
 enum Msg {
     /// 核心决策事件（AppCore 输入，反馈环的入口）。
     Core(AppEvent),
     /// 重复启动（另一实例已置位唤醒事件）：把窗口带回前台。
     ActivateRequested,
+    /// 托盘事件（图标点击/菜单动作）：`set_event_handler` 回调经消息通道转发并
+    /// `request_repaint` 唤醒（替代全局 receiver 轮询，见 #51）。
+    Tray(TrayAction),
     /// Steam 核心兼容性体检完成（携带发起时代数，陈旧结果由流程丢弃）。
     Compat {
         epoch: compat_flow::Epoch,
@@ -990,15 +993,23 @@ impl App {
             },
         };
         let mark_dark = palette.dark_mode;
-        let tray = Tray::new(
-            crate::brand::tray_icon(palette.dark_mode),
-            strings.app_title,
-            strings.tray_show,
-            strings.tray_quit,
-            strings.tray_minimize,
-            config.minimize_to_tray,
-            strings.tray_restart,
-        );
+        let tray = {
+            let tx = tx.clone();
+            let ctx = cc.egui_ctx.clone();
+            Tray::new(
+                crate::brand::tray_icon(palette.dark_mode),
+                strings.app_title,
+                strings.tray_show,
+                strings.tray_quit,
+                strings.tray_minimize,
+                config.minimize_to_tray,
+                strings.tray_restart,
+                move |action| {
+                    let _ = tx.send(Msg::Tray(action));
+                    ctx.request_repaint();
+                },
+            )
+        };
 
         // 启动即应用持久化主题偏好（ADR-0016）：egui 默认 ThemePreference::System，
         // 不显式设置则固定 Dark/Light 会在首帧被 OS 主题覆盖，重启后恢复失效。
@@ -1108,26 +1119,26 @@ impl App {
         self.ctx.set_theme(to_egui_theme_pref(pref));
         self.persist_config();
     }
-    fn handle_tray_events(&mut self) {
-        let Some(tray) = &self.tray else { return };
-        let mut actions = Vec::new();
-        while let Some(action) = tray.poll() {
-            actions.push(action);
-        }
-        let minimize_checked = tray.is_minimize_to_tray();
-        for action in actions {
-            match action {
-                TrayAction::ToggleVisible => self.set_window_visible(!self.window_visible),
-                TrayAction::Show => self.set_window_visible(true),
-                TrayAction::Quit => {
-                    self.tray = None;
-                    std::process::exit(0);
-                }
-                TrayAction::ToggleMinimizeToTray => self.set_minimize_to_tray(minimize_checked),
-                TrayAction::RestartSteam => {
-                    // 托盘「重启 Steam」走同一编排入口（切片 1 提前收敛，见 #44 实现决策）。
-                    self.on_core_event(AppEvent::ActionRequested(Action::Restart));
-                }
+    /// 托盘动作执行（#51 事件回调 → Msg::Tray 进消息泵；单动作逐条处理，
+    /// 勾选态在消息处理时读取，与 muda 自动切换后的 CheckMenuItem 状态一致）。
+    fn handle_tray_action(&mut self, action: TrayAction) {
+        match action {
+            TrayAction::ToggleVisible => self.set_window_visible(!self.window_visible),
+            TrayAction::Show => self.set_window_visible(true),
+            TrayAction::Quit => {
+                self.tray = None;
+                std::process::exit(0);
+            }
+            TrayAction::ToggleMinimizeToTray => {
+                let checked = self
+                    .tray
+                    .as_ref()
+                    .map_or(self.minimize_to_tray, |t| t.is_minimize_to_tray());
+                self.set_minimize_to_tray(checked);
+            }
+            TrayAction::RestartSteam => {
+                // 托盘「重启 Steam」走同一编排入口（切片 1 提前收敛，见 #44 实现决策）。
+                self.on_core_event(AppEvent::ActionRequested(Action::Restart));
             }
         }
     }
@@ -1149,6 +1160,7 @@ impl App {
                 Msg::ActivateRequested => {
                     self.set_window_visible(true);
                 }
+                Msg::Tray(action) => self.handle_tray_action(action),
                 Msg::Compat { epoch, report } => {
                     self.on_core_event(AppEvent::CompatProbeDone { epoch, report });
                 }
@@ -2614,15 +2626,12 @@ impl eframe::App for App {
             self.wizard_event(ctx, wizard::Event::Closed);
         }
 
-        self.handle_tray_events();
-
-        // repaint 续命：窗口可见/隐藏统一 2s 间隔。
+        // repaint 续命：窗口可见/隐藏统一 2s 间隔（空闲回退刷新）。
         // 背景：隐藏分支曾用 100ms，但最小化隐身会让 egui 的 `viewport.info.visible`
         // 缓存停留在 true（eframe 只有 Occluded -> info.occluded，无回写 visible），
         // 窗口物理隐藏后 eframe 仍判定 show_ui=true 照常渲染：100ms 间隔 = 10fps
-        // 持续渲染 -> GPU 持续 ~1%。统一为 2s 后，任何状态下空闲渲染仅 0.5fps，
-        // GPU 占用归零（托盘事件经 tray-icon 全局 receiver 由 logic 轮询消费，
-        // 2s 轮询对托盘操作响应足够，见 #38 复现记录）。
+        // 持续渲染 -> GPU 持续 ~1%。统一为 2s 后，任何状态下空闲渲染仅 0.5fps，GPU 占用归零。
+        // 托盘事件不依赖本间隔：set_event_handler 回调经 Msg 转发 + request_repaint 即时唤醒（#51）。
         ctx.request_repaint_after(process::STEAM_REFRESH_INTERVAL);
 
         let minimized = ctx.input(|i| i.viewport().minimized).unwrap_or(false);
