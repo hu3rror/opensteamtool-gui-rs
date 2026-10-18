@@ -22,7 +22,7 @@ use crate::main_page::{
     self, IconKind, MainPageVm, PrimaryAction, PrimaryKind, SecondaryAction, UpdateConclusion,
     UpdateKind,
 };
-use crate::process::{self, SteamEvent, SteamMonitor};
+use crate::process::{self, MonitorUpdate, SteamEvent, SteamMonitor, SteamMonitorHandle};
 use crate::singleton::Singleton;
 use crate::steam;
 use crate::steam_state::SteamState;
@@ -465,7 +465,7 @@ pub struct App {
     strings: Strings,
     /// 编排核心：消息决策纯状态机（ADR-0019 切片 1；渲染只读其快照）。
     core: AppCore,
-    steam_monitor: SteamMonitor,
+    steam_monitor: SteamMonitorHandle,
     steam_state: Arc<SteamState>,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
@@ -964,8 +964,20 @@ impl App {
         let steam_dir = Path::new(&steam_path);
         let facts = dll::probe_facts(steam_dir, &dll::dll_dir());
         let steam_state = Arc::new(SteamState::new());
-        let steam_monitor = SteamMonitor::new(&steam_state);
-        let steam_running = steam_monitor.is_running();
+        let (steam_monitor, steam_running) = SteamMonitor::spawn(steam_state.clone(), {
+            let tx = tx.clone();
+            let ctx = cc.egui_ctx.clone();
+            move |update| {
+                // 边沿/观察经消息通道进核心（观察反馈环）：auto-tray 隐显决策在核心（镜像 + 边沿语义）。
+                let evt = match update {
+                    MonitorUpdate::Edge(SteamEvent::Started) => AppEvent::SteamStarted,
+                    MonitorUpdate::Edge(SteamEvent::Stopped) => AppEvent::SteamStopped,
+                    MonitorUpdate::State(running) => AppEvent::SteamRunningChanged(running),
+                };
+                let _ = tx.send(Msg::Core(evt));
+                ctx.request_repaint();
+            }
+        });
         let minimize_to_tray = config.minimize_to_tray;
         let theme_pref = config.theme;
         // 主题在托盘创建前确定（托盘图标按当前主题选版，GLOSSARY「应用图标」深/浅双态）。
@@ -1239,9 +1251,8 @@ impl App {
                     queue.extend(self.core.step(AppEvent::FactsRefreshed(facts)));
                 }
                 AppEffect::RescanSteam => {
-                    // 重读运行状态并把观察喂回核心；隐窗决策在核心（一次性合成）。
-                    let running = self.steam_monitor.rescan();
-                    queue.extend(self.core.step(AppEvent::SteamRunningChanged(running)));
+                    // 请求后台监视线程立即轮询：边沿/状态观察以消息异步回喂核心（隐窗决策在核心，一次性合成）。
+                    self.steam_monitor.rescan();
                 }
                 AppEffect::FeedCompatPath(p) => {
                     // 路径变更 → 体检重探：决策在核心，回喂经效果队列（P5 统一入口）。
@@ -2604,14 +2615,6 @@ impl eframe::App for App {
         }
 
         self.handle_tray_events();
-
-        if let Some(event) = self.steam_monitor.tick() {
-            // 边沿事件进核心（观察反馈环）：auto-tray 隐显决策在核心（镜像 + 边沿语义）。
-            self.on_core_event(match event {
-                SteamEvent::Started => AppEvent::SteamStarted,
-                SteamEvent::Stopped => AppEvent::SteamStopped,
-            });
-        }
 
         // repaint 续命：窗口可见/隐藏统一 2s 间隔。
         // 背景：隐藏分支曾用 100ms，但最小化隐身会让 egui 的 `viewport.info.visible`

@@ -52,11 +52,11 @@ pub enum AppEvent {
     PlanRejected(Precheck),
     /// 壳侧 probe_facts 完成（端口注入，渲染零 IO）。
     FactsRefreshed(DeploymentFacts),
-    /// 壳侧 Steam 运行状态观察（monitor tick / 工作流后 rescan）。
+    /// 壳侧 Steam 运行状态观察（工作流后 rescan；轮询边沿由 SteamStarted/Stopped 表达）。
     SteamRunningChanged(bool),
-    /// Steam 启动边沿（monitor tick）：auto-tray 决策入参。
+    /// Steam 启动边沿（后台监视线程）：auto-tray 决策入参。
     SteamStarted,
-    /// Steam 退出边沿（monitor tick）：auto-tray 决策入参。
+    /// Steam 退出边沿（后台监视线程）：auto-tray 决策入参。
     SteamStopped,
     /// 窗口显隐镜像同步（壳物理写入点统一回喂；存态不产效果）。
     WindowVisibleChanged(bool),
