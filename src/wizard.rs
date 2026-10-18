@@ -103,7 +103,6 @@ impl Wizard {
         }
         let effects = match event {
             Event::LanguageChosen(language) if self.step == Step::Language => {
-                // 选完语言不推进——由「下一步」显式进入步骤 2（#34：下拉不再直达）。
                 self.language = language;
                 Vec::new()
             }
@@ -125,9 +124,7 @@ impl Wizard {
             }
             Event::PathSubmitted if self.step == Step::SteamPath => {
                 if dll::is_valid_steam_dir(&self.steam_path) {
-                    // 只推进到步骤 4，不自动下载：由用户点击「下载并解压」显式开始
                     self.step = Step::Download;
-                    // 补丁是否已下载是文件系统事实（ADR-0011 文件本位判据）：已下载
                     self.download = if dll::target_dlls_present(&self.dll_dir) {
                         DownloadState::Ready
                     } else {
@@ -135,7 +132,7 @@ impl Wizard {
                     };
                     Vec::new()
                 } else {
-                    Vec::new() // 无效路径停留步骤 2（关窗仍可逃生）。
+                    Vec::new()
                 }
             }
             Event::DownloadRequested
@@ -364,7 +361,7 @@ mod tests {
         assert_eq!(v.step, Step::Download);
         assert!(fx3.is_empty(), "有效提交也不自动下载");
         assert!(matches!(v.download, DownloadState::Idle));
-        let _ = fx; // 无效提交本身不产出效果。
+        let _ = fx;
 
         std::fs::remove_dir_all(&steam).ok();
     }
@@ -615,9 +612,6 @@ mod tests {
 
     #[test]
     fn edit_then_submit_in_same_stream_uses_latest_value() {
-        // UI 层同一帧可先后送达 PathEdited 与 PathSubmitted（ADR-0013 修订）：
-        // 提交必须基于本帧编辑后的值，而非步骤进入时的旧快照——旧实现丢失 PathEdited 后
-        // 会拿旧有效路径免检通过（「填不存在的路径也能下一步」），输入被静默丢弃。
         let steam = tmp_dir("same_stream");
         let mut w = Wizard::new(
             Language::En,
@@ -630,14 +624,12 @@ mod tests {
         w.step(Event::ThemeChosen(ThemePreference::Dark));
         w.step(Event::ThemeSubmitted);
 
-        // 同流：编辑为无效路径 → 提交 → 停留且输入保留（用户可继续改）。
         w.step(Event::PathEdited("Z:/nope_abc42".into()));
         let (v, fx) = w.step(Event::PathSubmitted);
         assert_eq!(v.step, Step::SteamPath, "无效路径不得推进");
         assert_eq!(v.steam_path, "Z:/nope_abc42", "输入不能被丢弃");
         assert!(fx.is_empty());
 
-        // 同流：编辑为有效路径 → 提交 → 推进。
         w.step(Event::PathEdited(steam.display().to_string()));
         let (v, _) = w.step(Event::PathSubmitted);
         assert_eq!(v.step, Step::Download);

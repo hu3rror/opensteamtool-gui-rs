@@ -264,7 +264,7 @@ mod tests {
     #[test]
     fn execute_uninstalls() {
         let dlls = tmp_dlls("exec_un_dlls");
-        let steam = tmp_dlls("exec_un_steam"); // 预置三个 DLL
+        let steam = tmp_dlls("exec_un_steam");
         let ctx = WorkflowCtx {
             dll_dir: dlls.clone(),
             steam_dir: steam.clone(),
@@ -286,7 +286,7 @@ mod tests {
     #[test]
     fn execute_stops_at_first_error() {
         let dlls = tmp_dlls("exec_err_dlls");
-        let steam = tmp_dlls("exec_err_steam"); // 有 DLL，但无 steam.exe
+        let steam = tmp_dlls("exec_err_steam");
         let ctx = WorkflowCtx {
             dll_dir: dlls.clone(),
             steam_dir: steam.clone(),

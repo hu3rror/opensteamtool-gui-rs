@@ -4,7 +4,6 @@ Add-Type -AssemblyName System.Drawing
 $bmp = [System.Drawing.Bitmap]::FromFile((Join-Path (Get-Location) $Png))
 $w = $bmp.Width; $h = $bmp.Height
 Write-Output "size ${w}x${h}"
-# 每 20 行采样一行，统计该行像素: 纯黑占比/平均亮度
 for ($y = 0; $y -lt $h; $y += 20) {
     $black = 0; $sum = 0; $n = 0
     for ($x = 0; $x -lt $w; $x += 4) {

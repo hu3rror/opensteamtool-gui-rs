@@ -442,7 +442,6 @@ struct CompatView {
 
 impl CompatView {
     fn snapshot(app: &App) -> Self {
-        // 体检域状态经编排核心快照（ADR-0019）；strings 文案映射留在渲染层（快照零 i18n）。
         let d = app.core.snapshot().compat;
         Self {
             summary: d.summary,
@@ -1136,7 +1135,6 @@ impl App {
             match msg {
                 Msg::Core(evt) => self.on_core_event(evt),
                 Msg::ActivateRequested => {
-                    // 重复启动（含托盘隐藏中的窗口）：恢复显示并聚焦到前台。
                     self.set_window_visible(true);
                 }
                 Msg::Compat { epoch, report } => {
@@ -1338,7 +1336,7 @@ impl App {
         let Some(view) = self.wizard.as_ref().map(|w| w.view()) else {
             return;
         };
-        let strings = self.strings; // Copy：渲染期自由借用 self。
+        let strings = self.strings;
         let (events, _) = wizard_steps_ui(ui, strings, &view, self.palette);
         for event in events {
             self.wizard_event(ctx, event);
@@ -1431,7 +1429,6 @@ impl App {
                     .auto_shrink([false; 2])
                     .max_height(max_scroll_h)
                     .show(ui, |ui| {
-                        // 设置内小项间呼吸感：行距略大于全局（10 → 13lp），各页签统一。
                         ui.spacing_mut().item_spacing.y = 13.0;
                         match self.settings_tab {
                             SettingsTab::General => self.settings_general(ui),
@@ -2152,7 +2149,7 @@ impl App {
     ) -> Option<MainEvent> {
         let (label, icon, enabled, phase) = match vm.primary.kind {
             PrimaryKind::BusyStage => {
-                ctx.request_repaint(); // spinner 动画
+                ctx.request_repaint();
                 (
                     self.busy_stage_text(snap.busy),
                     IconKind::Spinner,
@@ -2771,7 +2768,7 @@ mod tests {
 
         let mut fonts =
             egui::epaint::text::Fonts::new(egui::epaint::text::TextOptions::default(), defs);
-        assert!(fonts.has_glyph(&egui::FontId::proportional(14.0), 'X')); // latin sanity
+        assert!(fonts.has_glyph(&egui::FontId::proportional(14.0), 'X'));
         assert!(fonts.has_glyph(&egui::FontId::proportional(14.0), '中'));
     }
 
@@ -2925,7 +2922,6 @@ mod tests {
 
     #[test]
     fn status_bar_keeps_interaction_busy_but_drops_update_flow() {
-        // §32/§34：交互类忙碌可占状态栏；检查/下载（更新流程）只在更新按钮位原位，不进状态栏。
         let zh = Strings::new(Lang::Zh);
         let texts = |busy: Option<BusyKind>| -> Vec<String> {
             status_bar_items(false, busy, None, &zh, Palette::dark())
@@ -2949,7 +2945,6 @@ mod tests {
 
     #[test]
     fn primary_cta_fits_longest_english_label() {
-        // spec §42：英文 Primary 单行不换行、不缩字——在 340lp 基线宽度内放得下。
         let ctx = egui::Context::default();
         let raw = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -3203,7 +3198,6 @@ mod tests {
 
     #[test]
     fn wizard_step3_next_button_disabled_for_invalid_path() {
-        // 契约测试：路径无效时「下一步」不可点（点击不产出 PathSubmitted）；有效路径扫射同一区域必须点到（对照，证明坐标覆盖按钮）。
         fn sweep(valid: bool) -> Vec<wizard::Event> {
             let mut events = Vec::new();
             for y_step in 0..=14 {
@@ -3277,8 +3271,6 @@ mod tests {
 
     #[test]
     fn wizard_step3_same_frame_edit_and_click_keeps_order() {
-        // 同帧「输入路径 + 点下一步」：PathEdited 必须先于 PathSubmitted 送达状态机，提交校验本帧编辑后的值。
-        // 旧实现 Option 覆盖丢失 PathEdited，提交用上一帧旧路径——「填了不存在的路径也能点下一步过去」的机制。
         let ctx = egui::Context::default();
         let mut events: Vec<wizard::Event> = Vec::new();
         for (frame, evs) in [
@@ -3447,8 +3439,6 @@ mod tests {
     }
 
     fn slim_main_content_height(ctx: &egui::Context, lang: Lang) -> f32 {
-        // 最简主页面一行（无 supporting / health / secondary 时）的内容高：
-        // header + Hero（eyebrow + 状态 + Primary + update），供设置对话框自适应窗口测量。
         let mut h = 0.0f32;
         let raw = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -3460,7 +3450,6 @@ mod tests {
         let mut full = ctx.run_ui(raw, |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
                 let s = Strings::new(lang);
-                // header 简化（品牌 mark + 标题 + 齿轮 + hairline）
                 ui.horizontal(|ui| {
                     let _ = ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::hover());
                     ui.add_space(11.0);
@@ -3483,7 +3472,6 @@ mod tests {
                     egui::Stroke::new(1.0, Palette::dark().border),
                 );
                 ui.add_space(12.0);
-                // Hero 最简形态
                 egui::Frame::new()
                     .fill(Palette::dark().card)
                     .stroke(egui::Stroke::new(1.0, Palette::dark().border))
@@ -3538,7 +3526,7 @@ mod tests {
 
     fn settings_dialog_footer_bottom(lang: Lang, inner_h: f32) -> (f32, f32, f32) {
         let ctx = egui::Context::default();
-        install_cjk_font(&ctx); // 与应用同字体：中文字体行高与默认字体不同，骨架测量须同源。
+        install_cjk_font(&ctx);
         install_theme(&ctx);
         let mut footer = 0.0f32;
         let mut modal_top = 0.0f32;

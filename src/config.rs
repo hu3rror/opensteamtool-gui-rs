@@ -169,13 +169,11 @@ fn parse(text: &str) -> Result<Config, ConfigError> {
         .and_then(Language::parse)
         .ok_or_else(|| ConfigError::Parse("missing or invalid language".into()))?;
 
-    // 最小化隐身：字段缺失 = 默认启用（老配置无该字段，不迁移不 bump 版本）；
     let minimize_to_tray = match doc.get("minimize_to_tray") {
         None => true,
         Some(v) => v.as_bool().unwrap_or(true),
     };
 
-    // 主题偏好：字段缺失/非法 = 默认跟随系统（老配置无该字段，不迁移不 bump 版本）。
     let theme = match doc.get("theme") {
         None => ThemePreference::System,
         Some(v) => v

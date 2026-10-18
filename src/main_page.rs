@@ -41,7 +41,6 @@ pub enum HeroStatus {
     NotApplied,
     /// Busy 阶段（文案由 busy 阶段词表提供，§27）。
     Busy,
-    /// 补丁操作失败（§30）。
     Failed,
 }
 
@@ -49,7 +48,6 @@ pub enum HeroStatus {
 pub enum Supporting {
     /// 补丁未下载（Primary 置灰，引导「检查补丁更新」，ADR-0011 文件本位）。
     FilesMissing,
-    /// Steam 路径无效（§25）。
     PathInvalid,
 }
 
@@ -96,7 +94,6 @@ pub struct SecondaryVm {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum UpdateKind {
-    /// 检查补丁更新 [Refresh]
     Check,
     /// 下载并解压新版本 [Download]（检查确认可更新或本地缺文件后出现，ADR-0014）
     Download,
@@ -491,7 +488,6 @@ mod tests {
         }
     }
 
-    /// 矩阵断言辅助：主页面五组件意图与 §44 完全一致。
     fn assert_rows(vm: &MainPageVm, want: &[(SecondaryAction, bool)]) {
         let got: Vec<(SecondaryAction, bool)> = vm
             .secondary
@@ -602,8 +598,6 @@ mod tests {
 
     #[test]
     fn update_flow_busy_keeps_hero_and_primary_quiet() {
-        // 更新流程忙碌（检查/下载）只在「补丁更新检查」按钮位原位呈现（§26.2/§26.5/§34）：
-        // Hero 不阶段化、Primary 保留正常动作仅禁用；进行中不叠加「补丁未下载」引导（自相矛盾）。
         for (kind, want_update) in [
             (BusyKind::Checking, UpdateKind::Checking),
             (BusyKind::Downloading, UpdateKind::Downloading),
@@ -648,7 +642,6 @@ mod tests {
         ));
         assert_eq!(vm.update.kind, UpdateKind::Downloading);
         assert_eq!(vm.update.note, None);
-        // 已应用场景：更新流程忙碌不压 Hero / Primary（交互类忙碌才阶段化，§27）。
         assert_eq!(vm.hero, HeroStatus::Applied);
         assert_eq!(vm.primary.kind, PrimaryKind::Action(PrimaryAction::Restart));
         assert!(!vm.primary.enabled);
@@ -657,7 +650,6 @@ mod tests {
     #[test]
     fn update_check_precedes_download_when_files_missing() {
         let vm = derive(&input(DeployStatus::NotDeployed, false, None, false, false));
-        // 文件缺失但未检查（无下载目标）→ 仍提供 Check（先检查再下载，#34 引导）。
         assert_eq!(vm.update.kind, UpdateKind::Check);
     }
 
@@ -677,7 +669,6 @@ mod tests {
         assert_eq!(vm.update.note, Some(UpdateConclusion::NewVersion));
         assert!(vm.update.enabled);
 
-        // 版本号永不渲染：vm 不携带版本文本，只有 kind/note 语义（ADR-0014）。
         assert_eq!(vm.hero, HeroStatus::NotApplied);
     }
 

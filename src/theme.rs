@@ -415,7 +415,6 @@ mod tests {
             );
             assert!(no_dup(p.selection_bg()));
             assert!(no_dup(p.warn_fg()));
-            // dark 的 busy 文字就是 accent 槽本身（现状行为），只有 L1 才是新派生色。
             if !p.dark_mode {
                 assert!(no_dup(p.busy_ink()), "L1 busy 派生色不占槽");
             }

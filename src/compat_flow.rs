@@ -112,7 +112,6 @@ impl CompatFlow {
     }
 
     fn on_path_changed(&mut self, path: String) -> Vec<Effect> {
-        // 防抖：与上次体检路径相同 → 无动作（防逐字符起线程）。
         if self.path.as_deref() == Some(path.as_str()) {
             return Vec::new();
         }
@@ -201,7 +200,7 @@ impl CompatFlow {
 
     fn on_precache_requested(&mut self) -> Vec<Effect> {
         if self.precaching {
-            return Vec::new(); // 已在途 → 去重。
+            return Vec::new();
         }
         let Some(report) = &self.report else {
             return Vec::new();
@@ -695,7 +694,7 @@ mod tests {
         });
         assert!(find_precache(&effects).is_some());
         let (_, effects) = flow.step(Event::PrecacheRequested);
-        assert!(effects.is_empty()); // 已在途 → 去重
+        assert!(effects.is_empty());
 
         let _ = flow.step(Event::PrecacheDone {
             epoch,

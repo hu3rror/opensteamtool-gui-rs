@@ -11,8 +11,6 @@ pub enum BusyKind {
 }
 
 impl BusyKind {
-    /// 更新流程专属忙碌（检查 / 下载）：进度只落在「补丁更新检查」按钮位原位
-    /// （§26.2 / §26.5 / §34），不驱动 Hero 阶段化、不进状态栏。交互类忙碌才走 Hero 原位。
     pub fn is_update_flow(self) -> bool {
         matches!(self, BusyKind::Checking | BusyKind::Downloading)
     }

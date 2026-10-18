@@ -42,7 +42,6 @@ impl ProbeTarget {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProbeStatus {
-    /// 体检进行中（骨架态，不阻塞 UI）。
     #[allow(dead_code)]
     Checking,
     RemoteAvailable {
@@ -234,7 +233,6 @@ fn probe_one(
         // 验证缓存命中：上次已确认上游适配（哈希未变，结论仍成立）。
         ProbeStatus::RemoteAvailable { cached: true }
     } else {
-        // 均未命中：乐观假定「上游已适配 (未缓存)」，后台刷新确认后写入验证缓存。
         ProbeStatus::RemoteAvailable { cached: false }
     };
     ProbeReport {
@@ -285,7 +283,6 @@ fn probe_all_with(
         verified,
     );
     let reports = [&steamclient_pattern, &steamui_pattern, &steamclient_ipc];
-    // Fully Compatible：每项均已适配且本地缓存齐全（issue #23 §7.5）。
     let is_all_compatible = reports.iter().all(|r| {
         matches!(
             r.status,

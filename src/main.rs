@@ -46,7 +46,6 @@ fn main() -> eframe::Result {
     }
 
     let Some(guard) = singleton::acquire() else {
-        // 不允许多开：唤醒既有窗口后本实例直接退出。
         singleton::signal_activate();
         return Ok(());
     };

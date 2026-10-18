@@ -33,15 +33,12 @@ pub struct Strings {
     /// 部署状态词条：Hero 大字（spec §15 严格「已应用/未应用」，无前缀符号）。
     pub status_deployed: &'static str,
     pub status_not_deployed: &'static str,
-    /// Hero 补丁操作失败文案（spec §30 Operation Failure）。
     pub op_failed: &'static str,
-    /// Primary CTA「前往设置修复」（spec §25）。
     pub pri_fix_path: &'static str,
     /// Supporting 标题/正文（默认不显示，仅在需解释状态或 Primary 不可用时显示，spec §17）。
     pub sup_files_title: &'static str,
     pub sup_path_title: &'static str,
     pub sup_path_body: &'static str,
-    /// Health Warning 右侧去向提示（点击整行跳 Settings → Steam，spec §24.2）。
     pub health_go: &'static str,
     pub btn_apply_and_launch: &'static str,
     pub btn_launch_normal: &'static str,
@@ -57,7 +54,6 @@ pub struct Strings {
     pub btn_download_and_extract: &'static str,
     /// Update 按钮位检查中（spec §26.2 Checking，同按钮位 spinner，不进状态栏）。
     pub up_checking: &'static str,
-    /// Update 检查失败行内结论（spec §26.7）。
     pub up_check_failed: &'static str,
     pub checking: &'static str,
     pub confirm_title: &'static str,
@@ -94,7 +90,6 @@ pub struct Strings {
     pub tray_restart: &'static str,
     pub settings_title: &'static str,
     pub btn_close: &'static str,
-    /// Steam 核心兼容性（issue #23 §7.8）。
     pub compat_title: &'static str,
     pub compat_checking: &'static str,
     pub compat_status_ready: &'static str,
@@ -125,7 +120,6 @@ pub struct Strings {
     pub settings_tray_title: &'static str,
     /// Settings — 通用 页签最小化隐身勾选项（#37；与托盘菜单勾选同一事实源）。
     pub settings_tray_minimize: &'static str,
-    /// Settings — 通用 页签「主题」小节（ADR-0016）：标题 + 三态下拉选项。
     pub settings_theme_title: &'static str,
     pub settings_theme_system: &'static str,
     pub settings_theme_dark: &'static str,
@@ -146,7 +140,6 @@ pub struct Strings {
     pub settings_rerun_wizard_hint: &'static str,
     pub status_steam_running: &'static str,
     pub status_steam_stopped: &'static str,
-    /// 顶栏设置齿轮按钮的悬停提示（图标按钮，可发现性靠 tooltip）。
     pub settings_gear_tooltip: &'static str,
     pub settings_github_label: &'static str,
     pub settings_github_title: &'static str,
@@ -256,7 +249,6 @@ impl Strings {
             window_title: "OpenSteamTool 一键管理工具",
             steam_path_label: "路径",
             browse: "浏览...",
-            // 部署状态词条（spec §15）：Hero 大字。
             status_deployed: "已应用",
             status_not_deployed: "未应用",
             op_failed: "补丁应用失败",
@@ -388,7 +380,6 @@ impl Strings {
             window_title: "OpenSteamTool Manager",
             steam_path_label: "Path",
             browse: "Browse...",
-            // 部署状态词条（spec §15）：Hero 大字。
             status_deployed: "Applied",
             status_not_deployed: "Not Applied",
             op_failed: "Failed to apply patch",
@@ -654,7 +645,6 @@ mod tests {
         let zh = Strings::new(Lang::Zh);
         let en = Strings::new(Lang::En);
         for (lang, s) in [(Lang::Zh, &zh), (Lang::En, &en)] {
-            // 图标化后按钮文案不得再带 Unicode 符号（spec §36 由程序化图标代替 ▶↻⏏⚙⚠）。
             for t in [
                 s.btn_exit_and_uninstall,
                 s.btn_uninstall_and_restart,

@@ -19,7 +19,6 @@ $ErrorActionPreference = "Stop"
 $ver = $Version.TrimStart('v')
 $url = "https://github.com/hu3rror/opensteamtool-gui-rs/releases/download/v$ver/opensteamtool-manager-v$ver.zip"
 
-# 1. SHA256 of the zip: prefer the local artifact (identical to what the release uploaded).
 if ($ZipPath -and (Test-Path $ZipPath)) {
     $hash = (Get-FileHash $ZipPath -Algorithm SHA256).Hash.ToLowerInvariant()
 } else {
@@ -29,16 +28,12 @@ if ($ZipPath -and (Test-Path $ZipPath)) {
     finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
 }
 
-# 2. Idempotent short-circuit: nothing to do when version and hash are both unchanged.
 $manifest = Get-Content $ManifestPath -Raw | ConvertFrom-Json
 if ($manifest.version -eq $ver -and $manifest.hash -eq $hash) {
     Write-Host "unchanged (v$ver / $hash)"
     exit 0
 }
 
-# 3. Bump version/url/hash and write back (BOM-less UTF-8, trailing newline).
-# ConvertTo-Json indents 2 spaces per level; the manifest uses 4 — double leading
-# whitespace so the first bump does not reindent the whole file.
 $manifest.version = $ver
 $manifest.url = $url
 $manifest.hash = $hash

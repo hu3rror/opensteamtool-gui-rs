@@ -271,7 +271,6 @@ impl AppCore {
                 if self.gate.is_busy() {
                     return Vec::new();
                 }
-                // #36：卸载类动作在 Steam 运行中进确认流；「应用补丁并启动」直接放行（kill_first 派生）。
                 if action.asks_to_close_steam() && self.steam_running {
                     self.confirm = Some(action);
                     return Vec::new();
@@ -287,7 +286,6 @@ impl AppCore {
                 if self.gate.is_busy() {
                     return Vec::new();
                 }
-                // 免确认路径：不因点击瞬间 Steam 已启动误弹确认框（§20.3）。
                 return vec![AppEffect::RunPlan {
                     action,
                     kill_first: false,
@@ -336,7 +334,6 @@ impl AppCore {
                 self.confirm = None; // 无论门禁是否放行都收掉确认弹窗，避免悬挂。
                 let first_phase = ops.first().expect("plan never returns empty").phase();
                 if !self.gate.start(first_phase) {
-                    // 竞态拒绝（确认框悬挂期 Modal 阻断交互，Release 下理论上到不了这里）。
                     return Vec::new();
                 }
                 return vec![AppEffect::SpawnWorkflow {
@@ -362,7 +359,6 @@ impl AppCore {
                 }
                 self.pending_auto_hide = false;
             }
-            // auto-tray 边沿决策（表语义）：
             AppEvent::SteamStarted => {
                 self.steam_running = true;
                 if self.window_visible {
@@ -418,7 +414,6 @@ impl AppCore {
     /// 渲染消费只读快照（每帧属主拷贝；更新派生当场计算，零 IO）。
     pub fn snapshot(&self) -> Snapshot {
         let derived = self.update_flow.derived(self.facts.known_local_version());
-        // 体检快照：域状态进快照，渲染零 IO（strings 映射留壳）。
         let compat_display = self.flow.display();
         Snapshot {
             facts: self.facts.clone(),
@@ -469,8 +464,6 @@ mod tests {
     fn core() -> AppCore {
         AppCore::new(facts(Some("1.4.7")), false, "Z:/fake/steam/nonexistent")
     }
-
-    // compat 域事件（ADR-0019 主盘）
 
     #[test]
     fn compat_path_changed_emits_flat_probe_and_checking_snapshot() {
@@ -562,7 +555,6 @@ mod tests {
         c.step(AppEvent::CompatPathChanged(
             "Z:/fake/steam/nonexistent".to_string(),
         ));
-        // 路径再次变更：代数推进到 2，旧代数在途结果全部作废。
         c.step(AppEvent::CompatPathChanged("Z:/other/steam".to_string()));
         assert!(
             c.step(AppEvent::CompatProbeDone {
@@ -608,14 +600,12 @@ mod tests {
                 true,
             ),
         });
-        // 效果序契约：先后台网络刷新，再自动预热（compat_flow 既有语义）。
         assert_eq!(effects.len(), 2);
         assert!(matches!(
             &effects[0],
             AppEffect::CompatRefresh { epoch: Epoch(1), path }
             if path == "Z:/fake/steam/nonexistent"
         ));
-        // 三者均为 RemoteAvailable 且签名未缓存（signature_cached=false）→ 全部入预热目标。
         assert!(matches!(
             &effects[1],
             AppEffect::CompatPrecache {
@@ -675,7 +665,6 @@ mod tests {
                 true,
             ),
         });
-        // 预热成功后同一代数复检（刷新预算已消耗 → 不再产网络刷新）。
         assert!(
             matches!(
                 c.step(AppEvent::CompatPrecacheDone {
@@ -695,10 +684,8 @@ mod tests {
     #[test]
     fn compat_precache_requested_dedupes_and_requires_report() {
         use crate::compat::ProbeStatus::*;
-        // 无报告：手动预热无可预热目标 → 无动作。
         let mut c = core();
         assert!(c.step(AppEvent::CompatPrecacheRequested).is_empty());
-        // 报告 Online 且自动预热已在途：手动入口被去重。
         c.step(AppEvent::CompatPathChanged(
             "Z:/fake/steam/nonexistent".to_string(),
         ));
@@ -736,7 +723,6 @@ mod tests {
             ),
         });
         assert!(c.snapshot().compat.precaching, "自动预热在途");
-        // 自动预热失败：静默（徽章保持 Online、错误不进快照）。
         assert!(
             c.step(AppEvent::CompatPrecacheDone {
                 epoch: Epoch(1),
@@ -746,7 +732,6 @@ mod tests {
         );
         assert!(!c.snapshot().compat.precaching);
         assert!(c.snapshot().compat.precache_error.is_none(), "自动失败静默");
-        // 同一报告下手动入口重新触发：失败就地呈现。
         assert!(matches!(
             c.step(AppEvent::CompatPrecacheRequested).as_slice(),
             [AppEffect::CompatPrecache { .. }]
@@ -770,7 +755,6 @@ mod tests {
     #[test]
     fn path_commit_feed_chain_is_flat_at_the_seam() {
         let mut c = core();
-        // 提交路径：编排效果序固定（先文件事实再体检重探，ADR-0020）。
         let effects = c.step(AppEvent::CommitPath("Z:/fake/steam/committed".into()));
         assert_eq!(
             effects,
@@ -779,8 +763,6 @@ mod tests {
                 AppEffect::FeedCompatPath("Z:/fake/steam/committed".to_string()),
             ]
         );
-        // P5 全链（队列机制在壳执行器）：facts 回喂空效果（FactsRefreshed 无效果）；
-        // 体检回喂产快速探针（首次进入 → 代数 1）。
         assert!(
             c.step(AppEvent::FactsRefreshed(facts(Some("1.4.7"))))
                 .is_empty()
@@ -799,7 +781,6 @@ mod tests {
     #[test]
     fn compat_summary_covers_pending_missing_network_at_seam() {
         use crate::compat::ProbeStatus::*;
-        // 六态在 seam 全覆盖：Checking/Ready/Online 已有专测，这里补缺的三个汇总态。
         let cases: [([crate::compat::ProbeStatus; 3], bool, CompatSummary); 3] = [
             (
                 [
@@ -842,8 +823,6 @@ mod tests {
         }
     }
 
-    // 窗口显隐 Steam 联动决策（auto-tray）
-
     #[test]
     fn steam_started_hides_visible_window() {
         let mut c = core();
@@ -855,8 +834,8 @@ mod tests {
     #[test]
     fn steam_stopped_restores_hidden_window() {
         let mut c = core();
-        c.step(AppEvent::SteamStarted); // 隐窗效果已产出
-        c.step(AppEvent::WindowVisibleChanged(false)); // 壳执行后回喂镜像
+        c.step(AppEvent::SteamStarted);
+        c.step(AppEvent::WindowVisibleChanged(false));
         let effects = c.step(AppEvent::SteamStopped);
         assert_eq!(effects, vec![AppEffect::SetWindowVisible(true)]);
         assert!(!c.snapshot().steam_running);
@@ -882,14 +861,11 @@ mod tests {
     #[test]
     fn window_visible_change_is_state_only_and_manual_show_not_retracted() {
         let mut c = core();
-        // 镜像同步事件：只存状态，不产效果。
         assert!(c.step(AppEvent::WindowVisibleChanged(false)).is_empty());
         assert!(c.step(AppEvent::WindowVisibleChanged(true)).is_empty());
-        // auto-tray 首次 Started 隐窗，随后用户从托盘手动 Show：
         c.step(AppEvent::SteamStarted);
         c.step(AppEvent::WindowVisibleChanged(false));
-        c.step(AppEvent::WindowVisibleChanged(true)); // 用户显式 Show
-        // 没有新边沿：运行中状态回喂（如工作流 rescan）不得把显式 Show 收回。
+        c.step(AppEvent::WindowVisibleChanged(true));
         let effects = c.step(AppEvent::SteamRunningChanged(true));
         assert!(effects.is_empty(), "显式 Show 后不得被状态回喂收回");
     }
@@ -903,7 +879,6 @@ mod tests {
         });
         let effects = c.step(AppEvent::SteamRunningChanged(true));
         assert_eq!(effects, vec![AppEffect::SetWindowVisible(false)]);
-        // 同一待决标志只隐一次。
         assert!(c.step(AppEvent::SteamRunningChanged(true)).is_empty());
     }
 
@@ -914,7 +889,6 @@ mod tests {
             action: Action::UninstallAndRestart,
             result: Ok(()),
         });
-        // 工作流后 Steam 已退出（如卸载）：rescan 回喂 false，不含隐窗。
         assert!(c.step(AppEvent::SteamRunningChanged(false)).is_empty());
     }
 
@@ -927,7 +901,6 @@ mod tests {
     #[test]
     fn workdone_rescan_no_hide_when_window_already_hidden() {
         let mut c = core();
-        // 窗口早已隐藏（如用户手动）：职责最小化，不重复产效果。
         c.step(AppEvent::WindowVisibleChanged(false));
         c.step(AppEvent::WorkflowDone {
             action: Action::Launch,
@@ -937,7 +910,6 @@ mod tests {
     }
 
     fn busy_gate_start(c: &mut AppCore, kind: BusyKind) {
-        // 通过真实事件进入忙碌（Check → Checking），避免测试依赖私有字段。
         c.step(AppEvent::Check);
         if kind != BusyKind::Checking {
             c.step(AppEvent::Phase(kind));
@@ -1186,7 +1158,6 @@ mod tests {
     #[test]
     fn plan_ok_starts_gate_and_spawns_workflow() {
         let mut c = core();
-        // 先进确认流，验证 PlanOk 落下弹窗。
         c.step(AppEvent::SteamRunningChanged(true));
         c.step(AppEvent::ActionRequested(Action::ExitAndUninstall));
         let effects = c.step(AppEvent::PlanOk {
@@ -1257,8 +1228,6 @@ mod tests {
 
     #[test]
     fn check_refreshes_facts_first_so_missing_dlls_never_report_up_to_date() {
-        // 回归（会话内删 dlls/ 后点检查更新）：Check 先发 RefreshFacts——即便磁盘事实
-        // 刷新晚于检查完成，也由 FactsRefreshed 喂回后派生（ADR-0011/#26：文件缺失不可落「已是最新」）。
         let mut c = AppCore::new(
             DeploymentFacts {
                 status: crate::dll::DeployStatus::Deployed,
@@ -1273,9 +1242,7 @@ mod tests {
             effects,
             vec![AppEffect::RefreshFacts, AppEffect::SpawnUpdateCheck]
         );
-        // 检查发起后、磁盘探测尚未回喂时：仍以旧快照派生（已是最新）——中间态允许；
         c.step(AppEvent::UpdateChecked(Ok(online("1.4.8"))));
-        // 磁盘探测回喂（dlls 已删除）→ 派生必须翻转为 NewVersion + 可下载。
         c.step(AppEvent::FactsRefreshed(DeploymentFacts {
             status: crate::dll::DeployStatus::Deployed,
             local_version: None,
@@ -1317,7 +1284,6 @@ mod tests {
         let effects = c.step(AppEvent::CommitPath(
             "  Z:/fake/steam/committed  ".to_string(),
         ));
-        // 效果顺序契约：先刷文件事实再重探体检（ADR-0020）。
         assert_eq!(
             effects,
             vec![
@@ -1331,7 +1297,6 @@ mod tests {
     #[test]
     fn commit_path_only_mutates_working_path() {
         let mut c = core();
-        // 其它域状态不受提交影响：门禁/通知/确认与更新派生保持原样。
         c.step(AppEvent::Check);
         c.step(AppEvent::CommitPath("Z:/fake/steam/committed".to_string()));
         let s = c.snapshot();
@@ -1343,15 +1308,12 @@ mod tests {
     fn later_non_path_event_keeps_committed_path() {
         let mut c = core();
         c.step(AppEvent::CommitPath("Z:/fake/steam/committed".to_string()));
-        // 提交后的普通事件（如事实刷新）不得抹掉已提交的工作路径。
         c.step(AppEvent::FactsRefreshed(facts(Some("1.4.7"))));
         assert_eq!(c.snapshot().steam_path, "Z:/fake/steam/committed");
     }
 
     #[test]
     fn trim_only_commit_stores_trimmed_value() {
-        // 与当前值仅差首尾空白的提交：仍触发编排（壳侧 submit 已按 trim 后相等判 Unchanged 过滤，
-        // 此处防御核心契约——CommitPath 到达即无条件产效果）。
         let mut c = AppCore::new(facts(Some("1.4.7")), false, "Z:/fake/steam/nonexistent");
         let effects = c.step(AppEvent::CommitPath(
             "  Z:/fake/steam/nonexistent  ".to_string(),

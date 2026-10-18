@@ -46,7 +46,6 @@ pub fn launch_steam(steam: &SteamState, steam_dir: &Path) -> Result<(), String> 
             .current_dir(steam_dir)
             .spawn()
             .map_err(|e| format!("spawn steam.exe: {e}"))?;
-        // spawn 成功不算成功：旧实例残留可能让新实例随即退出，等待窗口后验证存活。
         std::thread::sleep(LAUNCH_VERIFY_WINDOW);
         if steam.alive() {
             return Ok(());
@@ -117,7 +116,7 @@ mod tests {
             std::process::id(),
             seq
         ));
-        let _ = std::fs::remove_dir_all(&dir); // 清理上次失败运行的残留
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let fake = dir.join(exe_name);
         std::fs::copy(r"C:\Windows\System32\PING.EXE", &fake).unwrap();
@@ -150,8 +149,6 @@ mod tests {
         let steam = SteamState::new();
         assert!(steam.alive(), "前置：系统内确有 steam.exe（在 dir_b）");
         assert!(steam.group_running(&dir_a), "前置：dir_a 有孤儿进程在跑");
-        // spawn 后 exe 路径可能瞬时不可解析（sysinfo 快照）：steam_exe_running 不做名字回退，
-        // 先轮询直到 dir_b 的 steam.exe 本体可被路径识别，再做跨目录判定。
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while !steam.steam_exe_running(&dir_b) {
             assert!(
