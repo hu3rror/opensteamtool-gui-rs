@@ -45,10 +45,6 @@ Rules for code written in this repository. Agent behavior rules live in `AGENTS.
 
 The policy above is the baseline. The rules below make it concrete for this repository: what passes review, and what gets deleted. They govern comments you add or touch; they do not demand a sweeping rewrite of existing comments — do that separately and deliberately, if at all.
 
-### The one test
-
-Delete the comment in your head and re-read the code. If a reader would still write the correct code, the comment is noise. A comment must carry something the code cannot: a precondition, an invariant, a side effect, or the reason a plausible-looking simplification would be wrong.
-
 ### Allowed
 
 - A doc comment for an item whose contract is not visible in its name and signature: panics, error and degradation behavior.
@@ -56,7 +52,6 @@ Delete the comment in your head and re-read the code. If a reader would still wr
 
 ### Not allowed
 
-- `TODO` / `FIXME` with no owner and issue. New ones are `TODO(#NN): …`; never add a bare one.
 - A doc comment on every field, variant, or constant by reflex. Document the type once, then only the members whose meaning the name does not carry.
 
 ### Doc comments
