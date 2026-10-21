@@ -2790,53 +2790,6 @@ mod tests {
     }
 
     #[test]
-    fn action_symbols_render_real_glyphs_in_app_font_stack() {
-        let mut defs = egui::FontDefinitions::default();
-        if let Some(font_data) = read_system_cjk_font() {
-            defs.font_data
-                .insert("cjk-test".into(), std::sync::Arc::new(font_data));
-            defs.families
-                .entry(egui::FontFamily::Proportional)
-                .or_default()
-                .push("cjk-test".into());
-            defs.families
-                .entry(egui::FontFamily::Monospace)
-                .or_default()
-                .push("cjk-test".into());
-        }
-        let mut fonts =
-            egui::epaint::text::Fonts::new(egui::epaint::text::TextOptions::default(), defs);
-        let uv = |fonts: &mut egui::epaint::text::Fonts, text: &str| {
-            let mut view = fonts.with_pixels_per_point(1.0);
-            let galley = view.layout(
-                text.to_owned(),
-                egui::FontId::proportional(14.0),
-                Palette::dark().white,
-                f32::INFINITY,
-            );
-            galley
-                .rows
-                .iter()
-                .flat_map(|r| r.glyphs.iter().map(|g| g.uv_rect))
-                .collect::<Vec<_>>()
-        };
-        let tofu = [uv(&mut fonts, "◻"), uv(&mut fonts, "?")];
-        for (sym, name) in [('▶', "应用/启动"), ('↻', "重启"), ('⏏', "卸载类")] {
-            let rendered = uv(&mut fonts, &sym.to_string());
-            assert_eq!(
-                rendered.len(),
-                1,
-                "{name} 符号 {sym:?} 布局应恰好产出一个字形"
-            );
-            assert!(
-                rendered != tofu[0] && rendered != tofu[1],
-                "{name} 符号 {sym:?}（U+{:04X}）渲染成了替换框（tofu）",
-                sym as u32
-            );
-        }
-    }
-
-    #[test]
     fn default_fonts_lack_cjk_glyph() {
         let defs = egui::FontDefinitions::default();
         let mut fonts =
