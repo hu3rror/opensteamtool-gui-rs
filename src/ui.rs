@@ -56,11 +56,9 @@ const R_CTA: u8 = 10;
 const R_ROW: u8 = 10;
 const R_SMALL: u8 = 7;
 
-// 图标+标签按钮：统一布局入口 + 层级几何表（父票 #54 决策 1–4；#56 先迁移 Patch Update Check）。
+// 图标+标签按钮：统一布局入口 + 层级几何表（父票 #54 决策 1–4，几何五行为定稿）。
 
-/// 图标+标签按钮的层级（几何表一行；数值与出处见父票 #54 决策 2）。
-/// 除 `PatchUpdateCheck` 外各变体由 #57 迁移对应按钮表面时启用；禁删（几何表五行为父票 #54 决策 2 定稿）。
-#[allow(dead_code)]
+/// 图标+标签按钮的层级（几何表一行；数值与出处见父票 #54 决策 2；禁删，五行为定稿）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum ButtonTier {
     PrimaryCta,
@@ -122,9 +120,31 @@ fn tier_geometry(tier: ButtonTier) -> TierGeometry {
         },
     }
 }
+/// 按钮字形（几何表「Icon」列）：程序化图标（ADR-0016 图标族）或品牌栅格标记（双态图片，不属图标族；tint 约定见 ButtonChrome）。
+#[derive(Clone, Copy)]
+enum ButtonGlyph<'a> {
+    Icon(IconKind),
+    Image(&'a egui::TextureHandle),
+}
+
+/// 入口点 chrome 闭包的返回值：文字前景色 + 字形着色。
+/// 程序化图标与文字共用同一前景槽；栅格标记（Project Home）tint 恒为白——色已按主题烤进纹理
+/// （load_github_mark / ADR-0016 图片双态），白 tint 为恒等乘算，不取文字前景。
+#[derive(Clone, Copy)]
+struct ButtonChrome {
+    fg: egui::Color32,
+    icon_tint: egui::Color32,
+}
+
+impl ButtonChrome {
+    /// 程序化图标按钮：字形与文字同色。
+    fn icon(fg: egui::Color32) -> Self {
+        Self { fg, icon_tint: fg }
+    }
+}
 
 /// 图标+标签按钮统一布局入口（父票 #54 决策 1）：按层级几何分配按钮矩形、放置图标与标签；
-/// chrome（fill/border/hover/disabled 色）由调用方闭包绘制并返回前景色（图标与文字共用）。
+/// chrome（fill/border/hover/disabled 色）由调用方闭包绘制，并返回文字前景色与字形着色（ButtonChrome）。
 /// 宽度由调用方决定（整行 / 文字宽），高度与放置数字一律来自层级几何表。
 /// 9 个参数均为互不相同的单一值，无自然归并（clippy::too_many_arguments；入口点即完整契约）。
 #[allow(clippy::too_many_arguments)]
@@ -132,12 +152,12 @@ fn icon_label_button(
     ui: &mut egui::Ui,
     tier: ButtonTier,
     label: &str,
-    icon: IconKind,
+    glyph: ButtonGlyph<'_>,
     font: &egui::FontId,
     enabled: bool,
     phase: f32,
     width: f32,
-    chrome: impl FnOnce(&egui::Painter, egui::Rect, bool) -> egui::Color32,
+    chrome: impl FnOnce(&egui::Painter, egui::Rect, bool) -> ButtonChrome,
 ) -> egui::Response {
     let g = tier_geometry(tier);
     let (rect, response) = ui.allocate_exact_size(
@@ -150,12 +170,12 @@ fn icon_label_button(
     );
     if ui.is_rect_visible(rect) {
         let hovered = enabled && response.hovered();
-        let fg = chrome(ui.painter(), rect, hovered);
+        let chrome = chrome(ui.painter(), rect, hovered);
         let (icon_centre, label_x) = match (g.inset, g.label_x) {
             (Some(inset), Some(label_x)) => (inset + g.icon_size / 2.0, label_x),
             (None, None) => {
                 // 居中组（Primary CTA / Project Home）：图标+标签成组居中，不换行（spec §18.1）。
-                let tw = text_width(ui, label, font, fg);
+                let tw = text_width(ui, label, font, chrome.fg);
                 let group_w = g.icon_size + g.gap + tw;
                 let start = (rect.width() - group_w) / 2.0;
                 (start + g.icon_size / 2.0, start + g.icon_size + g.gap)
@@ -164,20 +184,33 @@ fn icon_label_button(
                 "层级表内固定组 Inset 与 Label x 同为 Some、居中组同为 None；由 tier_geometry 测试钉死"
             ),
         };
-        main_page::paint_icon(
-            ui.painter(),
-            icon,
-            egui::pos2(rect.left() + icon_centre, rect.center().y),
-            fg,
-            g.icon_size,
-            phase,
-        );
+        match glyph {
+            ButtonGlyph::Icon(kind) => main_page::paint_icon(
+                ui.painter(),
+                kind,
+                egui::pos2(rect.left() + icon_centre, rect.center().y),
+                chrome.icon_tint,
+                g.icon_size,
+                phase,
+            ),
+            ButtonGlyph::Image(tex) => {
+                ui.painter().image(
+                    tex.id(),
+                    egui::Rect::from_center_size(
+                        egui::pos2(rect.left() + icon_centre, rect.center().y),
+                        egui::Vec2::splat(g.icon_size),
+                    ),
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    chrome.icon_tint,
+                );
+            }
+        }
         ui.painter().text(
             egui::pos2(rect.left() + label_x, rect.center().y),
             egui::Align2::LEFT_CENTER,
             label,
             font.clone(),
-            fg,
+            chrome.fg,
         );
     }
     response
@@ -290,7 +323,7 @@ fn styled_button(
     };
     let (rect, response) = ui.allocate_exact_size(size, sense);
     if ui.is_rect_visible(rect) {
-        paint_button_chrome(ui, rect, enabled && response.hovered(), button);
+        paint_button_chrome(ui.painter(), rect, enabled && response.hovered(), button);
         let color = if enabled { button.fg } else { palette.weak };
         ui.painter().text(
             rect.center(),
@@ -303,12 +336,17 @@ fn styled_button(
     response
 }
 
-fn paint_button_chrome(ui: &mut egui::Ui, rect: egui::Rect, hovered: bool, palette: ButtonPalette) {
+fn paint_button_chrome(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    hovered: bool,
+    palette: ButtonPalette,
+) {
     let fill = if hovered { palette.hover } else { palette.bg };
     let stroke = palette
         .border
         .map_or(egui::Stroke::NONE, |c| egui::Stroke::new(1.0, c));
-    ui.painter().rect(
+    painter.rect(
         rect,
         egui::CornerRadius::same(8),
         fill,
@@ -323,7 +361,7 @@ fn gear_button(ui: &mut egui::Ui, tooltip: &str, palette: Palette) -> egui::Resp
     let response = response.on_hover_text(tooltip);
     if ui.is_rect_visible(rect) {
         let hovered = response.hovered();
-        paint_button_chrome(ui, rect, hovered, button);
+        paint_button_chrome(ui.painter(), rect, hovered, button);
         let color = if hovered { palette.accent } else { button.fg };
         main_page::paint_icon(
             ui.painter(),
@@ -346,37 +384,39 @@ fn github_link_button(
 ) -> egui::Response {
     let button = ButtonStyle::Neutral.palette(palette);
     let font_id = egui::FontId::proportional(13.0);
+    // 居中组两侧留白共 28（14×2；几何表 Project Home 行，父票 #54 决策 2）。
     let text_w = text_width(ui, label, &font_id, button.fg);
-    let icon_w = if mark.is_some() { 16.0 + 8.0 } else { 0.0 };
-    let size = egui::vec2((text_w + 28.0 + icon_w).max(200.0), 32.0);
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    let response = response.on_hover_text(tooltip);
-    if ui.is_rect_visible(rect) {
-        let hovered = response.hovered();
-        paint_button_chrome(ui, rect, hovered, button);
-        let group_w = icon_w + text_w;
-        let left = rect.left() + (rect.width() - group_w) / 2.0;
-        if let Some(tex) = mark {
-            let icon_rect = egui::Rect::from_min_size(
-                egui::pos2(left, rect.center().y - 8.0),
-                egui::vec2(16.0, 16.0),
-            );
-            ui.painter().image(
-                tex.id(),
-                icon_rect,
-                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                palette.white,
-            );
-        }
-        ui.painter().text(
-            egui::pos2(left + icon_w, rect.center().y),
-            egui::Align2::LEFT_CENTER,
+    let width = (text_w + 28.0 + 16.0 + 10.0).max(200.0);
+    let Some(mark) = mark else {
+        // 内嵌栅格解码失败（include_bytes 编译期资源，不可达）→ 退化文本按钮，不参与几何表。
+        return styled_button(
+            ui,
             label,
-            font_id,
-            button.fg,
-        );
-    }
-    response
+            ButtonStyle::Neutral,
+            egui::vec2((text_w + 28.0).max(200.0), 32.0),
+            true,
+            palette,
+        )
+        .on_hover_text(tooltip);
+    };
+    icon_label_button(
+        ui,
+        ButtonTier::ProjectHome,
+        label,
+        ButtonGlyph::Image(mark),
+        &font_id,
+        true,
+        0.0,
+        width,
+        |painter, rect, hovered| {
+            paint_button_chrome(painter, rect, hovered, button);
+            ButtonChrome {
+                fg: button.fg,
+                icon_tint: palette.white,
+            }
+        },
+    )
+    .on_hover_text(tooltip)
 }
 
 const GITHUB_MARK_PNG: &[u8] = include_bytes!("../assets/github-mark.png");
@@ -1891,37 +1931,31 @@ impl App {
         let Some(text) = health_warning(&self.strings, summary) else {
             return;
         };
-        let (rect, response) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), 38.0), egui::Sense::click());
-        if ui.is_rect_visible(rect) {
-            let painter = ui.painter();
-            let bg = self.palette.health_warning_bg();
-            let border_color = self.palette.health_warning_border();
-            let fg = self.palette.warn_fg();
-            painter.rect(
-                rect,
-                egui::CornerRadius::same(R_ROW),
-                bg,
-                egui::Stroke::new(1.0, border_color),
-                egui::StrokeKind::Inside,
-            );
-            main_page::paint_icon(
-                painter,
-                IconKind::Warning,
-                egui::pos2(rect.left() + 16.0, rect.center().y),
-                fg,
-                15.0,
-                0.0,
-            );
-            painter.text(
-                egui::pos2(rect.left() + 38.0, rect.center().y),
-                egui::Align2::LEFT_CENTER,
-                text,
-                egui::FontId::proportional(13.0),
-                fg,
-            );
-            painter.text(
-                egui::pos2(rect.right() - 18.0, rect.center().y),
+        let font = egui::FontId::proportional(13.0);
+        let response = icon_label_button(
+            ui,
+            ButtonTier::HealthWarningRow,
+            text,
+            ButtonGlyph::Icon(IconKind::Warning),
+            &font,
+            true,
+            0.0,
+            ui.available_width(),
+            |painter, rect, _hovered| {
+                painter.rect(
+                    rect,
+                    egui::CornerRadius::same(R_ROW),
+                    self.palette.health_warning_bg(),
+                    egui::Stroke::new(1.0, self.palette.health_warning_border()),
+                    egui::StrokeKind::Inside,
+                );
+                ButtonChrome::icon(self.palette.warn_fg())
+            },
+        );
+        // 「前往检查」右对齐提示：行内第二文本，非几何表成员（相对行右缘，不参与图标+标签放置）。
+        if ui.is_rect_visible(response.rect) {
+            ui.painter().text(
+                egui::pos2(response.rect.right() - 18.0, response.rect.center().y),
                 egui::Align2::RIGHT_CENTER,
                 self.strings.health_go,
                 egui::FontId::proportional(12.5),
@@ -2330,58 +2364,39 @@ impl App {
             }
         };
         let width = 340.0_f32.min(ui.available_width());
-        let size = egui::vec2(width, 44.0);
-        let sense = if enabled {
-            egui::Sense::click()
-        } else {
-            egui::Sense::hover()
-        };
-        let (rect, response) = ui.allocate_exact_size(size, sense);
-        if ui.is_rect_visible(rect) {
-            let hovered = enabled && response.hovered();
-            let fill = if !enabled {
-                self.palette.entry
-            } else if hovered {
-                self.palette.accent_hover
-            } else {
-                self.palette.accent
-            };
-            let fg = if enabled {
-                self.palette.white
-            } else {
-                self.palette.weak
-            };
-            let painter = ui.painter();
-            painter.rect(
-                rect,
-                egui::CornerRadius::same(R_CTA),
-                fill,
-                egui::Stroke::NONE,
-                egui::StrokeKind::Inside,
-            );
-            // Icon + Label 整体居中（spec §18.1：不换行，不为英文缩字）。
-            let font = egui::FontId::proportional(15.0);
-            let tw = text_width(ui, &label, &font, fg);
-            let icon_w = 19.0;
-            let gap = 8.0;
-            let group_w = tw + icon_w + gap;
-            let left = rect.center().x - group_w / 2.0;
-            main_page::paint_icon(
-                painter,
-                icon,
-                egui::pos2(left + icon_w / 2.0, rect.center().y),
-                fg,
-                15.0,
-                phase,
-            );
-            painter.text(
-                egui::pos2(left + icon_w + gap, rect.center().y),
-                egui::Align2::LEFT_CENTER,
-                label,
-                font,
-                fg,
-            );
-        }
+        let font = egui::FontId::proportional(15.0);
+        let response = icon_label_button(
+            ui,
+            ButtonTier::PrimaryCta,
+            &label,
+            ButtonGlyph::Icon(icon),
+            &font,
+            enabled,
+            phase,
+            width,
+            |painter, rect, hovered| {
+                // CTA 保留实心 accent 填充（chrome 差异经闭包透传；几何一律来自层级表）。
+                let fill = if !enabled {
+                    self.palette.entry
+                } else if hovered {
+                    self.palette.accent_hover
+                } else {
+                    self.palette.accent
+                };
+                painter.rect(
+                    rect,
+                    egui::CornerRadius::same(R_CTA),
+                    fill,
+                    egui::Stroke::NONE,
+                    egui::StrokeKind::Inside,
+                );
+                ButtonChrome::icon(if enabled {
+                    self.palette.white
+                } else {
+                    self.palette.weak
+                })
+            },
+        );
         if response.clicked() && enabled {
             match vm.primary.kind {
                 PrimaryKind::Action(PrimaryAction::ApplyAndLaunch) => {
@@ -2441,7 +2456,7 @@ impl App {
                 ui,
                 ButtonTier::PatchUpdateCheck,
                 label,
-                icon,
+                ButtonGlyph::Icon(icon),
                 &font,
                 enabled,
                 phase,
@@ -2456,13 +2471,13 @@ impl App {
                             egui::StrokeKind::Inside,
                         );
                     }
-                    if !enabled {
+                    ButtonChrome::icon(if !enabled {
                         self.palette.weak
                     } else if hovered {
                         self.palette.ink
                     } else {
                         self.palette.sub
-                    }
+                    })
                 },
             );
             if response.clicked() && enabled {
@@ -2541,61 +2556,48 @@ impl App {
             } else {
                 self.palette.sub
             };
-            let size = egui::vec2(ui.available_width().max(0.0), 40.0);
-            let (rect, response) = ui.allocate_exact_size(
-                size,
-                if row.enabled {
-                    egui::Sense::click()
-                } else {
-                    egui::Sense::hover()
+            let font = egui::FontId::proportional(13.5);
+            let width = ui.available_width().max(0.0);
+            let response = icon_label_button(
+                ui,
+                ButtonTier::ActionRow,
+                label,
+                ButtonGlyph::Icon(icon),
+                &font,
+                row.enabled,
+                0.0,
+                width,
+                |painter, rect, hovered| {
+                    // 行间极轻分隔线（spec §23 不建完整 Card）。
+                    if i > 0 {
+                        let line_color =
+                            theme::blend(self.palette.border, self.palette.panel, 0.55);
+                        painter.line_segment(
+                            [
+                                egui::pos2(rect.left() + 12.0, rect.top()),
+                                egui::pos2(rect.right() - 12.0, rect.top()),
+                            ],
+                            egui::Stroke::new(1.0, line_color),
+                        );
+                    }
+                    if hovered {
+                        painter.rect(
+                            rect,
+                            egui::CornerRadius::same(R_ROW),
+                            self.palette.entry,
+                            egui::Stroke::NONE,
+                            egui::StrokeKind::Inside,
+                        );
+                    }
+                    ButtonChrome::icon(if !row.enabled {
+                        self.palette.weak
+                    } else if hovered {
+                        self.palette.ink
+                    } else {
+                        base_fg
+                    })
                 },
             );
-            if ui.is_rect_visible(rect) {
-                let painter = ui.painter();
-                // 行间极轻分隔线（spec §23 不建完整 Card）。
-                if i > 0 {
-                    let line_color = theme::blend(self.palette.border, self.palette.panel, 0.55);
-                    painter.line_segment(
-                        [
-                            egui::pos2(rect.left() + 12.0, rect.top()),
-                            egui::pos2(rect.right() - 12.0, rect.top()),
-                        ],
-                        egui::Stroke::new(1.0, line_color),
-                    );
-                }
-                let hovered = row.enabled && response.hovered();
-                if hovered {
-                    painter.rect(
-                        rect,
-                        egui::CornerRadius::same(R_ROW),
-                        self.palette.entry,
-                        egui::Stroke::NONE,
-                        egui::StrokeKind::Inside,
-                    );
-                }
-                let fg = if !row.enabled {
-                    self.palette.weak
-                } else if hovered {
-                    self.palette.ink
-                } else {
-                    base_fg
-                };
-                main_page::paint_icon(
-                    painter,
-                    icon,
-                    egui::pos2(rect.left() + 14.0, rect.center().y),
-                    fg,
-                    15.0,
-                    0.0,
-                );
-                painter.text(
-                    egui::pos2(rect.left() + 38.0, rect.center().y),
-                    egui::Align2::LEFT_CENTER,
-                    label,
-                    egui::FontId::proportional(13.5),
-                    fg,
-                );
-            }
             if response.clicked() && row.enabled {
                 match row.action {
                     // 未运行时「卸载补丁」：退出无进程可退 → no-op，等效纯卸载（workflow::plan 语义）；
@@ -3101,7 +3103,9 @@ mod tests {
                 let font = egui::FontId::proportional(15.0);
                 let s = Strings::new(Lang::En);
                 let text = s.btn_apply_and_launch;
-                w = text_width(ui, text, &font, Palette::dark().white) + 19.0 + 8.0;
+                // 居中组宽 = 图标 + gap + 文案（PrimaryCta 行，几何表）。
+                let g = tier_geometry(ButtonTier::PrimaryCta);
+                w = text_width(ui, text, &font, Palette::dark().white) + g.icon_size + g.gap;
             });
         });
         full.textures_delta.clear();
