@@ -20,8 +20,8 @@ use crate::config::{self, Config, Language, ThemePreference};
 use crate::dll::{self, DeployStatus, DeploymentFacts};
 use crate::i18n::{Lang, Strings};
 use crate::main_page::{
-    self, IconKind, MainPageVm, PrimaryAction, PrimaryKind, SecondaryAction, UpdateConclusion,
-    UpdateKind,
+    self, ICON_COMPACT, ICON_STANDARD, IconKind, MainPageVm, PrimaryAction, PrimaryKind,
+    SecondaryAction, UpdateConclusion, UpdateKind,
 };
 use crate::process::{self, MonitorUpdate, SteamEvent, SteamMonitor, SteamMonitorHandle};
 use crate::singleton::Singleton;
@@ -55,6 +55,133 @@ const R_HERO: u8 = 18;
 const R_CTA: u8 = 10;
 const R_ROW: u8 = 10;
 const R_SMALL: u8 = 7;
+
+// 图标+标签按钮：统一布局入口 + 层级几何表（父票 #54 决策 1–4；#56 先迁移 Patch Update Check）。
+
+/// 图标+标签按钮的层级（几何表一行；数值与出处见父票 #54 决策 2）。
+/// 除 `PatchUpdateCheck` 外各变体由 #57 迁移对应按钮表面时启用；禁删（几何表五行为父票 #54 决策 2 定稿）。
+#[allow(dead_code)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ButtonTier {
+    PrimaryCta,
+    /// 各状态图标统一 14 是刻意偏离原型（原型下载态 15、检查/进度态 14；理由见执行票 #54 决策 4）。
+    PatchUpdateCheck,
+    ActionRow,
+    HealthWarningRow,
+    ProjectHome,
+}
+
+/// 一层级的几何（lp）：高度、图标尺寸、图标左缘偏移与标签左缘偏移（相对按钮矩形左缘）。
+/// 居中组层级（Primary Cta / Project Home）无固定偏移，由入口点按组宽居中；gap 仅供居中组布局。
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct TierGeometry {
+    height: f32,
+    icon_size: f32,
+    inset: Option<f32>,
+    gap: f32,
+    label_x: Option<f32>,
+}
+
+/// 层级几何表：tier → 图标左缘偏移（Inset）+ 标签左缘偏移（纯函数，不渲染即可测试；数值来自原型，父票 #54 决策 2）。
+fn tier_geometry(tier: ButtonTier) -> TierGeometry {
+    match tier {
+        ButtonTier::PrimaryCta => TierGeometry {
+            height: 44.0,
+            icon_size: ICON_STANDARD,
+            inset: None,
+            gap: 10.0,
+            label_x: None,
+        },
+        ButtonTier::PatchUpdateCheck => TierGeometry {
+            height: 30.0,
+            icon_size: ICON_COMPACT,
+            inset: Some(10.0),
+            gap: 7.0,
+            label_x: Some(31.0),
+        },
+        ButtonTier::ActionRow => TierGeometry {
+            height: 40.0,
+            icon_size: ICON_STANDARD,
+            inset: Some(12.0),
+            gap: 12.0,
+            label_x: Some(39.0),
+        },
+        ButtonTier::HealthWarningRow => TierGeometry {
+            height: 38.0,
+            icon_size: ICON_STANDARD,
+            inset: Some(14.0),
+            gap: 12.0,
+            label_x: Some(41.0),
+        },
+        ButtonTier::ProjectHome => TierGeometry {
+            height: 32.0,
+            icon_size: 16.0, // 品牌标记盒（ADR-0016：栅格图，不属程序化图标族）。
+            inset: None,
+            gap: 10.0,
+            label_x: None,
+        },
+    }
+}
+
+/// 图标+标签按钮统一布局入口（父票 #54 决策 1）：按层级几何分配按钮矩形、放置图标与标签；
+/// chrome（fill/border/hover/disabled 色）由调用方闭包绘制并返回前景色（图标与文字共用）。
+/// 宽度由调用方决定（整行 / 文字宽），高度与放置数字一律来自层级几何表。
+/// 9 个参数均为互不相同的单一值，无自然归并（clippy::too_many_arguments；入口点即完整契约）。
+#[allow(clippy::too_many_arguments)]
+fn icon_label_button(
+    ui: &mut egui::Ui,
+    tier: ButtonTier,
+    label: &str,
+    icon: IconKind,
+    font: &egui::FontId,
+    enabled: bool,
+    phase: f32,
+    width: f32,
+    chrome: impl FnOnce(&egui::Painter, egui::Rect, bool) -> egui::Color32,
+) -> egui::Response {
+    let g = tier_geometry(tier);
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(width, g.height),
+        if enabled {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        },
+    );
+    if ui.is_rect_visible(rect) {
+        let hovered = enabled && response.hovered();
+        let fg = chrome(ui.painter(), rect, hovered);
+        let (icon_centre, label_x) = match (g.inset, g.label_x) {
+            (Some(inset), Some(label_x)) => (inset + g.icon_size / 2.0, label_x),
+            (None, None) => {
+                // 居中组（Primary CTA / Project Home）：图标+标签成组居中，不换行（spec §18.1）。
+                let tw = text_width(ui, label, font, fg);
+                let group_w = g.icon_size + g.gap + tw;
+                let start = (rect.width() - group_w) / 2.0;
+                (start + g.icon_size / 2.0, start + g.icon_size + g.gap)
+            }
+            _ => unreachable!(
+                "层级表内固定组 Inset 与 Label x 同为 Some、居中组同为 None；由 tier_geometry 测试钉死"
+            ),
+        };
+        main_page::paint_icon(
+            ui.painter(),
+            icon,
+            egui::pos2(rect.left() + icon_centre, rect.center().y),
+            fg,
+            g.icon_size,
+            phase,
+        );
+        ui.painter().text(
+            egui::pos2(rect.left() + label_x, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            label,
+            font.clone(),
+            fg,
+        );
+    }
+    response
+}
 
 fn settings_scroll_height(window_inner_h: f32) -> f32 {
     (window_inner_h - SETTINGS_DIALOG_SKELETON_H).clamp(SETTINGS_SCROLL_MIN_H, 420.0)
@@ -2302,56 +2429,42 @@ impl App {
             }
             let font = egui::FontId::proportional(13.0);
             let enabled = vm.update.enabled;
-            let icon_w = 16.0;
             let tw = text_width(ui, label, &font, self.palette.sub);
-            let width = (tw + icon_w + 26.0).max(130.0);
-            let (rect, response) = ui.allocate_exact_size(
-                egui::vec2(width, 30.0),
-                if enabled {
-                    egui::Sense::click()
-                } else {
-                    egui::Sense::hover()
+            // 几何表 Patch Update Check 行：标签 x 31 + 尾部留白 10 → 宽 = 文案 + 41（最小 130 不变）。
+            let width = (tw + 41.0).max(130.0);
+            let phase = if spin {
+                ctx.input(|i| i.time) as f32
+            } else {
+                0.0
+            };
+            let response = icon_label_button(
+                ui,
+                ButtonTier::PatchUpdateCheck,
+                label,
+                icon,
+                &font,
+                enabled,
+                phase,
+                width,
+                |painter, rect, hovered| {
+                    if hovered {
+                        painter.rect(
+                            rect,
+                            egui::CornerRadius::same(R_SMALL),
+                            self.palette.entry,
+                            egui::Stroke::new(1.0, self.palette.border),
+                            egui::StrokeKind::Inside,
+                        );
+                    }
+                    if !enabled {
+                        self.palette.weak
+                    } else if hovered {
+                        self.palette.ink
+                    } else {
+                        self.palette.sub
+                    }
                 },
             );
-            if ui.is_rect_visible(rect) {
-                let hovered = enabled && response.hovered();
-                if hovered {
-                    ui.painter().rect(
-                        rect,
-                        egui::CornerRadius::same(R_SMALL),
-                        self.palette.entry,
-                        egui::Stroke::new(1.0, self.palette.border),
-                        egui::StrokeKind::Inside,
-                    );
-                }
-                let fg = if !enabled {
-                    self.palette.weak
-                } else if hovered {
-                    self.palette.ink
-                } else {
-                    self.palette.sub
-                };
-                let phase = if spin {
-                    ctx.input(|i| i.time) as f32
-                } else {
-                    0.0
-                };
-                main_page::paint_icon(
-                    ui.painter(),
-                    icon,
-                    egui::pos2(rect.left() + 13.0, rect.center().y),
-                    fg,
-                    14.0,
-                    phase,
-                );
-                ui.painter().text(
-                    egui::pos2(rect.left() + 28.0, rect.center().y),
-                    egui::Align2::LEFT_CENTER,
-                    label,
-                    font,
-                    fg,
-                );
-            }
             if response.clicked() && enabled {
                 match vm.update.kind {
                     UpdateKind::Check => event = Some(MainEvent::Check),
@@ -2795,6 +2908,65 @@ mod tests {
         let mut fonts =
             egui::epaint::text::Fonts::new(egui::epaint::text::TextOptions::default(), defs);
         assert!(!fonts.has_glyph(&egui::FontId::proportional(14.0), '中'));
+    }
+
+    #[test]
+    fn tier_geometry_pins_all_five_tiers() {
+        let cases = [
+            (
+                ButtonTier::PrimaryCta,
+                TierGeometry {
+                    height: 44.0,
+                    icon_size: ICON_STANDARD,
+                    inset: None,
+                    gap: 10.0,
+                    label_x: None,
+                },
+            ),
+            (
+                ButtonTier::PatchUpdateCheck,
+                TierGeometry {
+                    height: 30.0,
+                    icon_size: ICON_COMPACT,
+                    inset: Some(10.0),
+                    gap: 7.0,
+                    label_x: Some(31.0),
+                },
+            ),
+            (
+                ButtonTier::ActionRow,
+                TierGeometry {
+                    height: 40.0,
+                    icon_size: ICON_STANDARD,
+                    inset: Some(12.0),
+                    gap: 12.0,
+                    label_x: Some(39.0),
+                },
+            ),
+            (
+                ButtonTier::HealthWarningRow,
+                TierGeometry {
+                    height: 38.0,
+                    icon_size: ICON_STANDARD,
+                    inset: Some(14.0),
+                    gap: 12.0,
+                    label_x: Some(41.0),
+                },
+            ),
+            (
+                ButtonTier::ProjectHome,
+                TierGeometry {
+                    height: 32.0,
+                    icon_size: 16.0,
+                    inset: None,
+                    gap: 10.0,
+                    label_x: None,
+                },
+            ),
+        ];
+        for (tier, expected) in cases {
+            assert_eq!(tier_geometry(tier), expected, "{tier:?}");
+        }
     }
 
     #[test]

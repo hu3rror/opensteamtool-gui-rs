@@ -272,6 +272,11 @@ pub enum IconKind {
 
 const ICON_STROKE: f32 = 1.6;
 
+/// 标准按钮图标尺寸（几何表：Primary CTA / Action 行 / Health Warning 行）。
+pub const ICON_STANDARD: f32 = 15.0;
+/// 紧凑更新链接图标尺寸（几何表：Patch Update Check；各状态一致，父票 #54 决策 4）。
+pub const ICON_COMPACT: f32 = 14.0;
+
 /// 20×20 参考网格点 → 像素坐标（`size` 为图标包围盒边长）。
 fn unit(center: Pos2, size: f32, x: f32, y: f32) -> Pos2 {
     center + egui::vec2((x - 10.0) * size / 20.0, (y - 10.0) * size / 20.0)
