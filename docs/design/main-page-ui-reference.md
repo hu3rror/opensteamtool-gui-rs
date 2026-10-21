@@ -1471,14 +1471,14 @@ Implementaion 约定：
 | Health Warning 行 | 38 | 14 | 15（`ICON_STANDARD`） | 12 | 41 |
 | Project Home 按钮 | 32 | 居中组（两侧 14） | 16（品牌栅格 mark，ADR-0016，非图标族） | 10 | 居中 |
 
-居中组（Primary CTA / Project Home）无固定 inset / 标签左缘 x：入口点按「图标 + gap + 文案」组宽整体居中（§18.1）。Project Home 的「两侧 14」为原型侧边距参考，居中后不写死。
+居中组（Primary CTA / Project Home）无固定 inset / 标签左缘 x：入口点按「图标 + gap + 文案」组宽整体居中（§18.1）。Project Home 的「两侧 14」为决策 2 记录值（居中组两侧），实现按组宽居中、不写死。
 
 两处刻意偏离原型（#54 决策 4）：
 
 * Patch Update Check 图标全状态统一 14：原型下载态画 15、检查/进度态画 14；同一按钮位换态时图标尺寸跳跃
   比 1 lp 的差异更突兀，故不随状态变换尺寸。
 * Secondary / Health 行高保持 40 / 38（原型约 40 / 36）：两行高度是本次统一前的既有定稿值（决策 2 表内
-  标「不变」），本次统一只动图标/标签对位，不重排行高。
+  标「不变」）；未重排行高【推断，决策 4 仅记录偏离、未给理由】。
 ---
 
 # 37. Typography
