@@ -1444,6 +1444,9 @@ Status Bar 保存：
 Icon 族：Play / Restart / Uninstall / Exit / Settings / Download / Refresh /
 Warning / Progress（spinner）。
 
+> Icon 族为描述性名单，非穷尽（#54 决策 9）：它列出当前已实现的程序化图标，不代表 icon 模块只允许这些。
+> 例：Hero 状态（已应用）的绿色 ✓（`main_page::IconKind::Check`，17 lp，见 §14）不在名单内，属名单外的既有用法。
+
 Implementaion 约定：
 
 * 统一 stroke 笔宽、线帽与 logical 尺寸；颜色取自语义色槽（§11）
@@ -1454,6 +1457,28 @@ Implementaion 约定：
 
 不要为了视觉需要自行绘制一套散落在组件里的 hand-rolled SVG。
 
+---
+## 36.1 图标+标签按钮几何（层级表）
+
+带图标的按钮统一走入口点 `icon_label_button`（`src/ui.rs`），图标与标签的对位由一个层级几何表
+`tier_geometry` 驱动，数值即定稿（单测钉住五层；改一个数字即为可见的刻意改动）。单位 lp。
+
+| 层级 | 高度 | Inset（图标左缘） | 图标 | 图标→标签 | 标签左缘 x |
+|---|---|---|---|---|---|
+| Primary CTA | 44 | 居中组 | 15（`ICON_STANDARD`） | 10 | 居中 |
+| Patch Update Check | 30 | 10 | 14（`ICON_COMPACT`） | 7 | 31 |
+| Secondary Action 行 | 40 | 12 | 15（`ICON_STANDARD`） | 12 | 39 |
+| Health Warning 行 | 38 | 14 | 15（`ICON_STANDARD`） | 12 | 41 |
+| Project Home 按钮 | 32 | 居中组（两侧 14） | 16（品牌栅格 mark，ADR-0016，非图标族） | 10 | 居中 |
+
+居中组（Primary CTA / Project Home）无固定 inset / 标签左缘 x：入口点按「图标 + gap + 文案」组宽整体居中（§18.1）。Project Home 的「两侧 14」为原型侧边距参考，居中后不写死。
+
+两处刻意偏离原型（#54 决策 4）：
+
+* Patch Update Check 图标全状态统一 14：原型下载态画 15、检查/进度态画 14；同一按钮位换态时图标尺寸跳跃
+  比 1 lp 的差异更突兀，故不随状态变换尺寸。
+* Secondary / Health 行高保持 40 / 38（原型约 40 / 36）：两行高度是本次统一前的既有定稿值（决策 2 表内
+  标「不变」），本次统一只动图标/标签对位，不重排行高。
 ---
 
 # 37. Typography
