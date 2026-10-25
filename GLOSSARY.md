@@ -72,7 +72,7 @@ _Avoid_: loading、加载中
 _Avoid_: 忙碌标志、互斥锁
 
 **托盘（Tray）**:
-Windows 系统托盘图标，窗口隐藏到托盘后的恢复入口、退出出口与快捷操作入口：「重启 Steam」（Steam 路径有效即可点：运行中重启、未运行点击即「直接启动」）与「打开清单目录」（#59，Steam 路径有效即可点；见「Lua 清单」）。
+Windows 系统托盘图标，窗口隐藏到托盘后的恢复入口、退出出口与快捷操作入口：「重启 Steam」（Steam 路径有效即可点：运行中重启、未运行点击即「直接启动」）与「打开 Lua 目录」（#60，Steam 路径有效即可点；见「Lua 配置」）。
 _Avoid_: 系统栏、状态栏图标
 
 **应用图标（App Icon）**:
@@ -119,16 +119,16 @@ _Avoid_: 路径设置、路径字段
 编辑缓冲提交后，经 `AppEvent::CommitPath` 进入编排核心的工作路径变更——唯一写缝（ADR-0020）：核心 trim 存储并编排「刷新文件事实 + 重探体检」（`[RefreshFacts, FeedCompatPath]`）；config 镜像与原子持久化在壳调用点（设置页提交 / 向导终局）完成。
 _Avoid_: 保存路径、路径写入
 
-**Lua 清单（Lua Manifest）**:
-`<Steam>/config/lua/` 目录下的 `.lua` 文件：描述上游 OpenSteamTool 内核要解锁/覆盖的 App 与 Depot（`addappid`/`addtoken`/`setManifestid` 式声明），按文件事件热重载、改动即生效无需重启 Steam。与 `depotcache/` 的 `.manifest` 二进制清单及 manifest 请求码是两类文件、两个目录、两套来源；`opensteamtool.toml` 的 `[lua] paths` 可追加额外目录，本工具不管理（只读其 `[remote]` 段）。「打开清单目录」入口（#59）位于托盘菜单与设置 — Steam 页签。
-_Avoid_: Lua 文件夹、config/lua、Lua 目录
+**Lua 配置（Lua Config）**:
+`<Steam>/config/lua/` 目录下的 `.lua` 文件（Lua 脚本）：描述上游 OpenSteamTool 内核要解锁/覆盖的 App 与 Depot（`addappid`/`addtoken`/`setManifestid` 式声明），按文件事件热重载、改动即生效无需重启 Steam。与 `depotcache/` 的 `.manifest` 二进制清单及 manifest 请求码是两类文件、两个目录、两套来源；`opensteamtool.toml` 的 `[lua] paths` 可追加额外目录，本工具不管理（只读其 `[remote]` 段）。「打开 Lua 目录」入口（#60）位于托盘菜单与设置 — Lua 配置页签。
+_Avoid_: Lua 清单、Lua 文件夹、config/lua、Lua 目录
 
 **语言偏好（Language Preference）**:
 `config.toml` 的 `language` 三态（auto / zh / en）：`auto` 跟随系统检测（`GetUserDefaultUILanguage`），`zh`/`en` 固定；修改入口为设置对话框「通用」页签与首次运行向导步骤 1 的语言下拉菜单（共用同一份语言选项表，新语言只加一行），即选即存，重启后恢复。
 _Avoid_: 语言设置、界面语言
 
 **设置对话框（Settings Dialog）**:
-顶栏齿轮图标按钮打开的模态对话框，按页签组织非主流程设置：通用（语言下拉 + 系统托盘勾选）、Steam（路径编辑 + 清单目录行 + 兼容性小节）、关于（软件版本 + 应用更新检查 + 项目主页 GitHub 入口 + 设置向导）三页；GitHub 入口在关于页签内，为「项目名链接按钮」（悬停显示完整 URL，不展示链接文本，点按开仓库页）；页签互不共享状态，会话内记忆上次页签，内容区可滚动、关闭按钮恒可见。
+顶栏齿轮图标按钮打开的模态对话框，按页签组织非主流程设置：通用（语言下拉 + 系统托盘勾选）、Steam（路径编辑 + 兼容性小节）、Lua 配置（说明 + 打开 Lua 目录）、关于（软件版本 + 应用更新检查 + 项目主页 GitHub 入口 + 设置向导）四页；GitHub 入口在关于页签内，为「项目名链接按钮」（悬停显示完整 URL，不展示链接文本，点按开仓库页）；页签互不共享状态，会话内记忆上次页签，内容区可滚动、关闭按钮恒可见。
 _Avoid_: 设置窗口、选项框
 
 **首次运行向导（Setup Wizard）**:

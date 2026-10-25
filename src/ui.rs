@@ -560,6 +560,7 @@ enum SettingsTab {
     General,
     About,
     Steam,
+    LuaConfig,
 }
 
 /// Settings — Steam 页签的路径编辑状态（纯逻辑：编辑缓冲 + 提交判定，可单测）。
@@ -757,38 +758,53 @@ fn path_edit_row(
     });
     row
 }
+struct LuaConfigLayout {
+    button: egui::Response,
+    #[cfg_attr(not(test), allow(dead_code))]
+    desc_max_right: f32,
+}
 
-fn lua_folder_row(
+fn settings_lua_config_body(
     ui: &mut egui::Ui,
     strings: &Strings,
     enabled: bool,
     palette: Palette,
-) -> egui::Response {
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(strings.settings_lua_folder_title).size(13.5));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let button = ButtonStyle::Neutral.palette(palette);
-            let font = egui::FontId::proportional(13.5);
-            let tw = text_width(ui, strings.settings_btn_open_lua_folder, &font, button.fg);
-            let width = 39.0 + tw + 12.0;
-            icon_label_button(
-                ui,
-                ButtonTier::ActionRow,
-                strings.settings_btn_open_lua_folder,
-                ButtonGlyph::Icon(IconKind::Folder),
-                &font,
-                enabled,
-                0.0,
-                width,
-                |painter, rect, hovered| {
-                    paint_button_chrome(painter, rect, hovered, button);
-                    ButtonChrome::icon(if enabled { button.fg } else { palette.weak })
-                },
-            )
-        })
-        .inner
-    })
-    .inner
+) -> LuaConfigLayout {
+    card_title(ui, strings.settings_tab_lua, palette);
+    ui.add_space(10.0);
+    let mut desc_right: f32 = 0.0;
+    for desc in [
+        strings.settings_lua_desc_unlock,
+        strings.settings_lua_desc_reload,
+        strings.settings_lua_desc_location,
+    ] {
+        let row = ui.label(egui::RichText::new(desc).size(12.5).color(palette.sub));
+        desc_right = desc_right.max(row.rect.right());
+        ui.add_space(4.0);
+    }
+    ui.add_space(8.0);
+    let button = ButtonStyle::Neutral.palette(palette);
+    let font = egui::FontId::proportional(13.5);
+    let tw = text_width(ui, strings.settings_btn_open_lua_folder, &font, button.fg);
+    let width = 39.0 + tw + 12.0;
+    let response = icon_label_button(
+        ui,
+        ButtonTier::ActionRow,
+        strings.settings_btn_open_lua_folder,
+        ButtonGlyph::Icon(IconKind::Folder),
+        &font,
+        enabled,
+        0.0,
+        width,
+        |painter, rect, hovered| {
+            paint_button_chrome(painter, rect, hovered, button);
+            ButtonChrome::icon(if enabled { button.fg } else { palette.weak })
+        },
+    );
+    LuaConfigLayout {
+        button: response,
+        desc_max_right: desc_right,
+    }
 }
 
 /// 三态下拉共用实现（语言 / 主题；设置页与向导同一形态，ADR-0016）。
@@ -1644,6 +1660,7 @@ impl App {
                     for (tab, label) in [
                         (SettingsTab::General, self.strings.settings_tab_general),
                         (SettingsTab::Steam, self.strings.settings_tab_steam),
+                        (SettingsTab::LuaConfig, self.strings.settings_tab_lua),
                         (SettingsTab::About, self.strings.settings_tab_about),
                     ] {
                         let style = if self.settings_tab == tab {
@@ -1683,6 +1700,7 @@ impl App {
                             SettingsTab::General => self.settings_general(ui),
                             SettingsTab::About => self.settings_about(ui, ctx),
                             SettingsTab::Steam => self.settings_steam(ui),
+                            SettingsTab::LuaConfig => self.settings_lua_config(ui),
                         }
                     });
                 ui.add_space(16.0);
@@ -1902,13 +1920,15 @@ impl App {
             );
         }
 
-        ui.add_space(12.0);
-        let lua_folder_enabled = Self::path_actions_enabled(self.core.snapshot().facts.status);
-        let row = lua_folder_row(ui, &self.strings, lua_folder_enabled, self.palette);
-        if row.clicked() && lua_folder_enabled {
+        self.compat_section(ui);
+    }
+
+    fn settings_lua_config(&mut self, ui: &mut egui::Ui) {
+        let enabled = Self::path_actions_enabled(self.core.snapshot().facts.status);
+        let layout = settings_lua_config_body(ui, &self.strings, enabled, self.palette);
+        if layout.button.clicked() && enabled {
             self.open_lua_folder();
         }
-        self.compat_section(ui);
     }
 
     fn commit_settings_steam_path(&mut self) {
@@ -3358,7 +3378,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_steam_lua_folder_row_fits_dialog_width() {
+    fn settings_lua_config_tab_fits_dialog_width() {
         let ctx = egui::Context::default();
         install_theme(&ctx);
         let raw = egui::RawInput {
@@ -3371,41 +3391,38 @@ mod tests {
         let mut violations = Vec::new();
         let mut full = ctx.run_ui(raw, |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
-                ui.allocate_ui(egui::vec2(SETTINGS_DIALOG_WIDTH, 80.0), |ui| {
-                    for lang in [Lang::Zh, Lang::En] {
-                        let s = Strings::new(lang);
-                        let content_right = ui.max_rect().right();
-                        let block_left = ui.cursor().left();
-                        let title_font = egui::FontId::proportional(13.5);
-                        let title_w = text_width(
-                            ui,
-                            s.settings_lua_folder_title,
-                            &title_font,
-                            Palette::dark().ink,
-                        );
-                        let resp = lua_folder_row(ui, &s, true, Palette::dark());
-                        if resp.rect.right() > content_right + 0.5 {
-                            violations.push(format!(
-                                "{lang:?} 打开清单目录按钮右缘 {} 超过内容右界 {content_right}",
-                                resp.rect.right()
-                            ));
-                        }
-                        if resp.rect.left() + 0.5 < block_left + title_w {
-                            violations.push(format!(
-                                "{lang:?} 打开清单目录按钮左缘 {} 越过标题终点 {}",
-                                resp.rect.left(),
-                                block_left + title_w
-                            ));
-                        }
-                        ui.add_space(12.0);
+                ui.set_width(SETTINGS_DIALOG_WIDTH);
+                for lang in [Lang::Zh, Lang::En] {
+                    let s = Strings::new(lang);
+                    let content_right = ui.max_rect().right();
+                    let block_left = ui.cursor().left();
+                    let layout = settings_lua_config_body(ui, &s, true, Palette::dark());
+                    if layout.desc_max_right > content_right + 0.5 {
+                        violations.push(format!(
+                            "{lang:?} 说明行右缘 {} 超过内容右界 {content_right}",
+                            layout.desc_max_right
+                        ));
                     }
-                });
+                    if layout.button.rect.right() > content_right + 0.5 {
+                        violations.push(format!(
+                            "{lang:?} 打开 Lua 目录按钮右缘 {} 超过内容右界 {content_right}",
+                            layout.button.rect.right()
+                        ));
+                    }
+                    if layout.button.rect.left() + 0.5 < block_left {
+                        violations.push(format!(
+                            "{lang:?} 打开 Lua 目录按钮左缘 {} 越过页签左界 {block_left}",
+                            layout.button.rect.left()
+                        ));
+                    }
+                    ui.add_space(12.0);
+                }
             });
         });
         full.textures_delta.clear();
         assert!(
             violations.is_empty(),
-            "清单目录行在对话框宽度 {SETTINGS_DIALOG_WIDTH} 下溢出:\n{}",
+            "Lua 配置页签在对话框宽度 {SETTINGS_DIALOG_WIDTH} 下溢出:\n{}",
             violations.join("\n")
         );
     }
@@ -3926,6 +3943,7 @@ mod tests {
                         for label in [
                             s.settings_tab_general,
                             s.settings_tab_steam,
+                            s.settings_tab_lua,
                             s.settings_tab_about,
                         ] {
                             let r = styled_button(
