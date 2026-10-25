@@ -758,6 +758,39 @@ fn path_edit_row(
     row
 }
 
+fn lua_folder_row(
+    ui: &mut egui::Ui,
+    strings: &Strings,
+    enabled: bool,
+    palette: Palette,
+) -> egui::Response {
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(strings.settings_lua_folder_title).size(13.5));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let button = ButtonStyle::Neutral.palette(palette);
+            let font = egui::FontId::proportional(13.5);
+            let tw = text_width(ui, strings.settings_btn_open_lua_folder, &font, button.fg);
+            let width = 39.0 + tw + 12.0;
+            icon_label_button(
+                ui,
+                ButtonTier::ActionRow,
+                strings.settings_btn_open_lua_folder,
+                ButtonGlyph::Icon(IconKind::Folder),
+                &font,
+                enabled,
+                0.0,
+                width,
+                |painter, rect, hovered| {
+                    paint_button_chrome(painter, rect, hovered, button);
+                    ButtonChrome::icon(if enabled { button.fg } else { palette.weak })
+                },
+            )
+        })
+        .inner
+    })
+    .inner
+}
+
 /// 三态下拉共用实现（语言 / 主题；设置页与向导同一形态，ADR-0016）。
 /// 选中项文字显式用 palette.accent——egui 选中态底色取自 selection.bg_fill（浅蓝），
 /// 而全局 override_text_color 会把无显式色文字强制成 ink（深色主题近白），白字浅底不可读。
@@ -1175,6 +1208,7 @@ impl App {
                 strings.tray_minimize,
                 config.minimize_to_tray,
                 strings.tray_restart,
+                strings.settings_btn_open_lua_folder,
                 move |action| {
                     let _ = tx.send(Msg::Tray(action));
                     ctx.request_repaint();
@@ -1220,7 +1254,7 @@ impl App {
         // 窗口图标不在 App::new 发送：ViewportCommand::Icon 在窗口显示前不生效（实测被吞，
         // 标题栏沿用 ViewportBuilder 图标）。初始图标已按 config 主题选版（见 main.rs），
         // System 模式校正与后续主题切换走 ui() 的 palette 钩子/首帧同步。
-        app.sync_tray_restart_enabled(app.core.snapshot().facts.status);
+        app.sync_tray_actions_enabled(app.core.snapshot().facts.status);
         // 启动即喂首次路径：经统一事件入口产首次快速体检效果（初始 checking 骨架态，零白屏；工作路径在核心（ADR-0020），由快照取）。
         let initial_path = app.core.snapshot().steam_path.clone();
         app.on_core_event(AppEvent::CompatPathChanged(initial_path));
@@ -1265,10 +1299,14 @@ impl App {
         }
     }
 
-    /// 同步托盘「重启 Steam」可用性（路径无效置灰；未运行点击等价「直接启动」，见 workflow::plan）。
-    fn sync_tray_restart_enabled(&mut self, status: DeployStatus) {
+    fn path_actions_enabled(status: DeployStatus) -> bool {
+        status != DeployStatus::InvalidPath
+    }
+    fn sync_tray_actions_enabled(&mut self, status: DeployStatus) {
         if let Some(tray) = &self.tray {
-            tray.set_restart_enabled(status != DeployStatus::InvalidPath);
+            let enabled = Self::path_actions_enabled(status);
+            tray.set_restart_enabled(enabled);
+            tray.set_open_lua_folder_enabled(enabled);
         }
     }
 
@@ -1311,7 +1349,24 @@ impl App {
                 // 托盘「重启 Steam」走同一编排入口（切片 1 提前收敛，见 #44 实现决策）。
                 self.on_core_event(AppEvent::ActionRequested(Action::Restart));
             }
+
+            TrayAction::OpenLuaFolder => {
+                self.open_lua_folder();
+            }
         }
+    }
+
+    fn open_lua_folder(&mut self) {
+        let steam_path = self.core.snapshot().steam_path.clone();
+        if !dll::is_valid_steam_dir(&steam_path) {
+            return;
+        }
+        let steam_dir = Path::new(&steam_path);
+        if let Err(e) = dll::ensure_lua_dir(steam_dir) {
+            eprintln!("[opensteamtool-manager] {e}");
+            return;
+        }
+        updater::open_path(&dll::lua_dir(steam_dir));
     }
 
     /// 文件事实探测：探测 → 同步托盘可见性，返回事实；回喂由调用者经效果队列完成（P5：观察回喂统一走队列，不嵌套调事件入口）。
@@ -1319,7 +1374,7 @@ impl App {
         // 工作路径在核心（ADR-0020），探测从快照取（与渲染/seed 同源）。
         let steam_path = self.core.snapshot().steam_path.clone();
         let facts = dll::probe_facts(Path::new(&steam_path), &dll::dll_dir());
-        self.sync_tray_restart_enabled(facts.status);
+        self.sync_tray_actions_enabled(facts.status);
         facts
     }
 
@@ -1845,6 +1900,13 @@ impl App {
                     .size(12.0)
                     .color(self.palette.danger),
             );
+        }
+
+        ui.add_space(12.0);
+        let lua_folder_enabled = Self::path_actions_enabled(self.core.snapshot().facts.status);
+        let row = lua_folder_row(ui, &self.strings, lua_folder_enabled, self.palette);
+        if row.clicked() && lua_folder_enabled {
+            self.open_lua_folder();
         }
         self.compat_section(ui);
     }
@@ -3291,6 +3353,59 @@ mod tests {
         assert!(
             violations.is_empty(),
             "兼容性小节在对话框宽度 {SETTINGS_DIALOG_WIDTH} 下溢出:\n{}",
+            violations.join("\n")
+        );
+    }
+
+    #[test]
+    fn settings_steam_lua_folder_row_fits_dialog_width() {
+        let ctx = egui::Context::default();
+        install_theme(&ctx);
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(640.0, 520.0),
+            )),
+            ..Default::default()
+        };
+        let mut violations = Vec::new();
+        let mut full = ctx.run_ui(raw, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                ui.allocate_ui(egui::vec2(SETTINGS_DIALOG_WIDTH, 80.0), |ui| {
+                    for lang in [Lang::Zh, Lang::En] {
+                        let s = Strings::new(lang);
+                        let content_right = ui.max_rect().right();
+                        let block_left = ui.cursor().left();
+                        let title_font = egui::FontId::proportional(13.5);
+                        let title_w = text_width(
+                            ui,
+                            s.settings_lua_folder_title,
+                            &title_font,
+                            Palette::dark().ink,
+                        );
+                        let resp = lua_folder_row(ui, &s, true, Palette::dark());
+                        if resp.rect.right() > content_right + 0.5 {
+                            violations.push(format!(
+                                "{lang:?} 打开清单目录按钮右缘 {} 超过内容右界 {content_right}",
+                                resp.rect.right()
+                            ));
+                        }
+                        if resp.rect.left() + 0.5 < block_left + title_w {
+                            violations.push(format!(
+                                "{lang:?} 打开清单目录按钮左缘 {} 越过标题终点 {}",
+                                resp.rect.left(),
+                                block_left + title_w
+                            ));
+                        }
+                        ui.add_space(12.0);
+                    }
+                });
+            });
+        });
+        full.textures_delta.clear();
+        assert!(
+            violations.is_empty(),
+            "清单目录行在对话框宽度 {SETTINGS_DIALOG_WIDTH} 下溢出:\n{}",
             violations.join("\n")
         );
     }

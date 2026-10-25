@@ -116,6 +116,8 @@ pub struct Strings {
     pub settings_steam_title: &'static str,
     /// Settings — Steam 手输路径失焦/回车校验失败的内联错误（#31；非法输入不落盘）。
     pub settings_steam_path_invalid: &'static str,
+    pub settings_lua_folder_title: &'static str,
+    pub settings_btn_open_lua_folder: &'static str,
     pub settings_language_title: &'static str,
     pub settings_tray_title: &'static str,
     /// Settings — 通用 页签最小化隐身勾选项（#37；与托盘菜单勾选同一事实源）。
@@ -308,6 +310,8 @@ impl Strings {
             settings_tab_steam: "Steam",
             settings_steam_title: "Steam 路径",
             settings_steam_path_invalid: "路径无效：请输入有效的 Steam 安装目录",
+            settings_lua_folder_title: "清单目录",
+            settings_btn_open_lua_folder: "打开清单目录",
             settings_language_title: "语言",
             settings_tray_title: "系统托盘",
             settings_tray_minimize: "最小化时隐藏到系统托盘",
@@ -439,6 +443,8 @@ impl Strings {
             settings_tab_steam: "Steam",
             settings_steam_title: "Steam Path",
             settings_steam_path_invalid: "Invalid path: enter a valid Steam install folder",
+            settings_lua_folder_title: "Lua Folder",
+            settings_btn_open_lua_folder: "Open Lua Folder",
             settings_language_title: "Language",
             settings_tray_title: "System Tray",
             settings_tray_minimize: "Hide to tray when minimized",

@@ -71,15 +71,30 @@ pub fn check_app_update() -> Result<AppUpdateCheckResult, UpdateError> {
     app_release_from_json(&json, env!("CARGO_PKG_VERSION"))
 }
 
-pub fn open_in_browser(url: &str) {
+fn open_target(target: &str) -> std::io::Result<()> {
     #[cfg(windows)]
-    let result = std::process::Command::new("cmd")
-        .args(["/C", "start", "", url])
-        .spawn();
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", target])
+            .spawn()?;
+    }
     #[cfg(not(windows))]
-    let result = std::process::Command::new("xdg-open").arg(url).spawn();
-    if let Err(e) = result {
+    {
+        std::process::Command::new("xdg-open").arg(target).spawn()?;
+    }
+    Ok(())
+}
+
+pub fn open_in_browser(url: &str) {
+    if let Err(e) = open_target(url) {
         eprintln!("[opensteamtool-manager] open browser {url}: {e}");
+    }
+}
+
+pub fn open_path(path: &Path) {
+    let target = path.to_string_lossy();
+    if let Err(e) = open_target(&target) {
+        eprintln!("[opensteamtool-manager] open folder {target}: {e}");
     }
 }
 

@@ -81,9 +81,16 @@ pub fn check_status(steam_dir: &Path) -> DeployStatus {
     }
 }
 
+pub fn lua_dir(steam_dir: &Path) -> PathBuf {
+    steam_dir.join("config").join("lua")
+}
+
+pub fn ensure_lua_dir(steam_dir: &Path) -> Result<(), String> {
+    fs::create_dir_all(lua_dir(steam_dir)).map_err(|e| format!("create config/lua: {e}"))
+}
+
 pub fn deploy(dll_dir: &Path, steam_dir: &Path) -> Result<(), String> {
-    fs::create_dir_all(steam_dir.join("config").join("lua"))
-        .map_err(|e| format!("create config/lua: {e}"))?;
+    ensure_lua_dir(steam_dir)?;
 
     for dll in TARGET_DLLS {
         let src = dll_dir.join(dll);
@@ -247,5 +254,31 @@ mod tests {
             dlls_present: true,
         };
         assert_eq!(facts.known_local_version(), None);
+    }
+
+    #[test]
+    fn lua_dir_points_under_config() {
+        let steam = std::env::temp_dir().join(format!("ost_lua_dir_{}", std::process::id()));
+        assert_eq!(lua_dir(&steam), steam.join("config").join("lua"));
+    }
+
+    #[test]
+    fn ensure_lua_dir_creates_missing_dir() {
+        let steam = std::env::temp_dir().join(format!("ost_lua_create_{}", std::process::id()));
+        std::fs::remove_dir_all(&steam).ok();
+        assert!(!steam.join("config").join("lua").exists());
+        ensure_lua_dir(&steam).unwrap();
+        assert!(steam.join("config").join("lua").is_dir());
+        std::fs::remove_dir_all(&steam).ok();
+    }
+
+    #[test]
+    fn ensure_lua_dir_is_idempotent() {
+        let steam = std::env::temp_dir().join(format!("ost_lua_idem_{}", std::process::id()));
+        std::fs::remove_dir_all(&steam).ok();
+        ensure_lua_dir(&steam).unwrap();
+        ensure_lua_dir(&steam).unwrap();
+        ensure_lua_dir(&steam).unwrap();
+        std::fs::remove_dir_all(&steam).ok();
     }
 }

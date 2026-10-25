@@ -265,6 +265,7 @@ pub enum IconKind {
     Download,
     Refresh,
     Settings,
+    Folder,
     Warning,
     Check,
     Spinner,
@@ -454,6 +455,22 @@ pub fn paint_icon(
                 ],
                 color,
                 2.0 * size / 20.0,
+            );
+        }
+        IconKind::Folder => {
+            seg(
+                painter,
+                &[
+                    unit(center, size, 3.2, 15.0),
+                    unit(center, size, 3.2, 5.6),
+                    unit(center, size, 7.0, 5.6),
+                    unit(center, size, 9.8, 8.4),
+                    unit(center, size, 16.8, 8.4),
+                    unit(center, size, 16.8, 15.0),
+                    unit(center, size, 3.2, 15.0),
+                ],
+                color,
+                ICON_STROKE,
             );
         }
         IconKind::Spinner => {

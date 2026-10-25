@@ -89,3 +89,11 @@
 - `cargo test --workspace` / `cargo check --workspace --all-targets` /
   `cargo clippy --workspace --all-targets` / `cargo fmt --all --check` 全绿；
   齿轮、状态栏、兼容性明细滚动为人工验证项。
+
+## 后续增补（#59）
+
+后置决策（不推翻本节既有条目）：设置 — Steam 页签在「路径编辑」行与兼容性小节之间新增
+「清单目录」行（标题 + 「打开清单目录」按钮）；托盘菜单在「重启 Steam」与「退出」之间
+新增「打开清单目录」项。两入口共用同一壳侧动作：打开 `<Steam>/config/lua/`（目录缺失
+先创建，与部署同行为；创建/打开失败仅记日志，不弹错误对话框），可用性与「重启 Steam」
+同一条谓词（Steam 路径无效置灰）。术语与打开语义见 GLOSSARY「Lua 清单」。
