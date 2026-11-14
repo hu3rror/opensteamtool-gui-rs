@@ -12,7 +12,7 @@
   - `SteamDaddy`：`SteamDaddy.dll` / `version.dll`（由 zip 内 `version.dll.disable` 改名）/ `xinput1_4.dll`，Lua 目录 `config/stplug-in`；`steamdaddy.toml`、`ost-manager.exe`、`cloud_redirect.dll` 不落地。
 - **部署/卸载/判据同源**：`dll::target_dlls_present`、`dll::check_status`、`dll::probe_facts`、`dll::deploy`、`dll::uninstall` 全部改读布局，`TARGET_DLLS` 常量删除（其职责并入 `Layout::root_files`）；`dll::lua_dir`/`ensure_lua_dir` 同样按布局取子目录（调用点 `src/ui.rs:1381`、`src/ui.rs:1385`）。
 - **解包只取清单成员并按改名规则落 `dlls/`**：`download_and_extract` 从 zip 白名单提取，未知文件丢弃（沿用 ADR-0021 的原子写与 `first_match` 下载层）。
-- **配置**：`config.toml` 新增 `patch_source`（`kind` + `custom.url` + `custom.layout`）与 `last_client_build`（构建号快照）。老配置缺 `patch_source` 读取为 `Upstream`（旧行为不静默改变），新装与向导默认 `Huanyuejue`（列表内标「推荐」）；按 `theme`/`minimize_to_tray` 先例不 bump `CONFIG_VERSION`。
+- **配置**：`config.toml` 新增 `patch_source`（`kind` + `custom.url` + `custom.layout`）与 `last_client_build`（构建号快照）。老配置缺 `patch_source` 与新装一致，都取默认源 `Huanyuejue`（ADR-0024 起不再回退 `Upstream`，列表也不标「推荐」）；按 `theme`/`minimize_to_tray` 先例不 bump `CONFIG_VERSION`。
 - **入口**：设置 → Steam 页新增「补丁源」小节（下拉 + 自定义 URL + 布局类型下拉 + 一句来源说明/免责声明）；主页面「补丁更新检查」按钮不变，检查与下载都按当前源执行。向导不加步，源下拉与免责声明渲染在步骤 3 决策区；`Effect::Finish` 携带源，`wizard_download` 按选中的源下载。
 - **自定义源校验**：保存时只做形状校验（`https://api.github.com/repos/<owner>/<repo>/releases/latest` 或可归一化为该形状的仓库/Release 页 URL），不做网络探测；真实失败（404、无 `.zip` 资产、清单成员缺失）在下载时以 `UpdateError` 呈现。自定义源的能力边界 = URL + 布局类型，不提供文件名映射表。
 - **客户端构建号**：读 `<Steam>/package/steam_client_win32.manifest` 的 `version` 字段（本机实测 `"version" "1769731672"`），读不到即静默降级为「未确认」。部署成功时把值写入 `config.toml` 的 `last_client_build`；`update_flow::derived` 增加 `client_build_mismatch`，不一致时给**一条**提示（当前构建号 + 快照构建号并排 + 「更新 DLL」直达），两种不一致（DLL 比客户端新 / 客户端比 DLL 新）共用同一文案，不阻断下载或部署。

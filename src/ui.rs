@@ -1004,6 +1004,11 @@ fn source_custom_row(
     (url, layout)
 }
 
+/// 草稿与已存源不同时显示「应用并下载」，相同时按钮不出现。
+fn source_draft_changed(draft: &PatchSource, stored: &PatchSource) -> bool {
+    draft != stored
+}
+
 fn resolve_draft(draft: &PatchSource) -> Result<PatchSource, patch_source::UrlError> {
     match draft {
         PatchSource::Custom { url, layout } => patch_source::custom_source(url, *layout),
@@ -2297,7 +2302,7 @@ impl App {
                     self.source_invalid = false;
                 }
             }
-            if self.source_draft != stored {
+            if source_draft_changed(&self.source_draft, &stored) {
                 ui.add_space(10.0);
                 let enabled = !self.source_downloading;
                 apply = ui
@@ -4456,14 +4461,28 @@ mod tests {
     #[test]
     fn apply_button_follows_draft_against_stored_source() {
         let stored = PatchSource::SteamDaddy;
-        assert_eq!(stored, PatchSource::SteamDaddy);
-        assert_ne!(stored, PatchSource::Huanyuejue);
-        let draft = PatchSource::Custom {
-            url: "https://api.github.com/repos/a/b/releases/latest".into(),
-            layout: Layout::SteamDaddy,
-        };
-        assert_ne!(stored, draft);
-        assert_eq!(draft, draft.clone());
+        assert!(!source_draft_changed(&stored, &stored));
+        assert!(source_draft_changed(&PatchSource::Huanyuejue, &stored));
+        assert!(source_draft_changed(
+            &PatchSource::Custom {
+                url: "https://api.github.com/repos/a/b/releases/latest".into(),
+                layout: Layout::SteamDaddy,
+            },
+            &PatchSource::Custom {
+                url: "https://api.github.com/repos/a/b/releases/latest".into(),
+                layout: Layout::OpenSteamTool,
+            },
+        ));
+        assert!(source_draft_changed(
+            &PatchSource::Custom {
+                url: "https://api.github.com/repos/a/c/releases/latest".into(),
+                layout: Layout::SteamDaddy,
+            },
+            &PatchSource::Custom {
+                url: "https://api.github.com/repos/a/b/releases/latest".into(),
+                layout: Layout::SteamDaddy,
+            },
+        ));
     }
 
     #[test]
