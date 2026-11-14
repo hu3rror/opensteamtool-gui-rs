@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::fsutil::{exe_dir, write_atomic};
 use crate::i18n::{Lang, detect_system_lang};
+use crate::patch_source::{self, Layout, PatchSource};
 
 /// 当前配置格式版本（未来格式变更时递增并写迁移逻辑）。
 pub const CONFIG_VERSION: u32 = 1;
@@ -103,6 +104,10 @@ pub struct Config {
     pub minimize_to_tray: bool,
     /// 深浅主题偏好（缺省跟随系统；字段缺失/非法 = System，老配置无迁移，ADR-0016）。
     pub theme: ThemePreference,
+    /// 补丁源（ADR-0023）。缺字段 = 上游（旧行为）；新配置默认推荐源。
+    pub patch_source: PatchSource,
+    /// 上次部署时记录的客户端构建号（`package/steam_client_win32.manifest` 的 version）。
+    pub last_client_build: Option<String>,
 }
 
 impl Config {
@@ -113,6 +118,8 @@ impl Config {
             language: Language::Auto,
             minimize_to_tray: true,
             theme: ThemePreference::System,
+            patch_source: PatchSource::Huanyuejue,
+            last_client_build: None,
         }
     }
 }
@@ -182,12 +189,24 @@ fn parse(text: &str) -> Result<Config, ConfigError> {
             .unwrap_or(ThemePreference::System),
     };
 
+    let patch_source = doc
+        .get("patch_source")
+        .and_then(parse_patch_source)
+        .unwrap_or(PatchSource::Upstream);
+
+    let last_client_build = doc
+        .get("last_client_build")
+        .and_then(|v| v.as_str())
+        .and_then(parse_build_id);
+
     Ok(Config {
         version: CONFIG_VERSION,
         steam_path,
         language,
         minimize_to_tray,
         theme,
+        patch_source,
+        last_client_build,
     })
 }
 
@@ -200,7 +219,34 @@ fn serialize(config: &Config) -> String {
     doc["language"] = toml_edit::value(config.language.as_str());
     doc["minimize_to_tray"] = toml_edit::value(config.minimize_to_tray);
     doc["theme"] = toml_edit::value(config.theme.as_str());
+    let mut patch_source = toml_edit::Table::new();
+    patch_source["kind"] = toml_edit::value(config.patch_source.kind());
+    if let PatchSource::Custom { url, layout } = &config.patch_source {
+        patch_source["url"] = toml_edit::value(url.as_str());
+        patch_source["layout"] = toml_edit::value(layout.as_str());
+    }
+    doc["patch_source"] = toml_edit::Item::Table(patch_source);
+    if let Some(build) = &config.last_client_build {
+        doc["last_client_build"] = toml_edit::value(build.as_str());
+    }
     doc.to_string()
+}
+
+fn parse_patch_source(item: &toml_edit::Item) -> Option<PatchSource> {
+    let table = item.as_table()?;
+    let kind = table.get("kind")?.as_str()?;
+    if kind != "custom" {
+        return PatchSource::from_kind(kind);
+    }
+    let url = table.get("url")?.as_str()?;
+    let layout = Layout::parse(table.get("layout")?.as_str()?)?;
+    patch_source::custom_source(url, layout).ok()
+}
+
+fn parse_build_id(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    (!trimmed.is_empty() && trimmed.len() <= 12 && trimmed.chars().all(|c| c.is_ascii_digit()))
+        .then(|| trimmed.to_string())
 }
 
 #[cfg(test)]
@@ -232,6 +278,7 @@ mod tests {
                             language: lang,
                             minimize_to_tray,
                             theme,
+                            ..Config::defaults()
                         };
                         save(&path, &cfg).unwrap();
                         assert_eq!(
@@ -290,6 +337,8 @@ mod tests {
         assert_eq!(cfg.language, Language::Auto);
         assert_eq!(cfg.version, CONFIG_VERSION);
         assert!(cfg.minimize_to_tray, "缺省应启用托盘隐身");
+        assert_eq!(cfg.patch_source, PatchSource::Huanyuejue, "新装默认推荐源");
+        assert_eq!(cfg.last_client_build, None);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -435,5 +484,150 @@ mod tests {
         assert_eq!(Language::Zh.effective(), Lang::Zh);
         assert_eq!(Language::En.effective(), Lang::En);
         assert_eq!(Language::Auto.effective(), detect_system_lang());
+    }
+
+    #[test]
+    fn round_trip_patch_source_variants() {
+        let dir = tmp_dir("patchsrc");
+        let path = dir.join(CONFIG_FILE);
+        for source in [
+            PatchSource::Upstream,
+            PatchSource::Huanyuejue,
+            PatchSource::SteamDaddy,
+            PatchSource::Custom {
+                url: "https://api.github.com/repos/someone/fork/releases/latest".into(),
+                layout: Layout::OpenSteamTool,
+            },
+            PatchSource::Custom {
+                url: "https://api.github.com/repos/someone/other/releases/latest".into(),
+                layout: Layout::SteamDaddy,
+            },
+        ] {
+            let cfg = Config {
+                patch_source: source.clone(),
+                last_client_build: Some("1769731672".into()),
+                ..Config::defaults()
+            };
+            save(&path, &cfg).unwrap();
+            assert_eq!(load(&path).unwrap(), cfg, "round-trip {source:?}");
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn missing_patch_source_reads_as_upstream() {
+        let dir = tmp_dir("oldpatch");
+        let path = dir.join(CONFIG_FILE);
+        std::fs::write(
+            &path,
+            "version = 1
+steam_path = \"C:/S\"
+language = \"zh\"
+",
+        )
+        .unwrap();
+        let cfg = load(&path).unwrap();
+        assert_eq!(
+            cfg.patch_source,
+            PatchSource::Upstream,
+            "老配置缺 patch_source 应保持旧行为"
+        );
+        assert_eq!(cfg.last_client_build, None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn invalid_custom_source_degrades_to_upstream() {
+        let dir = tmp_dir("badcustom");
+        let path = dir.join(CONFIG_FILE);
+        for section in [
+            "[patch_source]
+kind = \"custom\"
+url = \"http://github.com/o/r\"
+layout = \"opensteamtool\"
+",
+            "[patch_source]
+kind = \"custom\"
+url = \"https://gitlab.com/o/r\"
+layout = \"opensteamtool\"
+",
+            "[patch_source]
+kind = \"custom\"
+layout = \"opensteamtool\"
+",
+            "[patch_source]
+kind = \"custom\"
+url = \"https://github.com/o/r\"
+layout = \"unknown\"
+",
+            "[patch_source]
+kind = \"nonsense\"
+",
+        ] {
+            std::fs::write(
+                &path,
+                format!(
+                    "version = 1
+steam_path = \"C:/S\"
+language = \"zh\"
+{section}"
+                ),
+            )
+            .unwrap();
+            let cfg = load(&path).unwrap();
+            assert_eq!(
+                cfg.patch_source,
+                PatchSource::Upstream,
+                "非法补丁源应降级上游：{section}"
+            );
+            assert_eq!(cfg.steam_path, "C:/S", "降级不应丢其余配置：{section}");
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn custom_source_matching_builtin_collapses_on_load() {
+        let dir = tmp_dir("collapse");
+        let path = dir.join(CONFIG_FILE);
+        std::fs::write(
+            &path,
+            "version = 1
+steam_path = \"C:/S\"
+language = \"zh\"
+             [patch_source]
+kind = \"custom\"
+             url = \"https://github.com/Contrary-v2/SteamDaddy-Dll/releases\"
+             layout = \"opensteamtool\"
+",
+        )
+        .unwrap();
+        let cfg = load(&path).unwrap();
+        assert_eq!(
+            cfg.patch_source,
+            PatchSource::SteamDaddy,
+            "自定义 URL 等于内置仓库时应折叠为内置源"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn invalid_last_client_build_is_none() {
+        let dir = tmp_dir("buildtol");
+        let path = dir.join(CONFIG_FILE);
+        for raw in ["\"\"", "\"abc\"", "\"1769-731672\"", "42", "true"] {
+            std::fs::write(
+                &path,
+                format!(
+                    "version = 1
+steam_path = \"C:/S\"
+language = \"zh\"
+last_client_build = {raw}"
+                ),
+            )
+            .unwrap();
+            let cfg = load(&path).unwrap();
+            assert_eq!(cfg.last_client_build, None, "last_client_build = {raw}");
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

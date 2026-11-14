@@ -216,6 +216,7 @@ mod tests {
             language: Language::Auto,
             minimize_to_tray: true,
             theme: ThemePreference::System,
+            ..Config::defaults()
         };
         config::save(&dir.join(CONFIG_FILE), &cfg).unwrap();
     }

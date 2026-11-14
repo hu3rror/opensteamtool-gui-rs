@@ -90,7 +90,10 @@ pub enum PatchSource {
     Huanyuejue,
     /// `Contrary-v2/SteamDaddy-Dll`。
     SteamDaddy,
-    Custom { url: String, layout: Layout },
+    Custom {
+        url: String,
+        layout: Layout,
+    },
 }
 
 const UPSTREAM_ENDPOINT: &str =
@@ -104,7 +107,11 @@ const STEAMDADDY_ENDPOINT: &str =
 pub const ASSET_PATTERN: &str = "*-Release.zip";
 
 impl PatchSource {
-    pub const BUILTINS: [PatchSource; 3] = [PatchSource::Upstream, PatchSource::Huanyuejue, PatchSource::SteamDaddy];
+    pub const BUILTINS: [PatchSource; 3] = [
+        PatchSource::Upstream,
+        PatchSource::Huanyuejue,
+        PatchSource::SteamDaddy,
+    ];
 
     pub fn kind(&self) -> &'static str {
         match self {
@@ -154,6 +161,7 @@ impl PatchSource {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Resolved {
+    pub source: PatchSource,
     pub endpoint: String,
     pub layout: Layout,
 }
@@ -161,6 +169,7 @@ pub struct Resolved {
 /// 配置 → 端点 + 布局的唯一映射点（所有调用方都消费 `Resolved`，不再各自派生）。
 pub fn resolve(source: &PatchSource) -> Resolved {
     Resolved {
+        source: source.clone(),
         endpoint: match source {
             PatchSource::Upstream => UPSTREAM_ENDPOINT.to_string(),
             PatchSource::Huanyuejue => EBOSVNALAE_ENDPOINT.to_string(),
@@ -240,7 +249,6 @@ fn api_slug<'a>(segments: &'a [&'a str]) -> Result<(&'a str, &'a str), UrlError>
     slug(owner, repo)
 }
 
-
 fn slug<'a>(owner: &'a str, repo: &'a str) -> Result<(&'a str, &'a str), UrlError> {
     let repo = repo.strip_suffix(".git").unwrap_or(repo);
     if !valid_segment(owner) || !valid_segment(repo) {
@@ -285,23 +293,19 @@ pub enum AssetError {
     UnsupportedArchive,
 }
 
-/// 从发布资产名列表中选择下载项：优先 `-Release.zip`，再退到任意非 `-Debug` 的 zip，
-/// 最后接受唯一的 Debug zip（有总比没有强）。
+/// 从发布资产名列表中选择下载项：优先 `-Release.zip`，否则任意非 `-Debug` 的 zip。
+/// `-Debug` 变体永远不选（体积大且带调试产物）；没有可用 zip 时区分「无匹配」与「只有非 zip」。
 pub fn select_asset(names: &[&str]) -> Result<usize, AssetError> {
-    let release = names
+    if let Some(i) = names
         .iter()
-        .position(|n| is_zip(n) && n.to_ascii_lowercase().ends_with("-release.zip"));
-    if let Some(i) = release {
+        .position(|n| is_zip(n) && n.to_ascii_lowercase().ends_with("-release.zip"))
+    {
         return Ok(i);
     }
-    let other = names
+    if let Some(i) = names
         .iter()
-        .position(|n| is_zip(n) && !n.to_ascii_lowercase().ends_with("-debug.zip"));
-    if let Some(i) = other {
-        return Ok(i);
-    }
-    let zip = names.iter().position(|n| is_zip(n));
-    if let Some(i) = zip {
+        .position(|n| is_zip(n) && !n.to_ascii_lowercase().ends_with("-debug.zip"))
+    {
         return Ok(i);
     }
     if names.iter().any(|n| is_archive(n)) {
@@ -316,9 +320,11 @@ fn is_zip(name: &str) -> bool {
 
 fn is_archive(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    [".7z", ".rar", ".tar.gz", ".tgz", ".tar", ".gz", ".xz", ".bz2"]
-        .iter()
-        .any(|ext| lower.ends_with(ext))
+    [
+        ".7z", ".rar", ".tar.gz", ".tgz", ".tar", ".gz", ".xz", ".bz2",
+    ]
+    .iter()
+    .any(|ext| lower.ends_with(ext))
 }
 
 #[cfg(test)]
@@ -427,7 +433,11 @@ mod tests {
 
     #[test]
     fn select_prefers_release_over_debug() {
-        let names = ["checksums.txt", "OpenSteamTool-1.4.8-Debug.zip", "OpenSteamTool-1.4.8-Release.zip"];
+        let names = [
+            "checksums.txt",
+            "OpenSteamTool-1.4.8-Debug.zip",
+            "OpenSteamTool-1.4.8-Release.zip",
+        ];
         assert_eq!(select_asset(&names), Ok(2));
     }
 
@@ -445,21 +455,28 @@ mod tests {
 
     #[test]
     fn select_skips_debug_only_zip() {
-        let names = ["OpenSteamTool-1.4.8-Debug.zip"];
-        assert_eq!(select_asset(&names), Ok(0));
+        let names = ["OpenSteamTool-1.4.8-Debug.zip", "notes.txt"];
+        assert_eq!(select_asset(&names), Err(AssetError::NoMatch));
     }
 
     #[test]
     fn select_reports_unsupported_archive_when_only_non_zip() {
         for name in ["Patch-1.0.7z", "Patch-1.0.rar", "Patch-1.0.tar.gz"] {
-            assert_eq!(select_asset(&[name]), Err(AssetError::UnsupportedArchive), "{name}");
+            assert_eq!(
+                select_asset(&[name]),
+                Err(AssetError::UnsupportedArchive),
+                "{name}"
+            );
         }
     }
 
     #[test]
     fn select_reports_no_match_when_nothing_fits() {
         assert_eq!(select_asset(&[]), Err(AssetError::NoMatch));
-        assert_eq!(select_asset(&["readme.md", "notes.txt"]), Err(AssetError::NoMatch));
+        assert_eq!(
+            select_asset(&["readme.md", "notes.txt"]),
+            Err(AssetError::NoMatch)
+        );
     }
 
     #[test]
