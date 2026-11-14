@@ -2,8 +2,8 @@
 
 use std::collections::VecDeque;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use eframe::egui;
@@ -698,6 +698,10 @@ pub struct App {
     source_result: Option<Result<(), UpdateError>>,
     /// 「应用并下载」是否在途：自管忙碌，防重复点触并行下载同一目录。
     source_downloading: bool,
+    /// 「应用并下载」在途时的实时进度（工作线程写、每帧读；切源/完成即换新槽）。
+    source_progress: Arc<Mutex<Option<crate::downloads::Progress>>>,
+    /// 向导步骤 4「下载补丁」的实时进度（工作线程写、每帧读；离开下载步即作废）。
+    wizard_progress: Arc<Mutex<Option<crate::downloads::Progress>>>,
     /// 打开设置时探测的已部署布局（提示行判据见 `deploy_hint_visible`）。
     deployed_layout: Option<Layout>,
     /// 应用更新检查结果（Settings — 关于页签；None = 尚未检查）。检查中由 `app_update_checking` 表达（发起时覆盖旧结果）。
@@ -929,10 +933,11 @@ fn centered_combo<T: Copy + PartialEq>(
     chosen
 }
 
-fn wizard_download(source: PatchSource) -> Result<(), UpdateError> {
-    let resolved = patch_source::resolve(&source);
-    let info = updater::check_update(&resolved)?;
-    updater::download_and_extract(&info, &dll::dll_dir(), resolved.layout)
+fn wizard_download(
+    source: PatchSource,
+    progress: Arc<Mutex<Option<crate::downloads::Progress>>>,
+) -> Result<(), UpdateError> {
+    source_download(source, progress).map(|_| ())
 }
 
 fn source_label(strings: &Strings, source: &PatchSource) -> String {
@@ -1006,6 +1011,36 @@ fn resolve_draft(draft: &PatchSource) -> Result<PatchSource, patch_source::UrlEr
     }
 }
 
+/// 进度条比例：总字节已知且非零才给（缺失时只转圈），超出总量截到 1。
+fn progress_fraction(done: u64, total: Option<u64>) -> Option<f32> {
+    total
+        .filter(|total| *total > 0)
+        .map(|total| (done as f64 / total as f64).min(1.0) as f32)
+}
+
+/// 下载在途的一行反馈：转圈 + 可选文案 + 总字节已知时的进度条（每 120ms 重绘刷新）。
+fn download_progress_row(
+    ui: &mut egui::Ui,
+    progress: Option<crate::downloads::Progress>,
+    label: Option<&str>,
+    palette: Palette,
+) {
+    ui.horizontal(|ui| {
+        ui.add(egui::Spinner::new().size(14.0));
+        if let Some(label) = label {
+            ui.label(egui::RichText::new(label).size(12.0).color(palette.weak));
+        }
+        if let Some(fraction) = progress.and_then(|p| progress_fraction(p.done, p.total)) {
+            ui.add(
+                egui::ProgressBar::new(fraction)
+                    .desired_width(140.0)
+                    .show_percentage(),
+            );
+        }
+    });
+    ui.ctx().request_repaint_after(Duration::from_millis(120));
+}
+
 fn source_result_line(strings: &Strings, label: &str, result: &Result<(), UpdateError>) -> String {
     match result {
         Ok(()) => format!("{}{label}", strings.settings_source_downloaded),
@@ -1034,10 +1069,18 @@ fn probe_deployed_layout(steam_dir: &Path) -> Option<Layout> {
     })
 }
 
-fn source_download(source: PatchSource) -> Result<updater::OnlineInfo, UpdateError> {
+fn source_download(
+    source: PatchSource,
+    progress: Arc<Mutex<Option<crate::downloads::Progress>>>,
+) -> Result<updater::OnlineInfo, UpdateError> {
     let resolved = patch_source::resolve(&source);
     let info = updater::check_update(&resolved)?;
-    updater::download_and_extract(&info, &dll::dll_dir(), resolved.layout)?;
+    let mut report = move |p: crate::downloads::Progress| {
+        if let Ok(mut slot) = progress.lock() {
+            *slot = Some(p);
+        }
+    };
+    updater::download_and_extract_reporting(&info, &dll::dll_dir(), resolved.layout, &mut report)?;
     Ok(info)
 }
 
@@ -1135,6 +1178,7 @@ fn wizard_steps_ui(
     ui: &mut egui::Ui,
     strings: Strings,
     view: &wizard::View,
+    progress: Option<crate::downloads::Progress>,
     palette: Palette,
 ) -> (Vec<wizard::Event>, egui::Rect) {
     // 事件按序收集（PathEdited 先于 PathSubmitted 送达状态机）：
@@ -1273,6 +1317,10 @@ fn wizard_steps_ui(
                                 prompt
                             };
                             ui.label(prompt);
+                            if matches!(view.download, wizard::DownloadState::Running) {
+                                ui.add_space(10.0);
+                                download_progress_row(ui, progress, None, palette);
+                            }
                             ui.add_space(16.0);
                             ui.horizontal(|ui| {
                                 let item_gap = ui.spacing().item_spacing.x;
@@ -1448,6 +1496,8 @@ impl App {
             source_invalid: false,
             source_result: None,
             source_downloading: false,
+            source_progress: Arc::new(Mutex::new(None)),
+            wizard_progress: Arc::new(Mutex::new(None)),
             deployed_layout: None,
             app_update: None,
             app_update_checking: false,
@@ -1612,6 +1662,7 @@ impl App {
                 }
                 Msg::SourceDownloaded(res) => {
                     self.source_downloading = false;
+                    self.source_progress = Arc::new(Mutex::new(None));
                     if let Ok(info) = &res {
                         self.on_core_event(AppEvent::UpdateChecked(Ok(info.clone())));
                         let facts = self.probe_facts_and_sync();
@@ -1620,6 +1671,7 @@ impl App {
                     self.source_result = Some(res.map(|_| ()));
                 }
                 Msg::WizardDownload(res) => {
+                    self.wizard_progress = Arc::new(Mutex::new(None));
                     if self.wizard.is_some() {
                         let ctx = self.ctx.clone();
                         self.wizard_event(&ctx, wizard::Event::DownloadDone(res));
@@ -1789,7 +1841,11 @@ impl App {
                         .map(|w| w.view().source)
                         .unwrap_or_else(|| self.config.patch_source.clone());
                     let ctx2 = ctx.clone();
-                    self.spawn(&ctx2, move || Msg::WizardDownload(wizard_download(source)));
+                    self.wizard_progress = Arc::new(Mutex::new(None));
+                    let progress = Arc::clone(&self.wizard_progress);
+                    self.spawn(&ctx2, move || {
+                        Msg::WizardDownload(wizard_download(source, progress))
+                    });
                 }
                 AppEffect::WizardFinish {
                     language,
@@ -1853,7 +1909,8 @@ impl App {
             return;
         };
         let strings = self.strings;
-        let (events, _) = wizard_steps_ui(ui, strings, &view, self.palette);
+        let progress = self.wizard_progress.lock().ok().and_then(|slot| *slot);
+        let (events, _) = wizard_steps_ui(ui, strings, &view, progress, self.palette);
         for event in events {
             self.wizard_event(ctx, event);
         }
@@ -2279,6 +2336,10 @@ impl App {
         if apply {
             self.apply_source_draft();
         }
+        if self.source_downloading {
+            ui.add_space(8.0);
+            self.source_progress_row(ui);
+        }
         if self.source_invalid {
             ui.add_space(6.0);
             ui.label(
@@ -2311,6 +2372,17 @@ impl App {
         }
     }
 
+    /// 下载在途的反馈行（文案取自设置页「正在下载…」）。
+    fn source_progress_row(&self, ui: &mut egui::Ui) {
+        let progress = self.source_progress.lock().ok().and_then(|slot| *slot);
+        download_progress_row(
+            ui,
+            progress,
+            Some(self.strings.settings_source_loading),
+            self.palette,
+        );
+    }
+
     /// 落盘草稿并只下载该源最新 zip；非法地址原地报错，已存源不变（ADR-0024）。
     fn apply_source_draft(&mut self) {
         let next = match resolve_draft(&self.source_draft) {
@@ -2330,7 +2402,11 @@ impl App {
             self.on_core_event(ctx);
         }
         let ctx = self.ctx.clone();
-        self.spawn(&ctx, move || Msg::SourceDownloaded(source_download(next)));
+        self.source_progress = Arc::new(Mutex::new(None));
+        let progress = Arc::clone(&self.source_progress);
+        self.spawn(&ctx, move || {
+            Msg::SourceDownloaded(source_download(next, progress))
+        });
     }
 
     fn discard_source_draft(&mut self) {
@@ -3878,7 +3954,7 @@ mod tests {
                     download: wizard::DownloadState::Idle,
                 };
                 let (evs, rect) =
-                    wizard_steps_ui(ui, Strings::new(Lang::Zh), &view, Palette::dark());
+                    wizard_steps_ui(ui, Strings::new(Lang::Zh), &view, None, Palette::dark());
                 card = Some(rect);
                 let _ = evs;
             });
@@ -3949,8 +4025,13 @@ mod tests {
                                 path_valid: valid,
                                 download: wizard::DownloadState::Idle,
                             };
-                            let (evs_now, _) =
-                                wizard_steps_ui(ui, Strings::new(Lang::Zh), &view, Palette::dark());
+                            let (evs_now, _) = wizard_steps_ui(
+                                ui,
+                                Strings::new(Lang::Zh),
+                                &view,
+                                None,
+                                Palette::dark(),
+                            );
                             if pass == 2 {
                                 for ev in evs_now {
                                     events.push(ev);
@@ -4043,7 +4124,7 @@ mod tests {
                         download: wizard::DownloadState::Idle,
                     };
                     let (evs_now, _) =
-                        wizard_steps_ui(ui, Strings::new(Lang::Zh), &view, Palette::dark());
+                        wizard_steps_ui(ui, Strings::new(Lang::Zh), &view, None, Palette::dark());
                     if frame == 2 {
                         for ev in evs_now {
                             events.push(ev);
@@ -4438,6 +4519,13 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn progress_fraction_needs_a_positive_total_and_clamps() {
+        assert_eq!(progress_fraction(50, None), None);
+        assert_eq!(progress_fraction(50, Some(0)), None);
+        assert_eq!(progress_fraction(50, Some(200)), Some(0.25));
+        assert_eq!(progress_fraction(300, Some(200)), Some(1.0));
+    }
     #[test]
     fn source_custom_row_fits_dialog_width() {
         let ctx = egui::Context::default();

@@ -1,8 +1,8 @@
 //! 下载链「取字节 → 原子落盘」深模块(ADR-0021):URL 链逐一下载,404 为权威信号(续链不终止),
 //! 其余错误记尾;超时档位按负载分档(镜像小文件 / 更新大 zip);落盘恒原子。
-//! 公开面:first_match / Policy::{Small, Large} / write_atomic / DownloadError::{NotFound404, Network}。
+//! 公开面:first_match / first_match_reporting / Policy::{Small, Large} / write_atomic / Progress / DownloadError::{NotFound404, Network}。
 
-use std::io;
+use std::io::{self, Read};
 use std::path::Path;
 use std::time::Duration;
 
@@ -22,6 +22,9 @@ pub enum Policy {
 }
 
 const LARGE_BODY_LIMIT: u64 = 512 * 1024 * 1024;
+
+/// Small 档 body 上限:沿用 ureq `read_to_vec` 的 10MB 默认,镜像 TOML 实测 4-6KB。
+const SMALL_BODY_LIMIT: u64 = 10 * 1024 * 1024;
 
 /// 下载链错误:404 是上游「确无此文件」的确定性信号,区别于暂时性网络错误。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +47,23 @@ impl std::fmt::Display for DownloadError {
 pub fn first_match(urls: &[String], policy: Policy) -> Result<Vec<u8>, DownloadError> {
     let agent = agent_for(policy);
     first_match_with(urls, |url| get_bytes(&agent, url, policy))
+}
+
+/// 下载进度快照:已读字节与总字节(服务端未给 content-length 或响应被解压时为 None)。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Progress {
+    pub done: u64,
+    pub total: Option<u64>,
+}
+
+/// 与 [`first_match`] 同构,回退续链时把每个 URL 的读取进度经 `report` 吐出(换 URL 从头计)。
+pub fn first_match_reporting(
+    urls: &[String],
+    policy: Policy,
+    report: &mut dyn FnMut(Progress),
+) -> Result<Vec<u8>, DownloadError> {
+    let agent = agent_for(policy);
+    first_match_with(urls, |url| get_bytes_reporting(&agent, url, policy, report))
 }
 
 /// 注入 GET 的链逻辑(测试 seam,与 `probe_all`/`probe_all_with` 同构):
@@ -95,20 +115,63 @@ fn map_call_err(e: ureq::Error) -> DownloadError {
 
 /// 单 URL GET→bytes:2xx 读 body(按策略 body 上限),非 2xx 由错误映射区分 404 与其余状态码。
 fn get_bytes(agent: &Agent, url: &str, policy: Policy) -> Result<Vec<u8>, DownloadError> {
-    let mut resp = agent
+    get_bytes_reporting(agent, url, policy, &mut |_| {})
+}
+
+/// 同 [`get_bytes`],按块读取并把进度经 `report` 吐出(开始给一次 0/total,其后每块累加)。
+fn get_bytes_reporting(
+    agent: &Agent,
+    url: &str,
+    policy: Policy,
+    report: &mut dyn FnMut(Progress),
+) -> Result<Vec<u8>, DownloadError> {
+    let resp = agent
         .get(url)
         .header("User-Agent", USER_AGENT)
         .call()
         .map_err(map_call_err)?;
-    let read = match policy {
-        Policy::Small => resp.into_body().read_to_vec(),
-        Policy::Large => resp
-            .body_mut()
-            .with_config()
-            .limit(LARGE_BODY_LIMIT)
-            .read_to_vec(),
-    };
-    read.map_err(|e| DownloadError::Network(format!("read body: {e}")))
+    let total = resp.body().content_length();
+    match policy {
+        Policy::Small => {
+            let mut body = resp.into_body();
+            read_body(
+                body.with_config().limit(SMALL_BODY_LIMIT).reader(),
+                total,
+                report,
+            )
+        }
+        Policy::Large => {
+            let mut body = resp.into_body();
+            read_body(
+                body.with_config().limit(LARGE_BODY_LIMIT).reader(),
+                total,
+                report,
+            )
+        }
+    }
+}
+
+fn read_body(
+    mut reader: impl Read,
+    total: Option<u64>,
+    report: &mut dyn FnMut(Progress),
+) -> Result<Vec<u8>, DownloadError> {
+    let mut bytes = Vec::with_capacity(total.unwrap_or(0).min(64 << 20) as usize);
+    let mut chunk = vec![0u8; 64 * 1024];
+    let mut done = 0u64;
+    report(Progress { done, total });
+    loop {
+        let n = reader
+            .read(&mut chunk)
+            .map_err(|e| DownloadError::Network(format!("read body: {e}")))?;
+        if n == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..n]);
+        done += n as u64;
+        report(Progress { done, total });
+    }
+    Ok(bytes)
 }
 
 /// 原子落盘门面(复用 [`crate::fsutil::write_atomic`]):下载域持久化统一经此,避免半截文件
@@ -120,6 +183,30 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_body_streams_and_reports_progress() {
+        let data = vec![7u8; 150_000];
+        let mut seen: Vec<Progress> = Vec::new();
+        let mut report = |p: Progress| seen.push(p);
+        let bytes = read_body(io::Cursor::new(data.clone()), Some(150_000), &mut report).unwrap();
+        assert_eq!(bytes, data);
+        assert_eq!(
+            seen.first(),
+            Some(&Progress {
+                done: 0,
+                total: Some(150_000)
+            })
+        );
+        assert_eq!(
+            seen.last(),
+            Some(&Progress {
+                done: 150_000,
+                total: Some(150_000)
+            })
+        );
+        assert!(seen.len() > 2, "应至少按块报告一次中间进度");
+    }
 
     #[test]
     fn first_match_falls_back_to_second_url_on_404() {

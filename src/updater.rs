@@ -206,11 +206,22 @@ pub fn download_and_extract(
     dll_dir: &Path,
     layout: Layout,
 ) -> Result<(), UpdateError> {
+    download_and_extract_reporting(info, dll_dir, layout, &mut |_| {})
+}
+
+/// 同 [`download_and_extract`]：把 zip 的读取进度经 `report` 吐出（解压阶段不再有进度）。
+pub fn download_and_extract_reporting(
+    info: &OnlineInfo,
+    dll_dir: &Path,
+    layout: Layout,
+    report: &mut dyn FnMut(crate::downloads::Progress),
+) -> Result<(), UpdateError> {
     // 下载语义收编至 downloads 模块（ADR-0021）：单 URL 也是长度为 1 的链；
     // zip 走 Large 档（含 512MB body 上限，updater 侧不再自设）。
     let urls = vec![info.zip_url.clone()];
-    let bytes = crate::downloads::first_match(&urls, crate::downloads::Policy::Large)
-        .map_err(download_error_to_update)?;
+    let bytes =
+        crate::downloads::first_match_reporting(&urls, crate::downloads::Policy::Large, report)
+            .map_err(download_error_to_update)?;
     extract_update(&bytes, dll_dir, &info.version, layout)
 }
 
