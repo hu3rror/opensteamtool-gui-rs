@@ -556,6 +556,8 @@ enum Msg {
     WizardDownload(Result<(), UpdateError>),
     /// 应用更新检查完成（Settings — 关于页签；只读查询，不进忙碌门禁）。
     AppUpdateChecked(Result<updater::AppUpdateCheckResult, UpdateError>),
+    /// 「应用并下载」结果（壳本地：只换源与下载，不进核心编排）。
+    SourceDownloaded(Result<updater::OnlineInfo, UpdateError>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -689,9 +691,15 @@ pub struct App {
     settings_open: bool,
     settings_tab: SettingsTab,
     settings_steam: SteamPathEditor,
-    source_url: String,
-    source_layout: Layout,
+    /// 补丁源草稿：只在设置页签内存在，切页签保留、关闭丢弃（ADR-0024）。
+    source_draft: PatchSource,
     source_invalid: bool,
+    /// 「应用并下载」结果：页签内一行文案的来源（None = 尚未按下）。
+    source_result: Option<Result<(), UpdateError>>,
+    /// 「应用并下载」是否在途：自管忙碌，防重复点触并行下载同一目录。
+    source_downloading: bool,
+    /// 打开设置时探测的已部署布局（提示行判据见 `deploy_hint_visible`）。
+    deployed_layout: Option<Layout>,
     /// 应用更新检查结果（Settings — 关于页签；None = 尚未检查）。检查中由 `app_update_checking` 表达（发起时覆盖旧结果）。
     app_update: Option<Result<updater::AppUpdateCheckResult, UpdateError>>,
     /// 应用更新检查是否在途（自管忙碌：只读查询不进 Busy Gate，按钮在途自禁用）。
@@ -941,6 +949,96 @@ fn layout_label(strings: &Strings, layout: Layout) -> &'static str {
         Layout::OpenSteamTool => strings.layout_ost,
         Layout::SteamDaddy => strings.layout_steamdaddy,
     }
+}
+
+/// 自定义源两行的控件宽：地址框与布局下拉同宽，且不越对话框内容宽（ADR-0024）。
+const SOURCE_FIELD_W: f32 = 320.0;
+
+/// 结果行里错误文本的上限（含省略号，ADR-0024）。
+const SOURCE_RESULT_MAX_CHARS: usize = 40;
+
+fn source_custom_row(
+    ui: &mut egui::Ui,
+    url: &mut String,
+    layout: &mut Layout,
+    strings: &Strings,
+    palette: Palette,
+) -> (egui::Response, egui::Response) {
+    let url = ui.add(
+        egui::TextEdit::singleline(url)
+            .hint_text("https://github.com/owner/repo")
+            .desired_width(SOURCE_FIELD_W),
+    );
+    ui.add_space(8.0);
+    ui.label(
+        egui::RichText::new(strings.settings_source_url)
+            .size(12.0)
+            .color(palette.weak),
+    );
+    ui.add_space(6.0);
+    ui.label(
+        egui::RichText::new(strings.settings_source_layout)
+            .size(12.0)
+            .color(palette.weak),
+    );
+    ui.add_space(6.0);
+    let layout = egui::ComboBox::from_id_salt("settings_source_layout")
+        .selected_text(layout_label(strings, *layout))
+        .width(SOURCE_FIELD_W)
+        .show_ui(ui, |ui| {
+            for option in Layout::ALL {
+                if ui
+                    .selectable_label(*layout == option, layout_label(strings, option))
+                    .clicked()
+                {
+                    *layout = option;
+                }
+            }
+        })
+        .response;
+    (url, layout)
+}
+
+fn resolve_draft(draft: &PatchSource) -> Result<PatchSource, patch_source::UrlError> {
+    match draft {
+        PatchSource::Custom { url, layout } => patch_source::custom_source(url, *layout),
+        other => Ok(other.clone()),
+    }
+}
+
+fn source_result_line(strings: &Strings, label: &str, result: &Result<(), UpdateError>) -> String {
+    match result {
+        Ok(()) => format!("{}{label}", strings.settings_source_downloaded),
+        Err(e) => {
+            let text = strings.update_error(e);
+            let first = text.lines().next().unwrap_or_default();
+            let mut short: String = first.chars().take(SOURCE_RESULT_MAX_CHARS - 1).collect();
+            if short.chars().count() < first.chars().count() {
+                short.push('…');
+            }
+            format!("{}{short}", strings.settings_source_download_failed)
+        }
+    }
+}
+
+fn deploy_hint_visible(stored: Layout, deployed: Option<Layout>) -> bool {
+    matches!(deployed, Some(deployed) if deployed != stored)
+}
+
+fn probe_deployed_layout(steam_dir: &Path) -> Option<Layout> {
+    Layout::ALL.into_iter().find(|layout| {
+        matches!(
+            dll::check_status(steam_dir, *layout),
+            dll::DeployStatus::Deployed
+        )
+    })
+}
+
+fn source_download(source: PatchSource) -> Result<updater::OnlineInfo, UpdateError> {
+    let resolved = patch_source::resolve(&source);
+    let info = updater::check_update(&resolved)?;
+    updater::download_and_extract(&info, &dll::dll_dir(), resolved.layout)?;
+    Ok(info)
 }
 
 /// 地址/布局编辑留在设置页，这里只切换已定型的源。
@@ -1322,11 +1420,7 @@ impl App {
         // 启动即应用持久化主题偏好（ADR-0016）：egui 默认 ThemePreference::System，
         // 不显式设置则固定 Dark/Light 会在首帧被 OS 主题覆盖，重启后恢复失效。
         cc.egui_ctx.set_theme(to_egui_theme_pref(theme_pref));
-        let source_url = match &config.patch_source {
-            PatchSource::Custom { url, .. } => url.clone(),
-            _ => String::new(),
-        };
-        let source_layout = config.patch_source.layout();
+        let source_draft = config.patch_source.clone();
         let mut app = Self {
             config,
             lang_pref,
@@ -1350,9 +1444,11 @@ impl App {
             settings_open: false,
             settings_tab: SettingsTab::General,
             settings_steam: SteamPathEditor::new(""),
-            source_url,
-            source_layout,
+            source_draft,
             source_invalid: false,
+            source_result: None,
+            source_downloading: false,
+            deployed_layout: None,
             app_update: None,
             app_update_checking: false,
             wizard,
@@ -1513,6 +1609,15 @@ impl App {
                 }
                 Msg::CompatPrecached { epoch, result } => {
                     self.on_core_event(AppEvent::CompatPrecacheDone { epoch, result });
+                }
+                Msg::SourceDownloaded(res) => {
+                    self.source_downloading = false;
+                    if let Ok(info) = &res {
+                        self.on_core_event(AppEvent::UpdateChecked(Ok(info.clone())));
+                        let facts = self.probe_facts_and_sync();
+                        self.on_core_event(AppEvent::FactsRefreshed(facts));
+                    }
+                    self.source_result = Some(res.map(|_| ()));
                 }
                 Msg::WizardDownload(res) => {
                     if self.wizard.is_some() {
@@ -1786,6 +1891,7 @@ impl App {
         self.settings_open = true;
         self.settings_tab = tab;
         self.settings_steam = SteamPathEditor::new(&self.core.snapshot().steam_path);
+        self.deployed_layout = probe_deployed_layout(Path::new(&self.core.snapshot().steam_path));
     }
 
     /// 无 OK/Cancel（即改即存）；补丁更新检查 / 下载并解压走忙碌门禁互斥。
@@ -1869,6 +1975,7 @@ impl App {
         if close_clicked {
             // 关闭前提交未落地编辑（兜底：无论焦点时序，有效提交都不丢失）；未变更的判定让重复提交是 no-op。
             self.commit_settings_steam_path();
+            self.discard_source_draft();
             self.settings_open = false;
         }
     }
@@ -2076,86 +2183,80 @@ impl App {
         self.compat_section(ui);
     }
 
+    /// 草稿态（ADR-0024）：选择只改草稿，按钮才落盘并只下载；部署仍是首页动作。
     fn settings_source(&mut self, ui: &mut egui::Ui) {
         card_title(ui, self.strings.settings_source_title, self.palette);
         ui.add_space(10.0);
         let busy = self.core.snapshot().busy.is_some();
-        let current = self.config.patch_source.clone();
-        let mut chosen = None;
+        let stored = self.config.patch_source.clone();
+        let mut pick: Option<PatchSource> = None;
         let mut apply = false;
         ui.add_enabled_ui(!busy, |ui| {
             egui::ComboBox::from_id_salt("settings_patch_source")
-                .selected_text(source_label(&self.strings, &current))
-                .width(320.0)
+                .selected_text(source_label(&self.strings, &self.source_draft))
+                .width(SOURCE_FIELD_W)
                 .show_ui(ui, |ui| {
                     for src in PatchSource::BUILTINS.iter() {
                         if ui
-                            .selectable_label(&current == src, source_label(&self.strings, src))
+                            .selectable_label(
+                                &self.source_draft == src,
+                                source_label(&self.strings, src),
+                            )
                             .clicked()
                         {
-                            chosen = Some(src.clone());
+                            pick = Some(src.clone());
                         }
                     }
                     if ui
                         .selectable_label(
-                            matches!(current, PatchSource::Custom { .. }),
+                            matches!(self.source_draft, PatchSource::Custom { .. }),
                             self.strings.source_custom,
                         )
                         .clicked()
                     {
-                        chosen = Some(PatchSource::Custom {
-                            url: self.source_url.trim().to_string(),
-                            layout: self.source_layout,
+                        pick = Some(match &self.source_draft {
+                            PatchSource::Custom { url, layout } => PatchSource::Custom {
+                                url: url.clone(),
+                                layout: *layout,
+                            },
+                            _ => match &stored {
+                                PatchSource::Custom { url, layout } => PatchSource::Custom {
+                                    url: url.clone(),
+                                    layout: *layout,
+                                },
+                                _ => PatchSource::Custom {
+                                    url: String::new(),
+                                    layout: stored.layout(),
+                                },
+                            },
                         });
                     }
                 });
-            ui.add_space(8.0);
-            ui.label(
-                egui::RichText::new(self.strings.settings_source_url)
-                    .size(12.0)
-                    .color(self.palette.weak),
-            );
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                let enabled = matches!(current, PatchSource::Custom { .. }) || chosen.is_some();
-                ui.add_enabled_ui(enabled, |ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.source_url)
-                            .hint_text("github.com/owner/repo")
-                            .desired_width(240.0),
-                    );
-                    ui.label(
-                        egui::RichText::new(self.strings.settings_source_layout)
-                            .size(12.0)
-                            .color(self.palette.weak),
-                    );
-                    egui::ComboBox::from_id_salt("settings_source_layout")
-                        .selected_text(layout_label(&self.strings, self.source_layout))
-                        .show_ui(ui, |ui| {
-                            for layout in Layout::ALL {
-                                if ui
-                                    .selectable_label(
-                                        self.source_layout == layout,
-                                        layout_label(&self.strings, layout),
-                                    )
-                                    .clicked()
-                                {
-                                    self.source_layout = layout;
-                                }
-                            }
-                        });
-                });
-            });
-            ui.add_space(10.0);
-            apply = styled_button(
-                ui,
-                self.strings.settings_source_apply,
-                ButtonStyle::Primary,
-                egui::vec2(96.0, 30.0),
-                true,
-                self.palette,
-            )
-            .clicked();
+            if let PatchSource::Custom { url, layout } = &mut self.source_draft {
+                ui.add_space(8.0);
+                let (url_row, layout_row) =
+                    source_custom_row(ui, url, layout, &self.strings, self.palette);
+                if url_row.changed() || layout_row.changed() {
+                    self.source_invalid = false;
+                }
+            }
+            if self.source_draft != stored {
+                ui.add_space(10.0);
+                let enabled = !self.source_downloading;
+                apply = ui
+                    .add_enabled_ui(enabled, |ui| {
+                        styled_button(
+                            ui,
+                            self.strings.settings_source_apply,
+                            ButtonStyle::Primary,
+                            egui::vec2(120.0, 30.0),
+                            true,
+                            self.palette,
+                        )
+                        .clicked()
+                    })
+                    .inner;
+            }
             ui.add_space(8.0);
             if styled_button(
                 ui,
@@ -2170,6 +2271,14 @@ impl App {
                 self.on_core_event(AppEvent::Check);
             }
         });
+        if let Some(src) = pick {
+            self.source_draft = src;
+            self.source_invalid = false;
+            self.source_result = None;
+        }
+        if apply {
+            self.apply_source_draft();
+        }
         if self.source_invalid {
             ui.add_space(6.0);
             ui.label(
@@ -2178,34 +2287,56 @@ impl App {
                     .color(self.palette.danger),
             );
         }
-        if !apply && chosen.is_none() {
-            return;
+        if let Some(result) = &self.source_result {
+            ui.add_space(6.0);
+            let color = if result.is_ok() {
+                self.palette.weak
+            } else {
+                self.palette.danger
+            };
+            let line = source_result_line(
+                &self.strings,
+                &source_label(&self.strings, &self.config.patch_source),
+                result,
+            );
+            ui.label(egui::RichText::new(line).size(12.0).color(color));
         }
-        let next = chosen.unwrap_or_else(|| match &current {
-            PatchSource::Custom { .. } => PatchSource::Custom {
-                url: self.source_url.trim().to_string(),
-                layout: self.source_layout,
-            },
-            other => other.clone(),
-        });
-        let resolved = match &next {
-            PatchSource::Custom { url, layout } => patch_source::custom_source(url, *layout),
-            _ => Ok(next.clone()),
-        };
-        match resolved {
-            Ok(source) => {
-                self.source_invalid = false;
-                if source != current {
-                    self.config.patch_source = source;
-                    self.persist_config();
-                    // 换源即重查（旧结论不可比，ADR-0023）：上下文与检查同批进核心。
-                    let ctx = self.patch_context_event();
-                    self.on_core_event(ctx);
-                    self.on_core_event(AppEvent::Check);
-                }
+        if deploy_hint_visible(self.config.patch_source.layout(), self.deployed_layout) {
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new(self.strings.settings_source_deploy_hint)
+                    .size(12.0)
+                    .color(self.palette.weak),
+            );
+        }
+    }
+
+    /// 落盘草稿并只下载该源最新 zip；非法地址原地报错，已存源不变（ADR-0024）。
+    fn apply_source_draft(&mut self) {
+        let next = match resolve_draft(&self.source_draft) {
+            Ok(source) => source,
+            Err(_) => {
+                self.source_invalid = true;
+                return;
             }
-            Err(_) => self.source_invalid = true,
+        };
+        self.source_invalid = false;
+        self.source_result = None;
+        self.source_downloading = true;
+        if next != self.config.patch_source {
+            self.config.patch_source = next.clone();
+            self.persist_config();
+            let ctx = self.patch_context_event();
+            self.on_core_event(ctx);
         }
+        let ctx = self.ctx.clone();
+        self.spawn(&ctx, move || Msg::SourceDownloaded(source_download(next)));
+    }
+
+    fn discard_source_draft(&mut self) {
+        self.source_draft = self.config.patch_source.clone();
+        self.source_invalid = false;
+        self.source_result = None;
     }
 
     fn settings_lua_config(&mut self, ui: &mut egui::Ui) {
@@ -2231,6 +2362,7 @@ impl App {
     }
 
     fn rerun_wizard(&mut self) {
+        self.discard_source_draft();
         self.settings_open = false;
         self.wizard = Some(
             wizard::Wizard::new(
@@ -4238,6 +4370,122 @@ mod tests {
                 "{fork}"
             );
         }
+    }
+
+    #[test]
+    fn apply_button_follows_draft_against_stored_source() {
+        let stored = PatchSource::SteamDaddy;
+        assert_eq!(stored, PatchSource::SteamDaddy);
+        assert_ne!(stored, PatchSource::Huanyuejue);
+        let draft = PatchSource::Custom {
+            url: "https://api.github.com/repos/a/b/releases/latest".into(),
+            layout: Layout::SteamDaddy,
+        };
+        assert_ne!(stored, draft);
+        assert_eq!(draft, draft.clone());
+    }
+
+    #[test]
+    fn invalid_custom_draft_never_becomes_a_source() {
+        let bad = PatchSource::Custom {
+            url: "github.com/a/b".into(),
+            layout: Layout::OpenSteamTool,
+        };
+        assert!(resolve_draft(&bad).is_err());
+        let ok = resolve_draft(&PatchSource::Custom {
+            url: "https://github.com/a/b".into(),
+            layout: Layout::SteamDaddy,
+        })
+        .expect("valid url");
+        assert_eq!(
+            ok,
+            PatchSource::Custom {
+                url: "https://api.github.com/repos/a/b/releases/latest".into(),
+                layout: Layout::SteamDaddy,
+            }
+        );
+        let builtin = resolve_draft(&PatchSource::SteamDaddy).expect("builtin");
+        assert_eq!(builtin, PatchSource::SteamDaddy);
+    }
+
+    #[test]
+    fn source_result_line_stays_one_short_line() {
+        let zh = Strings::new(Lang::Zh);
+        assert_eq!(
+            source_result_line(&zh, "官方源", &Ok(())),
+            format!("{}官方源", zh.settings_source_downloaded)
+        );
+        let long = UpdateError::Io(format!("{}\nsecond line", "x".repeat(80)));
+        let line = source_result_line(&zh, "官方源", &Err(long));
+        assert!(!line.contains('\n'), "{line}");
+        let tail = line
+            .strip_prefix(zh.settings_source_download_failed)
+            .expect("failure prefix");
+        assert_eq!(tail.chars().count(), 40, "{tail}");
+        assert!(tail.ends_with('…'), "{tail}");
+    }
+
+    #[test]
+    fn deploy_hint_only_while_layouts_differ() {
+        assert!(!deploy_hint_visible(Layout::SteamDaddy, None));
+        assert!(!deploy_hint_visible(
+            Layout::SteamDaddy,
+            Some(Layout::SteamDaddy)
+        ));
+        assert!(deploy_hint_visible(
+            Layout::OpenSteamTool,
+            Some(Layout::SteamDaddy)
+        ));
+    }
+
+    #[test]
+    fn source_custom_row_fits_dialog_width() {
+        let ctx = egui::Context::default();
+        install_theme(&ctx);
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(640.0, 520.0),
+            )),
+            ..Default::default()
+        };
+        let mut violations = Vec::new();
+        let mut full = ctx.run_ui(raw, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                ui.set_width(SETTINGS_DIALOG_WIDTH);
+                for lang in [Lang::Zh, Lang::En] {
+                    let s = Strings::new(lang);
+                    let mut url = String::new();
+                    let mut layout = Layout::OpenSteamTool;
+                    let content_right = ui.cursor().right();
+                    let (url_row, layout_row) =
+                        source_custom_row(ui, &mut url, &mut layout, &s, Palette::dark());
+                    if url_row.rect.right() > content_right + 0.5 {
+                        violations.push(format!(
+                            "{lang:?} 地址框右缘 {} 超过内容右界 {content_right}",
+                            url_row.rect.right()
+                        ));
+                    }
+                    if url_row.rect.width() + 0.5 < layout_row.rect.width() {
+                        violations.push(format!(
+                            "{lang:?} 地址框宽 {} 窄于布局下拉 {}",
+                            url_row.rect.width(),
+                            layout_row.rect.width()
+                        ));
+                    }
+                }
+            });
+        });
+        full.textures_delta.clear();
+        assert!(
+            violations.is_empty(),
+            "补丁源自定义行在对话框宽度 {SETTINGS_DIALOG_WIDTH} 下溢出:
+{}",
+            violations.join(
+                "
+"
+            )
+        );
     }
 
     #[test]
