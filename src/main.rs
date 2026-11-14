@@ -12,6 +12,7 @@ mod dll;
 mod downloads;
 mod fsutil;
 mod i18n;
+mod patch_source;
 mod main_page;
 mod process;
 mod singleton;
