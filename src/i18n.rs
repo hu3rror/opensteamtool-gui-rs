@@ -69,6 +69,8 @@ pub struct Strings {
     pub err_launch: &'static str,
     pub err_network: &'static str,
     pub err_no_zip: &'static str,
+    pub err_archive: &'static str,
+    pub err_missing_member: &'static str,
     pub err_parse_version: &'static str,
     pub err_compat_io: &'static str,
     pub err_write_local: &'static str,
@@ -139,6 +141,19 @@ pub struct Strings {
     pub settings_btn_patch_update_check: &'static str,
     /// 补丁检查结果文案（永不出现补丁版本号，见 #30）。
     pub settings_patch_up_to_date: &'static str,
+    pub settings_source_title: &'static str,
+    pub source_upstream: &'static str,
+    pub source_ebosvnalae: &'static str,
+    pub source_steamdaddy: &'static str,
+    pub source_custom: &'static str,
+    pub settings_source_url: &'static str,
+    pub settings_source_layout: &'static str,
+    pub layout_ost: &'static str,
+    pub layout_steamdaddy: &'static str,
+    pub settings_source_apply: &'static str,
+    pub settings_source_invalid: &'static str,
+    pub notice_client_build_mismatch: &'static str,
+    pub settings_steam_cfg_locked: &'static str,
     pub settings_patch_new_version: &'static str,
     pub settings_wizard_title: &'static str,
     pub settings_btn_rerun_wizard: &'static str,
@@ -172,9 +187,14 @@ impl Strings {
     pub fn update_error(&self, e: &UpdateError) -> String {
         match e {
             UpdateError::Network(detail) => format!("{}: {detail}", self.err_network),
-            UpdateError::NoZip => self.err_no_zip.to_string(),
+            UpdateError::NoAsset { source } => format!("{}: {source}", self.err_no_zip),
+            UpdateError::UnsupportedArchive { source } => {
+                format!("{}: {source}", self.err_archive)
+            }
+            UpdateError::MissingMember { member, source } => {
+                format!("{}: {member} ({source})", self.err_missing_member)
+            }
             UpdateError::Parse(_) => self.err_parse_version.to_string(),
-            UpdateError::NoTargetDll => self.err_no_dlls.to_string(),
             UpdateError::Io(detail) => format!("{}: {detail}", self.err_write_local),
         }
     }
@@ -287,7 +307,9 @@ impl Strings {
             err_uninstall: "卸载失败",
             err_launch: "启动 Steam 失败",
             err_network: "网络请求失败",
-            err_no_zip: "发布包中没有 .zip 资产",
+            err_no_zip: "发布包中没有符合 *-Release.zip 的资产",
+            err_archive: "发布包只有非 zip 归档（.7z/.rar 等）",
+            err_missing_member: "发布包缺少该源布局要求的文件",
             err_parse_version: "解析线上版本失败",
             err_compat_io: "本地文件操作失败",
             err_write_local: "写入本地文件失败",
@@ -334,6 +356,20 @@ impl Strings {
             settings_btn_open_download_page: "打开下载页",
             settings_btn_patch_update_check: "检查补丁更新",
             settings_patch_up_to_date: "补丁已是最新",
+            settings_source_title: "补丁源",
+            source_upstream: "官方源（已停更）",
+            source_ebosvnalae: "Huanyuejue 分支（推荐）",
+            source_steamdaddy: "SteamDaddy（社区替代）",
+            source_custom: "自定义仓库",
+            settings_source_url: "自定义源需 github.com 仓库地址（owner/repo）",
+            settings_source_layout: "文件布局",
+            layout_ost: "OpenSteamTool 布局",
+            layout_steamdaddy: "SteamDaddy 布局",
+            settings_source_apply: "应用",
+            settings_source_invalid: "地址无效：需要 github.com 仓库地址",
+            notice_client_build_mismatch: "Steam 客户端已更新，补丁可能不适配",
+            settings_steam_cfg_locked: "steam.cfg 已锁客户端自动更新",
+
             settings_patch_new_version: "发现新补丁",
             settings_wizard_title: "设置向导",
             settings_btn_rerun_wizard: "重新运行向导",
@@ -423,7 +459,9 @@ impl Strings {
             err_uninstall: "Uninstall failed",
             err_launch: "Failed to launch Steam",
             err_network: "Network request failed",
-            err_no_zip: "No .zip asset in the release",
+            err_no_zip: "No asset matching *-Release.zip in the release",
+            err_archive: "Release ships only non-zip archives (.7z/.rar)",
+            err_missing_member: "Release is missing a file this layout requires",
             err_parse_version: "Failed to parse online version",
             err_compat_io: "Local file operation failed",
             err_write_local: "Failed to write local files",
@@ -470,6 +508,20 @@ impl Strings {
             settings_btn_open_download_page: "Open Download Page",
             settings_btn_patch_update_check: "Check Patch Update",
             settings_patch_up_to_date: "Patch up to date",
+            settings_source_title: "Patch source",
+            source_upstream: "Upstream (discontinued)",
+            source_ebosvnalae: "Huanyuejue fork (recommended)",
+            source_steamdaddy: "SteamDaddy (community alternative)",
+            source_custom: "Custom repository",
+            settings_source_url: "Custom source uses a github.com repo (owner/repo)",
+            settings_source_layout: "File layout",
+            layout_ost: "OpenSteamTool layout",
+            layout_steamdaddy: "SteamDaddy layout",
+            settings_source_apply: "Apply",
+            settings_source_invalid: "Invalid: needs a github.com repository",
+            notice_client_build_mismatch: "Steam client updated; patch may not fit",
+            settings_steam_cfg_locked: "steam.cfg keeps client auto-update locked",
+
             settings_patch_new_version: "New patch available",
             settings_wizard_title: "Setup Wizard",
             settings_btn_rerun_wizard: "Re-run Wizard",
@@ -577,12 +629,29 @@ mod tests {
                 s.update_error(&UpdateError::Network("t".into())),
                 format!("{}: t", s.err_network)
             );
-            assert_eq!(s.update_error(&UpdateError::NoZip), s.err_no_zip);
+            assert_eq!(
+                s.update_error(&UpdateError::NoAsset {
+                    source: "o/r".into()
+                }),
+                format!("{}: o/r", s.err_no_zip)
+            );
+            assert_eq!(
+                s.update_error(&UpdateError::UnsupportedArchive {
+                    source: "o/r".into()
+                }),
+                format!("{}: o/r", s.err_archive)
+            );
+            assert_eq!(
+                s.update_error(&UpdateError::MissingMember {
+                    member: "version.dll.disable".into(),
+                    source: "o/r".into()
+                }),
+                format!("{}: version.dll.disable (o/r)", s.err_missing_member)
+            );
             assert_eq!(
                 s.update_error(&UpdateError::Parse("p".into())),
                 s.err_parse_version
             );
-            assert_eq!(s.update_error(&UpdateError::NoTargetDll), s.err_no_dlls);
             assert_eq!(
                 s.update_error(&UpdateError::Io("i".into())),
                 format!("{}: i", s.err_write_local)

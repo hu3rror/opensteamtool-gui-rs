@@ -14,7 +14,7 @@
 - **入口**：设置 → Steam 页新增「补丁源」小节（下拉 + 自定义 URL + 布局类型下拉 + 一句来源说明/免责声明）；主页面「补丁更新检查」按钮不变，检查与下载都按当前源执行。向导不加步，源下拉与免责声明渲染在步骤 3 决策区；`Effect::Finish` 携带源，`wizard_download` 按选中的源下载。
 - **自定义源校验**：保存时只做形状校验（`https://api.github.com/repos/<owner>/<repo>/releases/latest` 或可归一化为该形状的仓库/Release 页 URL），不做网络探测；真实失败（404、无 `.zip` 资产、清单成员缺失）在下载时以 `UpdateError` 呈现。自定义源的能力边界 = URL + 布局类型，不提供文件名映射表。
 - **客户端构建号**：读 `<Steam>/package/steam_client_win32.manifest` 的 `version` 字段（本机实测 `"version" "1769731672"`），读不到即静默降级为「未确认」。部署成功时把值写入 `config.toml` 的 `last_client_build`；`update_flow::derived` 增加 `client_build_mismatch`，不一致时给**一条**提示（当前构建号 + 快照构建号并排 + 「更新 DLL」直达），两种不一致（DLL 比客户端新 / 客户端比 DLL 新）共用同一文案，不阻断下载或部署。
-- **`steam.cfg` 不读不写**：仅在诊断区显示「检测到已禁用客户端自动更新」（外部约定：`BootStrapperInhibitAll=Enable` / `BootStrapperForceSelfUpdate=False`）。
+- **`steam.cfg` 只读不写**：读取后仅在诊断区显示「检测到已禁用客户端自动更新」（外部约定：`BootStrapperInhibitAll=Enable` / `BootStrapperForceSelfUpdate=False`）；写它等于替用户关掉客户端自动更新。
 - **`version.txt` 语义不变**：仍只写 release `tag_name` 去 `v` 前缀；来源与构建号都进 `config.toml`，扩展 `version.txt` 的方案被否决（见下）。
 
 ## 为什么做

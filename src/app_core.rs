@@ -6,7 +6,8 @@ use crate::busy::{BusyGate, BusyKind};
 use crate::compat::OverallHealthReport;
 use crate::compat_flow::{self, CompatFlow, CompatSummary, Epoch};
 use crate::dll::DeploymentFacts;
-use crate::update_flow::{UpdateFlow, UpdateNotice};
+use crate::patch_source::PatchSource;
+use crate::update_flow::{DerivedInput, UpdateFlow, UpdateNotice};
 use crate::updater::{OnlineInfo, UpdateError};
 use crate::workflow::{self, Action, Op, Precheck};
 use std::path::PathBuf;
@@ -52,6 +53,11 @@ pub enum AppEvent {
     PlanRejected(Precheck),
     /// 壳侧 probe_facts 完成（端口注入，渲染零 IO）。
     FactsRefreshed(DeploymentFacts),
+    PatchContext {
+        source: PatchSource,
+        recorded_build: Option<String>,
+        client_build: Option<String>,
+    },
     /// 壳侧 Steam 运行状态观察（工作流后 rescan；轮询边沿由 SteamStarted/Stopped 表达）。
     SteamRunningChanged(bool),
     /// Steam 启动边沿（后台监视线程）：auto-tray 决策入参。
@@ -148,6 +154,7 @@ pub enum SnapshotUpdateNotice {
     UpToDate,
     NewVersion,
     CheckFailed(UpdateError),
+    ClientBuildMismatch,
 }
 
 /// 渲染只读快照（属主拷贝，每帧一次由壳构建）。
@@ -189,6 +196,11 @@ pub struct AppCore {
     steam_running: bool,
     steam_path: String,
     facts: DeploymentFacts,
+    /// 当前补丁源（ADR-0023）：派生「已是最新」的可比性前置条件。
+    patch_source: PatchSource,
+    /// 上次部署时的客户端构建号快照（None = 从未部署或旧版本配置）。
+    recorded_build: Option<String>,
+    client_build: Option<String>,
     /// 体检流程：内部 seam 子域状态机（ADR-0019）。
     flow: CompatFlow,
     /// 窗口显隐镜像（决策入参；物理写入点在壳，经 WindowVisibleChanged 同步）。
@@ -231,6 +243,9 @@ impl AppCore {
             // 启动注入值也归一到 trim（与 CommitPath 同一视界：快照恒干净，ADR-0020）。
             steam_path: steam_path.trim().to_string(),
             facts,
+            patch_source: PatchSource::Upstream,
+            recorded_build: None,
+            client_build: None,
             flow: CompatFlow::new(),
             window_visible: true,
             pending_auto_hide: false,
@@ -319,7 +334,12 @@ impl AppCore {
                 // 此处防御性兜底（派生过时竞态下静默丢弃，等价现状点击只发生在可下载时）。
                 let Some(info) = self
                     .update_flow
-                    .derived(self.facts.known_local_version())
+                    .derived(DerivedInput {
+                        local_version: self.facts.known_local_version(),
+                        current_source: self.patch_source.clone(),
+                        current_build: self.client_build.as_deref(),
+                        recorded_build: self.recorded_build.as_deref(),
+                    })
                     .download
                     .cloned()
                 else {
@@ -349,6 +369,15 @@ impl AppCore {
                 return vec![AppEffect::RefreshFacts];
             }
             AppEvent::FactsRefreshed(facts) => self.facts = facts,
+            AppEvent::PatchContext {
+                source,
+                recorded_build,
+                client_build,
+            } => {
+                self.patch_source = source;
+                self.recorded_build = recorded_build;
+                self.client_build = client_build;
+            }
             AppEvent::SteamRunningChanged(running) => {
                 self.steam_running = running;
                 // 隐窗是一次性合成动作：待决（WorkflowDone 后重读运行状态）且窗口仍可见时才产出一次；
@@ -413,7 +442,12 @@ impl AppCore {
 
     /// 渲染消费只读快照（每帧属主拷贝；更新派生当场计算，零 IO）。
     pub fn snapshot(&self) -> Snapshot {
-        let derived = self.update_flow.derived(self.facts.known_local_version());
+        let derived = self.update_flow.derived(DerivedInput {
+            local_version: self.facts.known_local_version(),
+            current_source: self.patch_source.clone(),
+            current_build: self.client_build.as_deref(),
+            recorded_build: self.recorded_build.as_deref(),
+        });
         let compat_display = self.flow.display();
         Snapshot {
             facts: self.facts.clone(),
@@ -427,6 +461,7 @@ impl AppCore {
                     UpdateNotice::UpToDate => SnapshotUpdateNotice::UpToDate,
                     UpdateNotice::NewVersion => SnapshotUpdateNotice::NewVersion,
                     UpdateNotice::CheckFailed(e) => SnapshotUpdateNotice::CheckFailed(e.clone()),
+                    UpdateNotice::ClientBuildMismatch => SnapshotUpdateNotice::ClientBuildMismatch,
                 }),
                 download: derived.download.cloned(),
             },
@@ -448,6 +483,7 @@ mod tests {
 
     fn online(version: &str) -> OnlineInfo {
         OnlineInfo {
+            source: PatchSource::Upstream,
             version: version.into(),
             zip_url: "https://x/z.zip".into(),
         }

@@ -23,6 +23,7 @@ use crate::main_page::{
     self, ICON_COMPACT, ICON_STANDARD, IconKind, MainPageVm, PrimaryAction, PrimaryKind,
     SecondaryAction, UpdateConclusion, UpdateKind,
 };
+use crate::patch_source::{self, Layout, PatchSource};
 use crate::process::{self, MonitorUpdate, SteamEvent, SteamMonitor, SteamMonitorHandle};
 use crate::singleton::Singleton;
 use crate::steam;
@@ -665,6 +666,9 @@ pub struct App {
     settings_open: bool,
     settings_tab: SettingsTab,
     settings_steam: SteamPathEditor,
+    source_url: String,
+    source_layout: Layout,
+    source_invalid: bool,
     /// 应用更新检查结果（Settings — 关于页签；None = 尚未检查）。检查中由 `app_update_checking` 表达（发起时覆盖旧结果）。
     app_update: Option<Result<updater::AppUpdateCheckResult, UpdateError>>,
     /// 应用更新检查是否在途（自管忙碌：只读查询不进 Busy Gate，按钮在途自禁用）。
@@ -894,9 +898,59 @@ fn centered_combo<T: Copy + PartialEq>(
     chosen
 }
 
-fn wizard_download() -> Result<(), UpdateError> {
-    let info = updater::check_update()?;
-    updater::download_and_extract(&info, &dll::dll_dir())
+fn wizard_download(source: PatchSource) -> Result<(), UpdateError> {
+    let resolved = patch_source::resolve(&source);
+    let info = updater::check_update(&resolved)?;
+    updater::download_and_extract(&info, &dll::dll_dir(), resolved.layout)
+}
+
+fn source_label(strings: &Strings, source: &PatchSource) -> String {
+    let name = match source {
+        PatchSource::Upstream => strings.source_upstream,
+        PatchSource::Huanyuejue => strings.source_ebosvnalae,
+        PatchSource::SteamDaddy => strings.source_steamdaddy,
+        PatchSource::Custom { .. } => strings.source_custom,
+    };
+    format!("{name} · {}", source.repo_slug())
+}
+
+fn layout_label(strings: &Strings, layout: Layout) -> &'static str {
+    match layout {
+        Layout::OpenSteamTool => strings.layout_ost,
+        Layout::SteamDaddy => strings.layout_steamdaddy,
+    }
+}
+
+/// 地址/布局编辑留在设置页，这里只切换已定型的源。
+fn wizard_source_row(
+    ui: &mut egui::Ui,
+    strings: &Strings,
+    current: &PatchSource,
+) -> Option<PatchSource> {
+    let mut chosen = None;
+    ui.vertical_centered(|ui| {
+        egui::ComboBox::from_id_salt("wizard_patch_source")
+            .selected_text(source_label(strings, current))
+            .width(260.0)
+            .show_ui(ui, |ui| {
+                for src in PatchSource::BUILTINS.iter() {
+                    if ui
+                        .selectable_label(current == src, source_label(strings, src))
+                        .clicked()
+                    {
+                        chosen = Some(src.clone());
+                    }
+                }
+                if matches!(current, PatchSource::Custom { .. })
+                    && ui
+                        .selectable_label(true, source_label(strings, current))
+                        .clicked()
+                {
+                    chosen = Some(current.clone());
+                }
+            });
+    });
+    chosen
 }
 
 /// 步骤 3 展示决策（纯函数）：提示文案、是否错误色、主按钮、是否显示跳过；陈述永远派生自状态（文件本位判据见 ADR-0011）。
@@ -1066,6 +1120,16 @@ fn wizard_steps_ui(
                                         .color(palette.danger),
                                 );
                             }
+                            ui.add_space(12.0);
+                            ui.label(
+                                egui::RichText::new(strings.settings_source_title)
+                                    .size(12.0)
+                                    .color(palette.weak),
+                            );
+                            ui.add_space(6.0);
+                            if let Some(source) = wizard_source_row(ui, &strings, &view.source) {
+                                events.push(wizard::Event::SourceChosen(source));
+                            }
                             ui.add_space(14.0);
                             if styled_button(
                                 ui,
@@ -1183,9 +1247,10 @@ impl App {
         };
         let wizard = wizard::should_show(&config::config_path()).then(|| {
             wizard::Wizard::new(lang_pref, config.theme, steam_path.clone(), dll::dll_dir())
+                .with_source(config.patch_source.clone())
         });
         let steam_dir = Path::new(&steam_path);
-        let facts = dll::probe_facts(steam_dir, &dll::dll_dir());
+        let facts = dll::probe_facts(steam_dir, &dll::dll_dir(), config.patch_source.layout());
         let steam_state = Arc::new(SteamState::new());
         let (steam_monitor, steam_running) = SteamMonitor::spawn(steam_state.clone(), {
             let tx = tx.clone();
@@ -1235,6 +1300,11 @@ impl App {
         // 启动即应用持久化主题偏好（ADR-0016）：egui 默认 ThemePreference::System，
         // 不显式设置则固定 Dark/Light 会在首帧被 OS 主题覆盖，重启后恢复失效。
         cc.egui_ctx.set_theme(to_egui_theme_pref(theme_pref));
+        let source_url = match &config.patch_source {
+            PatchSource::Custom { url, .. } => url.clone(),
+            _ => String::new(),
+        };
+        let source_layout = config.patch_source.layout();
         let mut app = Self {
             config,
             lang_pref,
@@ -1258,6 +1328,9 @@ impl App {
             settings_open: false,
             settings_tab: SettingsTab::General,
             settings_steam: SteamPathEditor::new(""),
+            source_url,
+            source_layout,
+            source_invalid: false,
             app_update: None,
             app_update_checking: false,
             wizard,
@@ -1267,6 +1340,8 @@ impl App {
             logo: brand::logo_texture(&cc.egui_ctx, palette.dark_mode),
             icon_synced: false,
         };
+        let patch_ctx = app.patch_context_event();
+        app.on_core_event(patch_ctx);
         // 窗口图标不在 App::new 发送：ViewportCommand::Icon 在窗口显示前不生效（实测被吞，
         // 标题栏沿用 ViewportBuilder 图标）。初始图标已按 config 主题选版（见 main.rs），
         // System 模式校正与后续主题切换走 ui() 的 palette 钩子/首帧同步。
@@ -1378,18 +1453,23 @@ impl App {
             return;
         }
         let steam_dir = Path::new(&steam_path);
-        if let Err(e) = dll::ensure_lua_dir(steam_dir) {
+        let layout = self.config.patch_source.layout();
+        if let Err(e) = dll::ensure_lua_dir(steam_dir, layout) {
             eprintln!("[opensteamtool-manager] {e}");
             return;
         }
-        updater::open_path(&dll::lua_dir(steam_dir));
+        updater::open_path(&dll::lua_dir(steam_dir, layout));
     }
 
     /// 文件事实探测：探测 → 同步托盘可见性，返回事实；回喂由调用者经效果队列完成（P5：观察回喂统一走队列，不嵌套调事件入口）。
     fn probe_facts_and_sync(&mut self) -> DeploymentFacts {
         // 工作路径在核心（ADR-0020），探测从快照取（与渲染/seed 同源）。
         let steam_path = self.core.snapshot().steam_path.clone();
-        let facts = dll::probe_facts(Path::new(&steam_path), &dll::dll_dir());
+        let facts = dll::probe_facts(
+            Path::new(&steam_path),
+            &dll::dll_dir(),
+            self.config.patch_source.layout(),
+        );
         self.sync_tray_actions_enabled(facts.status);
         facts
     }
@@ -1433,8 +1513,38 @@ impl App {
     /// 编排核心事件入口：决策 → 效果进统一执行器；同步效果（plan/probe/rescan）喂回的观察
     /// 事件续出的效果追加进队尾（P5：统一入口、固定顺序，队列深度 ≤ 3）。
     fn on_core_event(&mut self, evt: AppEvent) {
+        // 工作流成功即部署状态可能改变：构建号快照随之重记（ADR-0023 信任模型）。
+        let resync = matches!(evt, AppEvent::WorkflowDone { result: Ok(()), .. });
         let ctx = self.ctx.clone();
         let queue = self.core.step(evt).into();
+        self.exec_app_effects(&ctx, queue);
+        if resync {
+            self.refresh_client_build();
+        }
+    }
+
+    fn patch_context_event(&self) -> AppEvent {
+        AppEvent::PatchContext {
+            source: self.config.patch_source.clone(),
+            recorded_build: self.config.last_client_build.clone(),
+            client_build: steam::read_client_build(Path::new(&self.config.steam_path)),
+        }
+    }
+
+    /// 部署成功后重记构建号快照；未部署（卸载/失败）时清空，避免下一次部署误判一致。
+    /// 事件入口只开一次（ADR-0019 P5）：这里顺序调 `core.step`，不嵌套 `on_core_event`。
+    fn refresh_client_build(&mut self) {
+        let steam_path = self.core.snapshot().steam_path;
+        let deployed = matches!(
+            self.probe_facts_and_sync().status,
+            crate::dll::DeployStatus::Deployed
+        );
+        self.config.last_client_build = deployed
+            .then(|| steam::read_client_build(Path::new(&steam_path)))
+            .flatten();
+        self.persist_config();
+        let ctx = self.ctx.clone();
+        let queue = self.core.step(self.patch_context_event()).into();
         self.exec_app_effects(&ctx, queue);
     }
 
@@ -1443,17 +1553,19 @@ impl App {
         while let Some(effect) = queue.pop_front() {
             match effect {
                 AppEffect::SpawnUpdateCheck => {
+                    let resolved = patch_source::resolve(&self.config.patch_source);
                     let ctx = ctx.clone();
-                    self.spawn(&ctx, || {
-                        Msg::Core(AppEvent::UpdateChecked(updater::check_update()))
+                    self.spawn(&ctx, move || {
+                        Msg::Core(AppEvent::UpdateChecked(updater::check_update(&resolved)))
                     });
                 }
                 AppEffect::SpawnUpdateDownload { info } => {
                     let dll_dir = dll::dll_dir();
+                    let layout = info.source.layout();
                     let ctx = self.ctx.clone();
                     self.spawn(&ctx, move || {
                         Msg::Core(AppEvent::Downloaded(updater::download_and_extract(
-                            &info, &dll_dir,
+                            &info, &dll_dir, layout,
                         )))
                     });
                 }
@@ -1463,7 +1575,9 @@ impl App {
                     steam_dir,
                 } => {
                     let dll_dir = dll::dll_dir();
-                    let evt = match workflow::plan(action, kill_first, &steam_dir, &dll_dir) {
+                    let layout = self.config.patch_source.layout();
+                    let evt = match workflow::plan(action, kill_first, &steam_dir, &dll_dir, layout)
+                    {
                         Ok(ops) => AppEvent::PlanOk { action, ops },
                         Err(precheck) => AppEvent::PlanRejected(precheck),
                     };
@@ -1475,6 +1589,7 @@ impl App {
                     steam_dir,
                 } => {
                     let dll_dir = dll::dll_dir();
+                    let layout = self.config.patch_source.layout();
                     // 一个句柄移入闭包（phase 回调 repaint），一个借给 spawn（其内部 clone 后移入线程）。
                     let repaint_ctx = self.ctx.clone();
                     let spawn_ctx = repaint_ctx.clone();
@@ -1487,6 +1602,7 @@ impl App {
                                 dll_dir,
                                 steam_dir,
                                 steam,
+                                layout,
                             },
                             |phase| {
                                 let _ = tx.send(Msg::Core(AppEvent::Phase(phase)));
@@ -1540,8 +1656,13 @@ impl App {
                     });
                 }
                 AppEffect::WizardDownload => {
+                    let source = self
+                        .wizard
+                        .as_ref()
+                        .map(|w| w.view().source)
+                        .unwrap_or_else(|| self.config.patch_source.clone());
                     let ctx2 = ctx.clone();
-                    self.spawn(&ctx2, || Msg::WizardDownload(wizard_download()));
+                    self.spawn(&ctx2, move || Msg::WizardDownload(wizard_download(source)));
                 }
                 AppEffect::WizardFinish {
                     language,
@@ -1555,6 +1676,9 @@ impl App {
                     self.config.language = language;
                     self.config.theme = theme;
                     self.config.steam_path = steam_path.clone();
+                    if let Some(source) = self.wizard.as_ref().map(|w| w.view().source) {
+                        self.config.patch_source = source;
+                    }
                     self.persist_config();
                     self.wizard = None;
                     // 向导终局与设置提交收缝到同一写入点（ADR-0020）。
@@ -1919,8 +2043,139 @@ impl App {
                     .color(self.palette.danger),
             );
         }
+        // steam.cfg 只读展示（ADR-0023：只探测不写；改写 = 越权改变客户端行为）。
+        if steam::auto_update_disabled(Path::new(&self.core.snapshot().steam_path)) {
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new(self.strings.settings_steam_cfg_locked)
+                    .size(12.0)
+                    .color(self.palette.weak),
+            );
+        }
+        ui.add_space(16.0);
+
+        self.settings_source(ui);
 
         self.compat_section(ui);
+    }
+
+    fn settings_source(&mut self, ui: &mut egui::Ui) {
+        card_title(ui, self.strings.settings_source_title, self.palette);
+        ui.add_space(10.0);
+        let busy = self.core.snapshot().busy.is_some();
+        let current = self.config.patch_source.clone();
+        let mut chosen = None;
+        let mut apply = false;
+        ui.add_enabled_ui(!busy, |ui| {
+            egui::ComboBox::from_id_salt("settings_patch_source")
+                .selected_text(source_label(&self.strings, &current))
+                .width(320.0)
+                .show_ui(ui, |ui| {
+                    for src in PatchSource::BUILTINS.iter() {
+                        if ui
+                            .selectable_label(&current == src, source_label(&self.strings, src))
+                            .clicked()
+                        {
+                            chosen = Some(src.clone());
+                        }
+                    }
+                    if ui
+                        .selectable_label(
+                            matches!(current, PatchSource::Custom { .. }),
+                            self.strings.source_custom,
+                        )
+                        .clicked()
+                    {
+                        chosen = Some(PatchSource::Custom {
+                            url: self.source_url.trim().to_string(),
+                            layout: self.source_layout,
+                        });
+                    }
+                });
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new(self.strings.settings_source_url)
+                    .size(12.0)
+                    .color(self.palette.weak),
+            );
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                let enabled = matches!(current, PatchSource::Custom { .. }) || chosen.is_some();
+                ui.add_enabled_ui(enabled, |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.source_url)
+                            .hint_text("github.com/owner/repo")
+                            .desired_width(240.0),
+                    );
+                    ui.label(
+                        egui::RichText::new(self.strings.settings_source_layout)
+                            .size(12.0)
+                            .color(self.palette.weak),
+                    );
+                    egui::ComboBox::from_id_salt("settings_source_layout")
+                        .selected_text(layout_label(&self.strings, self.source_layout))
+                        .show_ui(ui, |ui| {
+                            for layout in Layout::ALL {
+                                if ui
+                                    .selectable_label(
+                                        self.source_layout == layout,
+                                        layout_label(&self.strings, layout),
+                                    )
+                                    .clicked()
+                                {
+                                    self.source_layout = layout;
+                                }
+                            }
+                        });
+                });
+            });
+            ui.add_space(10.0);
+            apply = styled_button(
+                ui,
+                self.strings.settings_source_apply,
+                ButtonStyle::Primary,
+                egui::vec2(96.0, 30.0),
+                true,
+                self.palette,
+            )
+            .clicked();
+        });
+        if self.source_invalid {
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new(self.strings.settings_source_invalid)
+                    .size(12.0)
+                    .color(self.palette.danger),
+            );
+        }
+        if !apply && chosen.is_none() {
+            return;
+        }
+        let next = chosen.unwrap_or_else(|| match &current {
+            PatchSource::Custom { .. } => PatchSource::Custom {
+                url: self.source_url.trim().to_string(),
+                layout: self.source_layout,
+            },
+            other => other.clone(),
+        });
+        let resolved = match &next {
+            PatchSource::Custom { url, layout } => patch_source::custom_source(url, *layout),
+            _ => Ok(next.clone()),
+        };
+        match resolved {
+            Ok(source) => {
+                self.source_invalid = false;
+                if source != current {
+                    self.config.patch_source = source;
+                    self.persist_config();
+                    // 换源即重查（旧结论不可比，ADR-0023）：上下文与检查同批进核心。
+                    let ctx = self.patch_context_event();
+                    self.on_core_event(ctx);
+                    self.on_core_event(AppEvent::Check);
+                }
+            }
+            Err(_) => self.source_invalid = true,
+        }
     }
 
     fn settings_lua_config(&mut self, ui: &mut egui::Ui) {
@@ -1947,12 +2202,15 @@ impl App {
 
     fn rerun_wizard(&mut self) {
         self.settings_open = false;
-        self.wizard = Some(wizard::Wizard::new(
-            self.lang_pref,
-            self.theme_pref,
-            self.core.snapshot().steam_path.clone(),
-            dll::dll_dir(),
-        ));
+        self.wizard = Some(
+            wizard::Wizard::new(
+                self.lang_pref,
+                self.theme_pref,
+                self.core.snapshot().steam_path.clone(),
+                dll::dll_dir(),
+            )
+            .with_source(self.config.patch_source.clone()),
+        );
     }
     /// 顶部应用头：品牌 LOGO + 名称 + 设置齿轮（spec §7；LOGO 深/浅双态，GLOSSARY「应用图标」）。
     fn header(&mut self, ui: &mut egui::Ui) {
@@ -2607,6 +2865,13 @@ impl App {
                         )
                         .on_hover_text(detail);
                     }
+                    UpdateConclusion::ClientBuildMismatch => {
+                        ui.label(
+                            egui::RichText::new(self.strings.notice_client_build_mismatch)
+                                .size(12.5)
+                                .color(self.palette.danger),
+                        );
+                    }
                 }
             }
         });
@@ -2798,6 +3063,7 @@ impl App {
                 SnapshotUpdateNotice::UpToDate => UpdateConclusion::UpToDate,
                 SnapshotUpdateNotice::NewVersion => UpdateConclusion::NewVersion,
                 SnapshotUpdateNotice::CheckFailed(_) => UpdateConclusion::CheckFailed,
+                SnapshotUpdateNotice::ClientBuildMismatch => UpdateConclusion::ClientBuildMismatch,
             }),
             apply_failed: matches!(
                 snap.notice,
@@ -3441,6 +3707,7 @@ mod tests {
         let mut full = ctx.run_ui(raw, |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
                 let view = wizard::View {
+                    source: PatchSource::Upstream,
                     step: WizardStep::Language,
                     language: Language::Auto,
                     theme: ThemePreference::System,
@@ -3508,6 +3775,7 @@ mod tests {
                     let mut full = ctx.run_ui(raw, |ui| {
                         egui::CentralPanel::default().show(ui, |ui| {
                             let view = wizard::View {
+                                source: PatchSource::Upstream,
                                 step: WizardStep::SteamPath,
                                 language: Language::Auto,
                                 theme: ThemePreference::System,
@@ -3577,15 +3845,15 @@ mod tests {
                 2,
                 vec![
                     egui::Event::Text("x".into()),
-                    egui::Event::PointerMoved(egui::Pos2::new(320.0, 190.0)),
+                    egui::Event::PointerMoved(egui::Pos2::new(320.0, 262.0)),
                     egui::Event::PointerButton {
-                        pos: egui::Pos2::new(320.0, 190.0),
+                        pos: egui::Pos2::new(320.0, 262.0),
                         button: egui::PointerButton::Primary,
                         pressed: true,
                         modifiers: Default::default(),
                     },
                     egui::Event::PointerButton {
-                        pos: egui::Pos2::new(320.0, 190.0),
+                        pos: egui::Pos2::new(320.0, 262.0),
                         button: egui::PointerButton::Primary,
                         pressed: false,
                         modifiers: Default::default(),
@@ -3604,6 +3872,7 @@ mod tests {
             let mut full = ctx.run_ui(raw, |ui| {
                 egui::CentralPanel::default().show(ui, |ui| {
                     let view = wizard::View {
+                        source: PatchSource::Upstream,
                         step: WizardStep::SteamPath,
                         language: Language::Auto,
                         theme: ThemePreference::System,

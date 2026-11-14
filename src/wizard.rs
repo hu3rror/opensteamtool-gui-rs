@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::config::{self, Language, ThemePreference};
 use crate::dll;
+use crate::patch_source::PatchSource;
 use crate::updater::UpdateError;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -36,6 +37,8 @@ pub enum Event {
     ThemeChosen(ThemePreference),
     ThemeSubmitted,
     PathEdited(String),
+    /// 步骤 3 选定补丁源（与语言/主题同款：选定即生效，但不推进——ADR-0023）。
+    SourceChosen(PatchSource),
     /// 步骤 3 提交路径：有效则推进到步骤 4；无效则停留。
     PathSubmitted,
     DownloadRequested,
@@ -63,6 +66,8 @@ pub struct View {
     pub theme: ThemePreference,
     pub steam_path: String,
     pub path_valid: bool,
+    /// 向导内的补丁源草稿（完成时才落盘；重跑向导以现值播种）。
+    pub source: PatchSource,
     pub download: DownloadState,
 }
 
@@ -71,7 +76,7 @@ pub struct Wizard {
     language: Language,
     theme: ThemePreference,
     steam_path: String,
-    /// 步骤 3 就绪判据的文件系统注入点（App 传 `dll::dll_dir()`）。
+    source: PatchSource,
     dll_dir: PathBuf,
     download: DownloadState,
     finished: bool,
@@ -91,10 +96,16 @@ impl Wizard {
             language,
             theme,
             steam_path,
+            source: PatchSource::default(),
             dll_dir,
             download: DownloadState::Idle,
             finished: false,
         }
+    }
+
+    pub fn with_source(mut self, source: PatchSource) -> Self {
+        self.source = source;
+        self
     }
 
     pub fn step(&mut self, event: Event) -> (View, Vec<Effect>) {
@@ -118,6 +129,10 @@ impl Wizard {
                 self.step = Step::SteamPath;
                 Vec::new()
             }
+            Event::SourceChosen(source) if self.step == Step::SteamPath => {
+                self.source = source;
+                Vec::new()
+            }
             Event::PathEdited(path) if self.step == Step::SteamPath => {
                 self.steam_path = path;
                 Vec::new()
@@ -125,7 +140,8 @@ impl Wizard {
             Event::PathSubmitted if self.step == Step::SteamPath => {
                 if dll::is_valid_steam_dir(&self.steam_path) {
                     self.step = Step::Download;
-                    self.download = if dll::target_dlls_present(&self.dll_dir) {
+                    self.download = if dll::target_dlls_present(&self.dll_dir, self.source.layout())
+                    {
                         DownloadState::Ready
                     } else {
                         DownloadState::Idle
@@ -171,6 +187,7 @@ impl Wizard {
             theme: self.theme,
             steam_path: self.steam_path.clone(),
             path_valid: dll::is_valid_steam_dir(&self.steam_path),
+            source: self.source.clone(),
             download: self.download.clone(),
         }
     }
@@ -201,6 +218,7 @@ pub fn should_show(config_path: &Path) -> bool {
 mod tests {
     use super::*;
     use crate::config::{CONFIG_FILE, CONFIG_VERSION, Config, ThemePreference};
+    use crate::patch_source::Layout;
 
     fn tmp_dir(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("ost_wiz_{}_{}", name, std::process::id()));
@@ -394,7 +412,9 @@ mod tests {
     fn download_failure_then_skip_finishes() {
         let steam = tmp_dir("skip");
         let mut w = entered_download(&steam, Language::En, ThemePreference::System);
-        w.step(Event::DownloadDone(Err(UpdateError::NoZip)));
+        w.step(Event::DownloadDone(Err(UpdateError::NoAsset {
+            source: "x".into(),
+        })));
         assert!(!w.finished());
 
         let (_, fx) = w.step(Event::SkipDownload);
@@ -661,8 +681,8 @@ mod tests {
     fn patch_present_enters_ready_state() {
         let steam = tmp_dir("ready_steam");
         let dlls = tmp_dir("ready_dlls");
-        for name in dll::TARGET_DLLS {
-            std::fs::write(dlls.join(name), b"x").unwrap();
+        for file in Layout::OpenSteamTool.root_files() {
+            std::fs::write(dlls.join(file.name), b"x").unwrap();
         }
 
         let mut w = Wizard::new(
@@ -706,8 +726,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&missing);
         let empty = tmp_dir("absent_empty");
         let partial = tmp_dir("absent_partial");
-        std::fs::write(partial.join(dll::TARGET_DLLS[0]), b"x").unwrap();
-        std::fs::write(partial.join(dll::TARGET_DLLS[1]), b"x").unwrap();
+        std::fs::write(
+            partial.join(Layout::OpenSteamTool.root_files()[0].name),
+            b"x",
+        )
+        .unwrap();
+        std::fs::write(
+            partial.join(Layout::OpenSteamTool.root_files()[1].name),
+            b"x",
+        )
+        .unwrap();
         let version_only = tmp_dir("absent_version");
         std::fs::write(version_only.join(dll::VERSION_FILE), b"1.4.8").unwrap();
 

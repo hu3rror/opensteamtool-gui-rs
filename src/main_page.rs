@@ -18,6 +18,7 @@ pub enum UpdateConclusion {
     UpToDate,
     NewVersion,
     CheckFailed,
+    ClientBuildMismatch,
 }
 
 /// 一帧渲染的全部业务输入快照（由 App 逐帧拍取，纯数据可单测）。

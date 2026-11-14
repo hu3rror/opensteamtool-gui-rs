@@ -86,9 +86,91 @@ fn close_steam_with_budget(
     steam.kill(steam_dir)
 }
 
+const CLIENT_MANIFEST: &str = "package/steam_client_win32.manifest";
+const STEAM_CFG: &str = "steam.cfg";
+
+/// 读本机 Steam 客户端构建号（manifest 的 `version` 字段）；读不到即 `None`（静默降级为「未确认」）。
+pub fn read_client_build(steam_dir: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(steam_dir.join(CLIENT_MANIFEST)).ok()?;
+    parse_client_build(&text)
+}
+
+/// 从 manifest 文本取 `"version"` 后的首个引号值（VDF 片段，不做完整解析）。
+pub fn parse_client_build(manifest: &str) -> Option<String> {
+    let rest = manifest.split("\"version\"").nth(1)?;
+    let start = rest.find('"')? + 1;
+    let value = &rest[start..];
+    let end = value.find('"')?;
+    let value = value[..end].trim();
+    (!value.is_empty() && value.chars().all(|c| c.is_ascii_digit())).then(|| value.to_string())
+}
+
+/// `steam.cfg` 是否已禁用客户端自动更新（只读显示，永不写——ADR-0023）。
+pub fn auto_update_disabled(steam_dir: &Path) -> bool {
+    match std::fs::read_to_string(steam_dir.join(STEAM_CFG)) {
+        Ok(text) => sets_bootstrapper_lock(&text),
+        Err(_) => false,
+    }
+}
+
+fn sets_bootstrapper_lock(cfg: &str) -> bool {
+    cfg.lines().any(|line| {
+        let line = line.trim();
+        let Some((key, value)) = line.split_once('=') else {
+            return false;
+        };
+        let (key, value) = (key.trim(), value.trim().trim_matches('"'));
+        key.eq_ignore_ascii_case("BootStrapperInhibitAll") && value.eq_ignore_ascii_case("Enable")
+            || key.eq_ignore_ascii_case("BootStrapperForceSelfUpdate")
+                && value.eq_ignore_ascii_case("False")
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn client_build_parses_version_field() {
+        let manifest = r#""steam_client_win32" {"version" "1769731672" "bins_win32" {}}"#;
+        assert_eq!(parse_client_build(manifest).as_deref(), Some("1769731672"));
+    }
+
+    #[test]
+    fn client_build_rejects_missing_or_non_numeric() {
+        assert_eq!(parse_client_build(""), None);
+        assert_eq!(parse_client_build(r#"{"version" "abc"}"#), None);
+        assert_eq!(parse_client_build(r#"{"version" ""}"#), None);
+    }
+
+    #[test]
+    fn client_build_reads_manifest_or_none() {
+        let dir = std::env::temp_dir().join(format!("ost_manifest_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("package")).unwrap();
+        assert_eq!(read_client_build(&dir), None, "无 manifest 应静默降级");
+
+        std::fs::write(dir.join(CLIENT_MANIFEST), r#"{"version" "1769731672"}"#).unwrap();
+        assert_eq!(read_client_build(&dir).as_deref(), Some("1769731672"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn auto_update_lock_detects_either_key() {
+        assert!(sets_bootstrapper_lock("BootStrapperInhibitAll=Enable\n"));
+        assert!(sets_bootstrapper_lock(
+            "bootstrapperforceselfupdate = \"False\"\r\n"
+        ));
+        assert!(!sets_bootstrapper_lock("BootStrapperInhibitAll=Disable"));
+        assert!(!sets_bootstrapper_lock("RunSteam=1"));
+    }
+
+    #[test]
+    fn auto_update_lock_missing_cfg_is_false() {
+        let dir = std::env::temp_dir().join(format!("ost_steamcfg_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!auto_update_disabled(&dir));
+    }
 
     #[test]
     fn launch_missing_steam_errors() {

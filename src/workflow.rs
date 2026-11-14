@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use crate::busy::BusyKind;
 use crate::dll;
+use crate::patch_source::Layout;
 use crate::steam;
 use crate::steam_state::SteamState;
 
@@ -52,6 +53,7 @@ pub struct WorkflowCtx {
     pub dll_dir: PathBuf,
     pub steam_dir: PathBuf,
     pub steam: Arc<SteamState>,
+    pub layout: Layout,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -75,11 +77,12 @@ pub fn plan(
     kill_first: bool,
     steam_dir: &Path,
     dll_dir: &Path,
+    layout: Layout,
 ) -> Result<Vec<Op>, Precheck> {
     if !steam_dir.is_dir() {
         return Err(Precheck::InvalidSteamDir);
     }
-    if action == Action::ApplyAndLaunch && !dll::target_dlls_present(dll_dir) {
+    if action == Action::ApplyAndLaunch && !dll::target_dlls_present(dll_dir, layout) {
         return Err(Precheck::MissingTargetDlls);
     }
     let needs_exe = matches!(
@@ -126,8 +129,8 @@ where
         on_phase(op.phase());
         let res = match op {
             Op::CloseSteam => steam::close_steam(&ctx.steam, &ctx.steam_dir),
-            Op::Deploy => dll::deploy(&ctx.dll_dir, &ctx.steam_dir),
-            Op::Uninstall => dll::uninstall(&ctx.steam_dir),
+            Op::Deploy => dll::deploy(&ctx.dll_dir, &ctx.steam_dir, ctx.layout),
+            Op::Uninstall => dll::uninstall(&ctx.steam_dir, ctx.layout),
             Op::Launch => steam::launch_steam(&ctx.steam, &ctx.steam_dir),
         };
         res.map_err(|message| WorkflowError { op, message })?;
@@ -138,13 +141,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dll::TARGET_DLLS;
+    use crate::patch_source::Layout;
 
     fn tmp_dlls(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("ost_wf_{}_{}", name, std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        for d in TARGET_DLLS {
-            std::fs::write(dir.join(d), b"x").unwrap();
+        for f in Layout::OpenSteamTool.root_files() {
+            std::fs::write(dir.join(f.name), b"x").unwrap();
         }
         dir
     }
@@ -164,39 +167,81 @@ mod tests {
         let steam = tmp_steam("plan_steam", true);
 
         assert_eq!(
-            plan(Action::ApplyAndLaunch, false, &steam, &dlls).unwrap(),
+            plan(
+                Action::ApplyAndLaunch,
+                false,
+                &steam,
+                &dlls,
+                Layout::OpenSteamTool
+            )
+            .unwrap(),
             vec![Op::Deploy, Op::Launch]
         );
         assert_eq!(
-            plan(Action::ApplyAndLaunch, true, &steam, &dlls).unwrap(),
+            plan(
+                Action::ApplyAndLaunch,
+                true,
+                &steam,
+                &dlls,
+                Layout::OpenSteamTool
+            )
+            .unwrap(),
             vec![Op::CloseSteam, Op::Deploy, Op::Launch]
         );
         assert_eq!(
-            plan(Action::Launch, false, &steam, &dlls).unwrap(),
+            plan(Action::Launch, false, &steam, &dlls, Layout::OpenSteamTool).unwrap(),
             vec![Op::Launch]
         );
         assert_eq!(
-            plan(Action::ExitAndUninstall, false, &steam, &dlls).unwrap(),
+            plan(
+                Action::ExitAndUninstall,
+                false,
+                &steam,
+                &dlls,
+                Layout::OpenSteamTool
+            )
+            .unwrap(),
             vec![Op::Uninstall]
         );
         assert_eq!(
-            plan(Action::ExitAndUninstall, true, &steam, &dlls).unwrap(),
+            plan(
+                Action::ExitAndUninstall,
+                true,
+                &steam,
+                &dlls,
+                Layout::OpenSteamTool
+            )
+            .unwrap(),
             vec![Op::CloseSteam, Op::Uninstall]
         );
         assert_eq!(
-            plan(Action::UninstallAndRestart, false, &steam, &dlls).unwrap(),
+            plan(
+                Action::UninstallAndRestart,
+                false,
+                &steam,
+                &dlls,
+                Layout::OpenSteamTool
+            )
+            .unwrap(),
             vec![Op::Uninstall, Op::Launch]
         );
         assert_eq!(
-            plan(Action::UninstallAndRestart, true, &steam, &dlls).unwrap(),
+            plan(
+                Action::UninstallAndRestart,
+                true,
+                &steam,
+                &dlls,
+                Layout::OpenSteamTool
+            )
+            .unwrap(),
             vec![Op::CloseSteam, Op::Uninstall, Op::Launch]
         );
         assert_eq!(
-            plan(Action::Restart, false, &steam, &dlls).unwrap(),
+            plan(Action::Restart, false, &steam, &dlls, Layout::OpenSteamTool).unwrap(),
             vec![Op::CloseSteam, Op::Launch]
         );
         assert_eq!(
-            plan(Action::Restart, true, &steam, &dlls).unwrap(),
+            plan(Action::Restart, true, &steam, &dlls, Layout::OpenSteamTool).unwrap(),
             vec![Op::CloseSteam, Op::Launch]
         );
 
@@ -207,14 +252,26 @@ mod tests {
     #[test]
     fn plan_prechecks() {
         assert_eq!(
-            plan(Action::Launch, false, Path::new(""), Path::new("")),
+            plan(
+                Action::Launch,
+                false,
+                Path::new(""),
+                Path::new(""),
+                Layout::OpenSteamTool
+            ),
             Err(Precheck::InvalidSteamDir)
         );
 
         let empty_dlls = tmp_steam("plan_empty_dlls", false);
         let steam = tmp_steam("plan_steam_nodlls", false);
         assert_eq!(
-            plan(Action::ApplyAndLaunch, false, &steam, &empty_dlls),
+            plan(
+                Action::ApplyAndLaunch,
+                false,
+                &steam,
+                &empty_dlls,
+                Layout::OpenSteamTool
+            ),
             Err(Precheck::MissingTargetDlls)
         );
         std::fs::remove_dir_all(&empty_dlls).ok();
@@ -223,15 +280,33 @@ mod tests {
         let dlls = tmp_dlls("plan_exe_dlls");
         let steam_no_exe = tmp_steam("plan_steam_noexe", false);
         assert_eq!(
-            plan(Action::Launch, false, &steam_no_exe, &dlls),
+            plan(
+                Action::Launch,
+                false,
+                &steam_no_exe,
+                &dlls,
+                Layout::OpenSteamTool
+            ),
             Err(Precheck::MissingSteamExe)
         );
         assert_eq!(
-            plan(Action::UninstallAndRestart, false, &steam_no_exe, &dlls),
+            plan(
+                Action::UninstallAndRestart,
+                false,
+                &steam_no_exe,
+                &dlls,
+                Layout::OpenSteamTool
+            ),
             Err(Precheck::MissingSteamExe)
         );
         assert_eq!(
-            plan(Action::Restart, false, &steam_no_exe, &dlls),
+            plan(
+                Action::Restart,
+                false,
+                &steam_no_exe,
+                &dlls,
+                Layout::OpenSteamTool
+            ),
             Err(Precheck::MissingSteamExe)
         );
         std::fs::remove_dir_all(&dlls).ok();
@@ -246,14 +321,15 @@ mod tests {
             dll_dir: dlls.clone(),
             steam_dir: steam.clone(),
             steam: Arc::new(SteamState::new()),
+            layout: Layout::OpenSteamTool,
         };
 
         let mut phases = Vec::new();
         execute(&[Op::Deploy], &ctx, |p| phases.push(p)).unwrap();
 
         assert_eq!(phases, vec![BusyKind::Deploying]);
-        for d in TARGET_DLLS {
-            assert!(steam.join(d).is_file(), "missing {d}");
+        for f in Layout::OpenSteamTool.root_files() {
+            assert!(steam.join(f.name).is_file(), "missing {}", f.name);
         }
         assert!(steam.join("config").join("lua").is_dir());
 
@@ -269,14 +345,15 @@ mod tests {
             dll_dir: dlls.clone(),
             steam_dir: steam.clone(),
             steam: Arc::new(SteamState::new()),
+            layout: Layout::OpenSteamTool,
         };
 
         let mut phases = Vec::new();
         execute(&[Op::Uninstall], &ctx, |p| phases.push(p)).unwrap();
 
         assert_eq!(phases, vec![BusyKind::Uninstalling]);
-        for d in TARGET_DLLS {
-            assert!(!steam.join(d).exists(), "still present {d}");
+        for f in Layout::OpenSteamTool.root_files() {
+            assert!(!steam.join(f.name).exists(), "still present {}", f.name);
         }
 
         std::fs::remove_dir_all(&dlls).ok();
@@ -291,6 +368,7 @@ mod tests {
             dll_dir: dlls.clone(),
             steam_dir: steam.clone(),
             steam: Arc::new(SteamState::new()),
+            layout: Layout::OpenSteamTool,
         };
 
         let mut phases = Vec::new();
@@ -303,8 +381,8 @@ mod tests {
             "err message: {}",
             err.message
         );
-        for d in TARGET_DLLS {
-            assert!(!steam.join(d).exists(), "still present {d}");
+        for f in Layout::OpenSteamTool.root_files() {
+            assert!(!steam.join(f.name).exists(), "still present {}", f.name);
         }
 
         std::fs::remove_dir_all(&dlls).ok();

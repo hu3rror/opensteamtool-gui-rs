@@ -103,8 +103,12 @@ const EBOSVNALAE_ENDPOINT: &str =
 const STEAMDADDY_ENDPOINT: &str =
     "https://api.github.com/repos/Contrary-v2/SteamDaddy-Dll/releases/latest";
 
-/// 发布资产命名约定（选中条件的经验值；`-Debug` 变体永远不选）。
-pub const ASSET_PATTERN: &str = "*-Release.zip";
+impl Default for PatchSource {
+    /// 新装/新配置默认推荐源（ADR-0023）；旧配置缺字段由 config::parse 单独回退官方源。
+    fn default() -> Self {
+        PatchSource::Huanyuejue
+    }
+}
 
 impl PatchSource {
     pub const BUILTINS: [PatchSource; 3] = [
@@ -140,14 +144,6 @@ impl PatchSource {
         }
     }
 
-    pub fn recommended(&self) -> bool {
-        matches!(self, PatchSource::Huanyuejue)
-    }
-
-    pub fn discontinued(&self) -> bool {
-        matches!(self, PatchSource::Upstream)
-    }
-
     /// 仓库名（`owner/repo`），用于界面来源行。
     pub fn repo_slug(&self) -> &str {
         match self {
@@ -180,7 +176,6 @@ pub fn resolve(source: &PatchSource) -> Resolved {
     }
 }
 
-/// 自定义源头错误的裁剪语义（界面按此映射文案）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum UrlError {
     /// 非 https。
