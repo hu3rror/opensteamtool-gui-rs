@@ -36,8 +36,20 @@ _Avoid_: 本地文件版本、仓库版本
 _Avoid_: 远程版本、上游版本
 
 **补丁源（Patch Source）**:
-补丁 zip 的来源仓库：内置上游 `OpenSteam001/OpenSteamTool`（已停更，仅保留不推荐）、`huanyuejue/OpenSteamTool`、`Contrary-v2/SteamDaddy-Dll`，以及自定义（URL + 布局类型）。源决定 releases API 端点、zip 资产筛选与落地形态（见「源布局」）。
+补丁 zip 的来源仓库：内置官方源 `OpenSteam001/OpenSteamTool`、社区维护的 `huanyuejue/OpenSteamTool` 与 `Contrary-v2/SteamDaddy-Dll`，以及自定义（URL + 布局类型）。源只决定 releases API 端点与 zip 资产筛选；落地形态由「源布局」决定。展示标签不带倾向：官方源写「官方源（长期未更新）」，两个 fork 写「社区维护」。
 _Avoid_: 下载源、镜像源
+
+**官方源（Official Source）**:
+内置的 `OpenSteam001/OpenSteamTool`，本工具的原始上游。长期无新 release 的研究结论写在 `docs/research-patch-dll-sources.md`；标签取「长期未更新」而非「已停更」，因为那是采样时点的状态，不是承诺。
+_Avoid_: 上游源、原版源
+
+**社区维护（Community-Maintained）**:
+内置的两个 fork 源 `huanyuejue/OpenSteamTool` 与 `Contrary-v2/SteamDaddy-Dll` 的统称，标签只陈述维护状态，不构成推荐或背书。哪个能用在具体环境需实测。
+_Avoid_: 替代源、推荐源
+
+**草稿态（Draft）**:
+自定义补丁源尚未生效的编辑状态：地址与布局两栏可见、可改，但不落盘、不校验；关闭设置对话框即丢弃，切页签保留。与「补丁源」的已落盘值区分，界面只在两者不同时给出「应用并下载」。
+_Avoid_: 临时源、待定源
 
 **源布局（Source Layout）**:
 一个补丁源在 Steam 目录的落地形态：Steam 根文件清单与改名规则、Lua 子目录。两臂——`OpenSteamTool`（`OpenSteamTool.dll` / `dwmapi.dll` / `xinput1_4.dll` + `config/lua`）与 `SteamDaddy`（`SteamDaddy.dll` / `version.dll`（由 `version.dll.disable` 改名）/ `xinput1_4.dll` + `config/stplug-in`）。部署、卸载、部署状态判据与「打开 Lua 目录」全部从布局派生，不出现第二份硬编码。

@@ -84,11 +84,11 @@ impl Layout {
 /// 补丁源：三个内置仓库 + 一个自定义 GitHub 仓库（自定义 URL 已归一化为 releases API 形式）。
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum PatchSource {
-    /// 上游 `OpenSteam001/OpenSteamTool`（已停更，界面标注 discontinued）。
+    /// 官方源 `OpenSteam001/OpenSteamTool`（长期未更新，见 GLOSSARY）。
     Upstream,
-    /// `huanyuejue/OpenSteamTool`（推荐；新配置与向导默认值）。
+    /// `huanyuejue/OpenSteamTool`（社区维护，见 GLOSSARY）。
     Huanyuejue,
-    /// `Contrary-v2/SteamDaddy-Dll`。
+    /// `Contrary-v2/SteamDaddy-Dll`（社区维护，见 GLOSSARY）。
     SteamDaddy,
     Custom {
         url: String,
@@ -104,7 +104,7 @@ const STEAMDADDY_ENDPOINT: &str =
     "https://api.github.com/repos/Contrary-v2/SteamDaddy-Dll/releases/latest";
 
 impl Default for PatchSource {
-    /// 新装/新配置默认推荐源（ADR-0023）；旧配置缺字段由 config::parse 单独回退官方源。
+    /// 默认源与官方源不同（ADR-0024）。
     fn default() -> Self {
         PatchSource::Huanyuejue
     }

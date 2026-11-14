@@ -104,7 +104,7 @@ pub struct Config {
     pub minimize_to_tray: bool,
     /// 深浅主题偏好（缺省跟随系统；字段缺失/非法 = System，老配置无迁移，ADR-0016）。
     pub theme: ThemePreference,
-    /// 补丁源（ADR-0023）。缺字段 = 上游（旧行为）；新配置默认推荐源。
+    /// 补丁源（ADR-0023）；默认值见 ADR-0024。
     pub patch_source: PatchSource,
     /// 上次部署时记录的客户端构建号（`package/steam_client_win32.manifest` 的 version）。
     pub last_client_build: Option<String>,
@@ -192,7 +192,7 @@ fn parse(text: &str) -> Result<Config, ConfigError> {
     let patch_source = doc
         .get("patch_source")
         .and_then(parse_patch_source)
-        .unwrap_or(PatchSource::Upstream);
+        .unwrap_or_default();
 
     let last_client_build = doc
         .get("last_client_build")
@@ -337,7 +337,7 @@ mod tests {
         assert_eq!(cfg.language, Language::Auto);
         assert_eq!(cfg.version, CONFIG_VERSION);
         assert!(cfg.minimize_to_tray, "缺省应启用托盘隐身");
-        assert_eq!(cfg.patch_source, PatchSource::Huanyuejue, "新装默认推荐源");
+        assert_eq!(cfg.patch_source, PatchSource::default(), "新装默认源");
         assert_eq!(cfg.last_client_build, None);
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -515,7 +515,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_patch_source_reads_as_upstream() {
+    fn missing_patch_source_reads_as_default() {
         let dir = tmp_dir("oldpatch");
         let path = dir.join(CONFIG_FILE);
         std::fs::write(
@@ -529,8 +529,8 @@ language = \"zh\"
         let cfg = load(&path).unwrap();
         assert_eq!(
             cfg.patch_source,
-            PatchSource::Upstream,
-            "老配置缺 patch_source 应保持旧行为"
+            PatchSource::default(),
+            "缺 patch_source 与全新配置同源"
         );
         assert_eq!(cfg.last_client_build, None);
         std::fs::remove_dir_all(&dir).ok();
@@ -577,8 +577,8 @@ language = \"zh\"
             let cfg = load(&path).unwrap();
             assert_eq!(
                 cfg.patch_source,
-                PatchSource::Upstream,
-                "非法补丁源应降级上游：{section}"
+                PatchSource::default(),
+                "非法补丁源应降级默认源：{section}"
             );
             assert_eq!(cfg.steam_path, "C:/S", "降级不应丢其余配置：{section}");
         }

@@ -125,7 +125,11 @@ impl Palette {
     }
 
     pub fn selection_bg(self) -> Color32 {
-        blend(self.accent, self.white, 0.82)
+        if self.dark_mode {
+            blend(self.accent, self.panel, 0.7)
+        } else {
+            blend(self.accent, self.white, 0.82)
+        }
     }
 
     /// Health Warning 行前景：Dark 向 WHITE 混调亮（现状值）；L1 向 BLACK 混调深（原型 `--warn-fg` 经验值）。
@@ -282,7 +286,7 @@ mod tests {
     fn dark_derived_helpers_golden_values() {
         let p = Palette::dark();
         assert_eq!(p.badge_bg(p.success), Color32::from_rgb(0x1D, 0x2B, 0x2D));
-        assert_eq!(p.selection_bg(), Color32::from_rgb(0xE2, 0xEB, 0xF5));
+        assert_eq!(p.selection_bg(), Color32::from_rgb(0x26, 0x3A, 0x4F));
         assert_eq!(p.accent_hover, Color32::from_rgb(0x54, 0x85, 0xB7));
         assert_eq!(p.warn_fg(), Color32::from_rgb(0xCF, 0xAE, 0x7C));
         assert_eq!(p.busy_ink(), Color32::from_rgb(0x5C, 0x91, 0xC7));
@@ -291,6 +295,47 @@ mod tests {
             p.health_warning_border(),
             Color32::from_rgb(0x57, 0x4A, 0x35)
         );
+    }
+
+    fn channel_luminance(v: u8) -> f32 {
+        let c = f32::from(v) / 255.0;
+        if c <= 0.039_28 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    }
+
+    fn contrast_ratio(a: Color32, b: Color32) -> f32 {
+        let la = 0.2126 * channel_luminance(a.r())
+            + 0.7152 * channel_luminance(a.g())
+            + 0.0722 * channel_luminance(a.b());
+        let lb = 0.2126 * channel_luminance(b.r())
+            + 0.7152 * channel_luminance(b.g())
+            + 0.0722 * channel_luminance(b.b());
+        let (hi, lo) = if la > lb { (la, lb) } else { (lb, la) };
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    #[test]
+    fn selection_and_hover_text_stay_readable() {
+        for p in [Palette::dark(), Palette::light()] {
+            for fill in [
+                p.selection_bg(),
+                p.badge_bg(p.success),
+                p.badge_bg(p.warn),
+                p.badge_bg(p.danger),
+                p.caution.bg,
+            ] {
+                let ratio = contrast_ratio(p.ink, fill);
+                assert!(
+                    ratio >= 4.5,
+                    "ink {:#x} on fill {:?} = {ratio:.2}:1",
+                    p.ink.r(),
+                    fill
+                );
+            }
+        }
     }
 
     #[test]

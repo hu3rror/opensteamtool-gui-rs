@@ -274,6 +274,8 @@ fn build_visuals(p: Palette) -> egui::Visuals {
     visuals.widgets.inactive.bg_fill = p.card;
     visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, p.accent);
     visuals.widgets.hovered.bg_fill = p.entry;
+    visuals.widgets.hovered.weak_bg_fill = p.entry;
+    visuals.widgets.active.bg_fill = p.entry;
     visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, p.accent_hover);
     visuals.selection.bg_fill = p.selection_bg();
     visuals.selection.stroke = egui::Stroke::new(1.0, p.accent);
@@ -559,9 +561,30 @@ enum Msg {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum SettingsTab {
     General,
-    About,
+    PatchSource,
     Steam,
     LuaConfig,
+    About,
+}
+
+impl SettingsTab {
+    const ORDER: [SettingsTab; 5] = [
+        SettingsTab::General,
+        SettingsTab::PatchSource,
+        SettingsTab::Steam,
+        SettingsTab::LuaConfig,
+        SettingsTab::About,
+    ];
+
+    fn label(self, strings: &Strings) -> &'static str {
+        match self {
+            SettingsTab::General => strings.settings_tab_general,
+            SettingsTab::PatchSource => strings.settings_tab_source,
+            SettingsTab::Steam => strings.settings_tab_steam,
+            SettingsTab::LuaConfig => strings.settings_tab_lua,
+            SettingsTab::About => strings.settings_tab_about,
+        }
+    }
 }
 
 /// Settings — Steam 页签的路径编辑状态（纯逻辑：编辑缓冲 + 提交判定，可单测）。
@@ -907,8 +930,7 @@ fn wizard_download(source: PatchSource) -> Result<(), UpdateError> {
 fn source_label(strings: &Strings, source: &PatchSource) -> String {
     let name = match source {
         PatchSource::Upstream => strings.source_upstream,
-        PatchSource::Huanyuejue => strings.source_ebosvnalae,
-        PatchSource::SteamDaddy => strings.source_steamdaddy,
+        PatchSource::Huanyuejue | PatchSource::SteamDaddy => strings.source_community,
         PatchSource::Custom { .. } => strings.source_custom,
     };
     format!("{name} · {}", source.repo_slug())
@@ -1781,12 +1803,8 @@ impl App {
                 ui.heading(self.strings.settings_title);
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
-                    for (tab, label) in [
-                        (SettingsTab::General, self.strings.settings_tab_general),
-                        (SettingsTab::Steam, self.strings.settings_tab_steam),
-                        (SettingsTab::LuaConfig, self.strings.settings_tab_lua),
-                        (SettingsTab::About, self.strings.settings_tab_about),
-                    ] {
+                    for tab in SettingsTab::ORDER {
+                        let label = tab.label(&self.strings);
                         let style = if self.settings_tab == tab {
                             ButtonStyle::Primary
                         } else {
@@ -1822,9 +1840,10 @@ impl App {
                         ui.spacing_mut().item_spacing.y = 13.0;
                         match self.settings_tab {
                             SettingsTab::General => self.settings_general(ui),
-                            SettingsTab::About => self.settings_about(ui, ctx),
+                            SettingsTab::PatchSource => self.settings_source(ui),
                             SettingsTab::Steam => self.settings_steam(ui),
                             SettingsTab::LuaConfig => self.settings_lua_config(ui),
+                            SettingsTab::About => self.settings_about(ui, ctx),
                         }
                     });
                 ui.add_space(16.0);
@@ -2054,8 +2073,6 @@ impl App {
         }
         ui.add_space(16.0);
 
-        self.settings_source(ui);
-
         self.compat_section(ui);
     }
 
@@ -2139,6 +2156,19 @@ impl App {
                 self.palette,
             )
             .clicked();
+            ui.add_space(8.0);
+            if styled_button(
+                ui,
+                self.strings.settings_btn_patch_update_check,
+                ButtonStyle::Neutral,
+                egui::vec2(120.0, 30.0),
+                true,
+                self.palette,
+            )
+            .clicked()
+            {
+                self.on_core_event(AppEvent::Check);
+            }
         });
         if self.source_invalid {
             ui.add_space(6.0);
@@ -4189,6 +4219,28 @@ mod tests {
     }
 
     #[test]
+    fn source_labels_carry_no_recommendation() {
+        for lang in [Lang::Zh, Lang::En] {
+            let s = Strings::new(lang);
+            for src in PatchSource::BUILTINS.iter() {
+                let label = source_label(&s, src);
+                assert!(!label.contains("推荐"));
+                assert!(!label.to_lowercase().contains("recommend"), "{label}");
+            }
+            let upstream = source_label(&s, &PatchSource::Upstream);
+            assert!(
+                upstream.contains("长期未更新") || upstream.contains("unmaintained"),
+                "{upstream}"
+            );
+            let fork = source_label(&s, &PatchSource::Huanyuejue);
+            assert!(
+                fork.contains("社区维护") || fork.contains("Community-maintained"),
+                "{fork}"
+            );
+        }
+    }
+
+    #[test]
     fn settings_tab_row_fits_dialog_width() {
         let ctx = egui::Context::default();
         install_cjk_font(&ctx);
@@ -4209,12 +4261,8 @@ mod tests {
                     ui.horizontal(|ui| {
                         let avail_right = ui.available_width();
                         let mut last_tab_right = 0.0f32;
-                        for label in [
-                            s.settings_tab_general,
-                            s.settings_tab_steam,
-                            s.settings_tab_lua,
-                            s.settings_tab_about,
-                        ] {
+                        for tab in SettingsTab::ORDER {
+                            let label = tab.label(&s);
                             let r = styled_button(
                                 ui,
                                 label,
