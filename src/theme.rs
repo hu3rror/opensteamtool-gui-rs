@@ -189,8 +189,7 @@ pub struct ButtonPalette {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ButtonStyle {
     Primary,
-    /// ADR-0010 警戒组样式表契约保留（主页面现为 inline 警示行消费 CAUTION_FG；
-    /// 按钮形态未在本次主页面使用，禁删以防 Deploy 绿/警戒按钮回归样式分裂）。
+    /// ADR-0010 警戒组按钮契约：仅解析表/金样测试消费（主页面警示行 inline 走 CAUTION_FG）。
     #[allow(dead_code)]
     Caution,
     Neutral,

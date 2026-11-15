@@ -163,7 +163,6 @@ impl Wizard {
                     && matches!(self.download, DownloadState::Running) =>
             {
                 match result {
-                    // 成功即终局：不经「成功态」中间态（终局由 `finished` 表达）。
                     Ok(()) => self.finish(),
                     Err(e) => {
                         self.download = DownloadState::Failed(e);
@@ -174,7 +173,6 @@ impl Wizard {
             Event::SkipDownload if self.step == Step::Download => self.finish(),
             // 关窗从任意步骤都等同跳过（永不把用户锁在向导里）。
             Event::Closed => self.finish(),
-            // 当前步骤不接受的事件：忽略（迟到/错序消息不改状态）。
             _ => Vec::new(),
         };
         (self.view(), effects)
@@ -209,7 +207,6 @@ impl Wizard {
 pub fn should_show(config_path: &Path) -> bool {
     match config::load(config_path) {
         Ok(config) => !dll::is_valid_steam_dir(&config.steam_path),
-        // 损坏/版本不符 → 启动已降级默认值（ADR-0012），等同未配置。
         Err(_) => true,
     }
 }

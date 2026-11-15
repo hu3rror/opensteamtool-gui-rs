@@ -27,7 +27,7 @@ mod wizard;
 mod workflow;
 
 fn main() -> eframe::Result {
-    use eframe::egui; // ViewportBuilder / ViewportCommand 类型引用。
+    use eframe::egui;
 
     // 初始窗口图标按持久化主题选版（深浅双态，ADR-0016）：ViewportBuilder 图标是创建时
     // 同步设置的（运行中 ViewportCommand::Icon 在窗口显示前不生效，实测被吞），必须在创建前
@@ -50,7 +50,6 @@ fn main() -> eframe::Result {
         singleton::signal_activate();
         return Ok(());
     };
-    // 首帧参考 = 最小内尺寸（spec §40 签核：默认窗口贴着最小尺寸启动，只涨不缩）。
     let min_size = [620.0, 520.0];
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

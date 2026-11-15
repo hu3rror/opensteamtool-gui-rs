@@ -216,8 +216,6 @@ pub fn download_and_extract_reporting(
     layout: Layout,
     report: &mut dyn FnMut(crate::downloads::Progress),
 ) -> Result<(), UpdateError> {
-    // 下载语义收编至 downloads 模块（ADR-0021）：单 URL 也是长度为 1 的链；
-    // zip 走 Large 档（含 512MB body 上限，updater 侧不再自设）。
     let urls = vec![info.zip_url.clone()];
     let bytes =
         crate::downloads::first_match_reporting(&urls, crate::downloads::Policy::Large, report)

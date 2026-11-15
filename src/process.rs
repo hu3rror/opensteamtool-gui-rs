@@ -54,7 +54,6 @@ impl SteamMonitor {
         std::thread::spawn(move || {
             let mut monitor = monitor;
             loop {
-                // 2s 间隔轮询；rescan 请求（工作流后即时刷新）立即醒来跳过间隔。
                 let rescan = match rescan_rx.recv_timeout(STEAM_REFRESH_INTERVAL) {
                     Ok(()) => true,
                     Err(RecvTimeoutError::Timeout) => false,
@@ -139,7 +138,6 @@ mod tests {
         let (_handle, _initial) = SteamMonitor::spawn(steam, move |update| {
             let _ = tx.send(update);
         });
-        // 空闲（无状态变化、无 rescan）：2s 轮询不产生任何上报（后台线程不唤醒壳）。
         assert!(
             rx.recv_timeout(Duration::from_millis(500)).is_err(),
             "空闲轮询不得上报消息"
@@ -154,7 +152,6 @@ mod tests {
             let _ = tx.send(update);
         });
         handle.rescan();
-        // rescan 触发立即轮询：超时前必收到 State 观察（期间若 Steam 状态变化，先收边沿）。
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut state = None;
         let mut edge_implied = None;

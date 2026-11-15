@@ -28,7 +28,6 @@ impl Tray {
     /// `sink` 在托盘事件线程被调用（非 UI 线程），须 `Send + Sync`；收到已映射的
     /// `TrayAction` 后由调用方负责转发进消息通道并唤醒 UI 线程。
     /// 创建失败（托盘不可用）返回 `None`，此时不注册回调。
-    /// 9 个参数均为互不相同的单一值，无自然归并（clippy::too_many_arguments）。
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         icon: Option<Icon>,

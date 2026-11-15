@@ -57,7 +57,6 @@ const R_CTA: u8 = 10;
 const R_ROW: u8 = 10;
 const R_SMALL: u8 = 7;
 
-// 图标+标签按钮：统一布局入口 + 层级几何表（父票 #54 决策 1–4，几何五行为定稿）。
 
 /// 图标+标签按钮的层级（几何表一行；数值与出处见父票 #54 决策 2；禁删，五行为定稿）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -147,7 +146,6 @@ impl ButtonChrome {
 /// 图标+标签按钮统一布局入口（父票 #54 决策 1）：按层级几何分配按钮矩形、放置图标与标签；
 /// chrome（fill/border/hover/disabled 色）由调用方闭包绘制，并返回文字前景色与字形着色（ButtonChrome）。
 /// 宽度由调用方决定（整行 / 文字宽），高度与放置数字一律来自层级几何表。
-/// 9 个参数均为互不相同的单一值，无自然归并（clippy::too_many_arguments；入口点即完整契约）。
 #[allow(clippy::too_many_arguments)]
 fn icon_label_button(
     ui: &mut egui::Ui,
@@ -175,7 +173,6 @@ fn icon_label_button(
         let (icon_centre, label_x) = match (g.inset, g.label_x) {
             (Some(inset), Some(label_x)) => (inset + g.icon_size / 2.0, label_x),
             (None, None) => {
-                // 居中组（Primary CTA / Project Home）：图标+标签成组居中，不换行（spec §18.1）。
                 let tw = text_width(ui, label, font, chrome.fg);
                 let group_w = g.icon_size + g.gap + tw;
                 let start = (rect.width() - group_w) / 2.0;
@@ -256,7 +253,7 @@ fn build_visuals(p: Palette) -> egui::Visuals {
     visuals.panel_fill = p.panel;
     visuals.window_fill = p.panel;
     visuals.faint_bg_color = p.panel;
-    visuals.extreme_bg_color = p.entry; // TextEdit 底（控件层次槽）
+    visuals.extreme_bg_color = p.entry;
     visuals.widgets.inactive.weak_bg_fill = p.entry;
     visuals.widgets.open.weak_bg_fill = p.entry;
     visuals.override_text_color = Some(p.ink);
@@ -387,7 +384,6 @@ fn github_link_button(
 ) -> egui::Response {
     let button = ButtonStyle::Neutral.palette(palette);
     let font_id = egui::FontId::proportional(13.0);
-    // 居中组两侧留白共 28（14×2；几何表 Project Home 行，父票 #54 决策 2）。
     let text_w = text_width(ui, label, &font_id, button.fg);
     let width = (text_w + 28.0 + 16.0 + 10.0).max(200.0);
     let Some(mark) = mark else {
@@ -458,7 +454,6 @@ fn card_title(ui: &mut egui::Ui, text: &str, palette: Palette) {
 fn status_item(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(7.0, 7.0), egui::Sense::hover());
     ui.painter().circle_filled(rect.center(), 3.5, color);
-    // 行内 spacing 收窄：dot→文字总 8lp（原型 .sb-item gap: 8；默认 item_spacing.x 10lp 会撑到 16）。
     let orig_x = ui.spacing().item_spacing.x;
     ui.spacing_mut().item_spacing.x = 2.0;
     ui.add_space(6.0);
@@ -1396,7 +1391,6 @@ impl App {
                 }
             });
         }
-        // 启动即恢复应用配置（语言偏好 + Steam 路径，见 ADR-0012）：缺失文件 = 默认值；损坏/版本不符 = 类型化错误降级（不 panic）。
         let config = match config::load(&config::config_path()) {
             Ok(cfg) => cfg,
             Err(e) => {
@@ -1410,7 +1404,6 @@ impl App {
         cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Title(
             strings.window_title.to_owned(),
         ));
-        // 配置优先恢复 Steam 路径；失效或未设置时回退注册表检测（同一 is_dir 判据），检测结果不写回配置。
         let steam_path = if !dll::is_valid_steam_dir(&config.steam_path) {
             steam::detect_steam_path()
                 .map(|p| p.display().to_string())
@@ -1429,7 +1422,6 @@ impl App {
             let tx = tx.clone();
             let ctx = cc.egui_ctx.clone();
             move |update| {
-                // 边沿/观察经消息通道进核心（观察反馈环）：auto-tray 隐显决策在核心（镜像 + 边沿语义）。
                 let evt = match update {
                     MonitorUpdate::Edge(SteamEvent::Started) => AppEvent::SteamStarted,
                     MonitorUpdate::Edge(SteamEvent::Stopped) => AppEvent::SteamStopped,
@@ -1441,7 +1433,6 @@ impl App {
         });
         let minimize_to_tray = config.minimize_to_tray;
         let theme_pref = config.theme;
-        // 主题在托盘创建前确定（托盘图标按当前主题选版，GLOSSARY「应用图标」深/浅双态）。
         let palette = match theme_pref {
             ThemePreference::Dark => Palette::dark(),
             ThemePreference::Light => Palette::light(),
@@ -1519,7 +1510,6 @@ impl App {
         // 标题栏沿用 ViewportBuilder 图标）。初始图标已按 config 主题选版（见 main.rs），
         // System 模式校正与后续主题切换走 ui() 的 palette 钩子/首帧同步。
         app.sync_tray_actions_enabled(app.core.snapshot().facts.status);
-        // 启动即喂首次路径：经统一事件入口产首次快速体检效果（初始 checking 骨架态，零白屏；工作路径在核心（ADR-0020），由快照取）。
         let initial_path = app.core.snapshot().steam_path.clone();
         app.on_core_event(AppEvent::CompatPathChanged(initial_path));
         app
@@ -1610,7 +1600,6 @@ impl App {
                 self.set_minimize_to_tray(checked);
             }
             TrayAction::RestartSteam => {
-                // 托盘「重启 Steam」走同一编排入口（切片 1 提前收敛，见 #44 实现决策）。
                 self.on_core_event(AppEvent::ActionRequested(Action::Restart));
             }
 
@@ -1636,7 +1625,6 @@ impl App {
 
     /// 文件事实探测：探测 → 同步托盘可见性，返回事实；回喂由调用者经效果队列完成（P5：观察回喂统一走队列，不嵌套调事件入口）。
     fn probe_facts_and_sync(&mut self) -> DeploymentFacts {
-        // 工作路径在核心（ADR-0020），探测从快照取（与渲染/seed 同源）。
         let steam_path = self.core.snapshot().steam_path.clone();
         let facts = dll::probe_facts(
             Path::new(&steam_path),
@@ -1697,7 +1685,6 @@ impl App {
     /// 编排核心事件入口：决策 → 效果进统一执行器；同步效果（plan/probe/rescan）喂回的观察
     /// 事件续出的效果追加进队尾（P5：统一入口、固定顺序，队列深度 ≤ 3）。
     fn on_core_event(&mut self, evt: AppEvent) {
-        // 工作流成功即部署状态可能改变：构建号快照随之重记（ADR-0023 信任模型）。
         let resync = matches!(evt, AppEvent::WorkflowDone { result: Ok(()), .. });
         let ctx = self.ctx.clone();
         let queue = self.core.step(evt).into();
@@ -1774,7 +1761,6 @@ impl App {
                 } => {
                     let dll_dir = dll::dll_dir();
                     let layout = self.config.patch_source.layout();
-                    // 一个句柄移入闭包（phase 回调 repaint），一个借给 spawn（其内部 clone 后移入线程）。
                     let repaint_ctx = self.ctx.clone();
                     let spawn_ctx = repaint_ctx.clone();
                     let tx = self.tx.clone();
@@ -1800,16 +1786,13 @@ impl App {
                     });
                 }
                 AppEffect::RefreshFacts => {
-                    // P5：观察回喂统一走效果队列（不嵌套调 on_core_event），顺序由队列保证。
                     let facts = self.probe_facts_and_sync();
                     queue.extend(self.core.step(AppEvent::FactsRefreshed(facts)));
                 }
                 AppEffect::RescanSteam => {
-                    // 请求后台监视线程立即轮询：边沿/状态观察以消息异步回喂核心（隐窗决策在核心，一次性合成）。
                     self.steam_monitor.rescan();
                 }
                 AppEffect::FeedCompatPath(p) => {
-                    // 路径变更 → 体检重探：决策在核心，回喂经效果队列（P5 统一入口）。
                     queue.extend(self.core.step(AppEvent::CompatPathChanged(p)));
                 }
                 AppEffect::CompatProbe { epoch, path } => {
@@ -1869,11 +1852,9 @@ impl App {
                     }
                     self.persist_config();
                     self.wizard = None;
-                    // 向导终局与设置提交收缝到同一写入点（ADR-0020）。
                     self.on_core_event(AppEvent::CommitPath(steam_path));
                 }
                 AppEffect::SetWindowVisible(visible) => {
-                    // 效果路径（exec 循环内）：镜像回喂走效果队列（P5 统一；WindowVisibleChanged 幂等）。
                     self.write_window_visible(visible);
                     queue.extend(self.core.step(AppEvent::WindowVisibleChanged(visible)));
                 }
@@ -1924,11 +1905,9 @@ impl App {
     fn wizard_event(&mut self, ctx: &egui::Context, event: wizard::Event) {
         let (v, effects) = self.wizard.as_mut().unwrap().step(event);
         self.set_language(v.language);
-        // 主题仅在变化时写入（路径编辑每键触发的事件不落盘）；set_theme 即改即存（ADR-0016 唯一写入点）。
         if v.theme != self.theme_pref {
             self.set_theme(v.theme);
         }
-        // 向导状态机留壳（内部文件系统判据 + 语言/主题副作用链），效果收编进统一执行器（ADR-0019）。
         self.exec_app_effects(
             ctx,
             effects
@@ -1962,7 +1941,6 @@ impl App {
             return;
         }
         let mut close_clicked = false;
-        // 显式 frame：Modal 默认 menu_margin(6lp) 太贴边，加边缘呼吸（对称 24/20）。
         // 测试须复用同一 frame（settings_dialog_frame），否则布局测量与生产不一致。
         egui::Modal::new(egui::Id::new("settings_dialog"))
             .frame(settings_dialog_frame(self.palette))
@@ -2035,7 +2013,6 @@ impl App {
                 });
             });
         if close_clicked {
-            // 关闭前提交未落地编辑（兜底：无论焦点时序，有效提交都不丢失）；未变更的判定让重复提交是 no-op。
             self.commit_settings_steam_path();
             self.discard_source_draft();
             self.settings_open = false;
@@ -2429,12 +2406,10 @@ impl App {
     }
 
     fn commit_settings_steam_path(&mut self) {
-        // 基准 = 工作路径（核心快照，ADR-0020）。
         let current = self.core.snapshot().steam_path;
         match self.settings_steam.submit(&current) {
             SteamPathCommit::Invalid | SteamPathCommit::Unchanged => {}
             SteamPathCommit::Changed(p) => {
-                // config 镜像 + 持久化在壳调用点（config 属壳，ADR-0020）。
                 self.config.steam_path = p.clone();
                 self.persist_config();
                 self.on_core_event(AppEvent::CommitPath(p));
@@ -2461,7 +2436,6 @@ impl App {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::hover());
             if ui.is_rect_visible(rect) {
                 if let Some(tex) = &self.logo {
-                    // 20px 品牌 LOGO 居中于 30px 分配格：header 行高与高度测量测试保持不变。
                     let logo_rect =
                         egui::Rect::from_center_size(rect.center(), egui::vec2(20.0, 20.0));
                     ui.painter().image(
@@ -2482,7 +2456,6 @@ impl App {
                     );
                 }
             }
-            // logo 右缘与标题间距 ≈10px（格内居中右侧留白 5 + 此处 5）。
             ui.add_space(5.0);
             ui.label(
                 egui::RichText::new(self.strings.app_title)
@@ -2496,7 +2469,6 @@ impl App {
                 }
             });
         });
-        // header 底部 hairline（与状态栏 dock 顶部分隔线一致，spec §32）。
         let y = ui.cursor().top();
         ui.painter().line_segment(
             [
@@ -2535,7 +2507,6 @@ impl App {
                 ButtonChrome::icon(self.palette.warn_fg())
             },
         );
-        // 「前往检查」右对齐提示：行内第二文本，非几何表成员（相对行右缘，不参与图标+标签放置）。
         if ui.is_rect_visible(response.rect) {
             ui.painter().text(
                 egui::pos2(response.rect.right() - 18.0, response.rect.center().y),
@@ -2548,7 +2519,6 @@ impl App {
         if response.clicked() {
             self.open_settings(SettingsTab::Steam);
         }
-        // 与 content 统一 gap（原型 14lp）；无警告时整行不占空间（前面已 return）。
         ui.add_space(14.0);
     }
 
@@ -2588,7 +2558,6 @@ impl App {
                     .clicked()
                 {
                     self.compat_details_open = !self.compat_details_open;
-                    // 展开时置位滚动请求（关闭时清掉，防残留）。
                     self.compat_scroll_pending = self.compat_details_open;
                 }
                 if v.summary == CompatSummary::Online && !v.checking {
@@ -2746,7 +2715,6 @@ impl App {
                 status_line(ui, stext, scolor);
             });
         }
-        // 详情内「一键缓存签名」：有未缓存项时提供（issue #23 §7.7）。
         let precaching = self.core.snapshot().compat.precaching;
         if !compat_flow::precache_targets(report).is_empty()
             && !precaching
@@ -2783,7 +2751,6 @@ impl App {
                 self.hero_eyebrow(ui);
                 ui.add_space(8.0);
                 self.hero_status(ui, vm, snap.busy);
-                // 状态 → Supporting / Primary（原型节奏：status→primary 22，有 supporting 时 10 + 22）。
                 let (gap_to_sup, gap_after_sup) = if vm.supporting.is_some() {
                     (10.0, 22.0)
                 } else {
@@ -2958,7 +2925,6 @@ impl App {
             phase,
             width,
             |painter, rect, hovered| {
-                // CTA 保留实心 accent 填充（chrome 差异经闭包透传；几何一律来自层级表）。
                 let fill = if !enabled {
                     self.palette.entry
                 } else if hovered {
@@ -3028,7 +2994,6 @@ impl App {
             let font = egui::FontId::proportional(13.0);
             let enabled = vm.update.enabled;
             let tw = text_width(ui, label, &font, self.palette.sub);
-            // 几何表 Patch Update Check 行：标签 x 31 + 尾部留白 10 → 宽 = 文案 + 41（最小 130 不变）。
             let width = (tw + 41.0).max(130.0);
             let phase = if spin {
                 ctx.input(|i| i.time) as f32
@@ -3066,7 +3031,6 @@ impl App {
             if response.clicked() && enabled {
                 match vm.update.kind {
                     UpdateKind::Check => event = Some(MainEvent::Check),
-                    // Download 去 payload：AppCore 自查更新流程派生（版本永不渲染，ADR-0014）。
                     UpdateKind::Download => event = Some(MainEvent::Download),
                     _ => {}
                 }
@@ -3089,7 +3053,6 @@ impl App {
                         );
                     }
                     UpdateConclusion::CheckFailed => {
-                        // 行内只显示词条；失败详情从快照派生读（不占布局，§26.7）。
                         let detail = snap
                             .update
                             .notice
@@ -3158,7 +3121,6 @@ impl App {
                 0.0,
                 width,
                 |painter, rect, hovered| {
-                    // 行间极轻分隔线（spec §23 不建完整 Card）。
                     if i > 0 {
                         let line_color =
                             theme::blend(self.palette.border, self.palette.panel, 0.55);
@@ -3217,8 +3179,6 @@ impl App {
     /// 返回内容净高（header + 内容列，不含 dock 与弹性留白），供首帧窗口自适应。
     fn main_content(&mut self, ui: &mut egui::Ui) -> f32 {
         let ctx = ui.ctx().clone();
-        // 渲染只消费核心快照（ADR-0019）：内容列每帧一份贯穿视图链；
-        // 对话框等独立区域各自取值（纯内存拷贝，零 IO）。
         let snap = self.core.snapshot();
         let items = status_bar_items(
             snap.steam_running,
@@ -3227,7 +3187,6 @@ impl App {
             &self.strings,
             self.palette,
         );
-        // 状态栏：窗口底部专用 Dock，横跨全宽、独立于内容列（spec §32）。
         egui::Panel::bottom("status_dock")
             .frame(egui::Frame::new().fill(self.palette.panel))
             // 首帧即用稳定高度：Panel 首帧 default_outer_size 为 None 时会回退到
@@ -3235,7 +3194,6 @@ impl App {
             .default_size(Self::STATUS_DOCK_H)
             .show_separator_line(false)
             .show(ui, |ui| {
-                // 顶部分隔线横跨全宽（原型 status-dock border-top，不受内容 padding 影响）。
                 let rect = ui.max_rect();
                 ui.painter().line_segment(
                     [rect.left_top(), rect.right_top()],
@@ -3244,8 +3202,6 @@ impl App {
                 // 本布局内禁用行间距（否则每次子块 allocate 附加 item_spacing.y，
                 // 内容行会被推偏、上下不对称，实测 +10lp）。
                 ui.spacing_mut().item_spacing.y = 0.0;
-                // 内容行固定高、垂直居中：字形视觉中心在行框内偏上 ~1.5lp
-                // （egui 行框含 descent 空白），故上 11 / 下 9 补偿；左缩进收窄到 16lp。
                 ui.add_space(11.0);
                 ui.allocate_ui_with_layout(
                     egui::vec2(ui.available_width(), 18.0),
@@ -3264,13 +3220,9 @@ impl App {
             let top0 = ui.cursor().top();
             self.header(ui);
             let header_h = ui.cursor().top() - top0;
-            // 垂直呼吸（spec §39）：上:下 ≈ φ:1；内容净高基准取正常态观感与最坏态防裁的
-            // 折中（430lp：正常态 331lp 重心 ≈0.44 略偏下；最坏态 445lp 顶 79 + 列 445 仍
-            // 在可用区 618 内，底部留白被裁亦不伤内容）。
             let avail_h = ui.available_height();
             let breathing = (avail_h - 430.0).max(0.0);
             ui.add_space(breathing * 0.618);
-            // 内容列 max-width 居中，内部左对齐（Primary CTA / Secondary 行靠左，见原型）。
             let col_w = MAIN_COLUMN_WIDTH.min(ui.available_width());
             let pad = ((ui.available_width() - col_w) / 2.0).max(0.0);
             let mut col_h = 0.0f32;
@@ -3315,7 +3267,6 @@ impl App {
         };
         let vm = main_page::derive(&input);
         self.hero_surface(ui, ctx, &vm, snap);
-        // 内容列统一 14 间隙（原型 content gap）：hero→health→secondary。
         ui.add_space(14.0);
         self.health_warning_line(ui);
         self.secondary_group(ui, ctx, &vm);
@@ -3338,7 +3289,6 @@ impl eframe::App for App {
 
         let minimized = ctx.input(|i| i.viewport().minimized).unwrap_or(false);
         if minimized && !self.was_minimized && self.minimize_to_tray {
-            // 最小化隐身：非最小化命令保持，显隐经唯一物理写入点（含镜像同步）。
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
             self.set_window_visible(false);
         }
@@ -3364,8 +3314,6 @@ impl eframe::App for App {
             if palette.dark_mode != self.mark_dark {
                 self.mark_dark = palette.dark_mode;
                 self.github_mark = load_github_mark(ctx, palette);
-                // 图标双态（ADR-0016 / GLOSSARY「应用图标」）：主页面 LOGO、窗口标题栏 +
-                // 任务栏按钮、托盘图标随主题同切，与 mark 共用同一模式变化钩子。
                 self.logo = brand::logo_texture(ctx, palette.dark_mode);
                 self.ctx
                     .send_viewport_cmd(egui::ViewportCommand::Icon(Some(Arc::new(
@@ -3392,7 +3340,6 @@ impl eframe::App for App {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // 色板与图标已在 logic() 按当前主题同步，此处只消费 self.palette / self.logo。
         let ctx = ui.ctx().clone();
 
         let mut content_h = 0.0f32;
@@ -3456,7 +3403,6 @@ impl eframe::App for App {
                 });
             });
             if confirmed {
-                // 确认即放行：核心已完成确认流收弹窗 + 以 kill_first 编排（见 app_core）。
                 self.on_core_event(AppEvent::ActionConfirmed(action));
             } else if cancelled {
                 self.on_core_event(AppEvent::ConfirmCanceled);
@@ -3694,7 +3640,6 @@ mod tests {
                 let font = egui::FontId::proportional(15.0);
                 let s = Strings::new(Lang::En);
                 let text = s.btn_apply_and_launch;
-                // 居中组宽 = 图标 + gap + 文案（PrimaryCta 行，几何表）。
                 let g = tier_geometry(ButtonTier::PrimaryCta);
                 w = text_width(ui, text, &font, Palette::dark().white) + g.icon_size + g.gap;
             });

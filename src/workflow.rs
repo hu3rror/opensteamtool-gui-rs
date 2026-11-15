@@ -109,8 +109,6 @@ pub fn plan(
             ops.push(Op::Launch);
         }
         Action::Restart => {
-            // 重启恒含关闭步骤；kill_first 由确认流产生，Restart 不经确认直接执行，
-            // 但 `plan(Restart, true)` 组合下避免重复关闭（二次关闭幂等无害，保表整洁）。
             if !kill_first {
                 ops.push(Op::CloseSteam);
             }

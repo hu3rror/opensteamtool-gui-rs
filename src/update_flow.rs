@@ -76,25 +76,18 @@ impl UpdateFlow {
             },
             FlowState::Checked(Ok(info)) => {
                 let version = info.version.as_str();
-                // 文件本位（ADR-0011）：`local_version` 为 None ⇔ `dlls/` 目标 DLL 缺失。
-                // 「已是最新」只属于文件齐全且版本一致的情形；文件缺失时无论线上版本
-                // 是否为空都不能落「已是最新」（误导，见 #26 US 20），下载按钮也须出现
-                // ——下载是修复动作，用 `zip_url` 不依赖 version。
                 let files_missing = input.local_version.is_none();
-                // 换源后旧结果不得落「已是最新」（ADR-0023）：源相同才可比较版本。
                 let same_source = info.source == input.current_source;
                 let up_to_date = local == version && !files_missing && same_source;
                 let mismatch = input.client_build_mismatch();
                 UpdateDerived {
                     notice: Some(if mismatch {
-                        // 构建号不一致优先于版本结论：两侧并排提示是唯一可执行线索。
                         UpdateNotice::ClientBuildMismatch
                     } else if up_to_date {
                         UpdateNotice::UpToDate
                     } else {
                         UpdateNotice::NewVersion
                     }),
-                    // 空 tag 无法判定「更新」，文件齐全时按不可下载处理（现状守卫）。
                     download: if mismatch {
                         Some(info)
                     } else if up_to_date || (!files_missing && version.is_empty()) {

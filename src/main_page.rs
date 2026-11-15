@@ -138,7 +138,6 @@ pub fn derive(input: &MainPageInput) -> MainPageVm {
     };
 
     let supporting = if input.busy.is_some() {
-        // §27 busy 状态原占位：不再叠加解释性提示（如补丁未下载在下载进行中即自相矛盾）。
         None
     } else if path_invalid {
         Some(Supporting::PathInvalid)
@@ -154,7 +153,6 @@ pub fn derive(input: &MainPageInput) -> MainPageVm {
             enabled: false,
         }
     } else {
-        // 更新流程忙碌（检查/下载）不阶段化 Primary：保留正常动作仅禁用，进度只呈现于更新按钮位。
         let enabled = input.busy.is_none();
         if path_invalid {
             PrimaryVm {
@@ -164,7 +162,6 @@ pub fn derive(input: &MainPageInput) -> MainPageVm {
         } else if input.deploy == DeployStatus::NotDeployed {
             PrimaryVm {
                 kind: PrimaryKind::Action(PrimaryAction::ApplyAndLaunch),
-                // ADR-0011 文件本位：dlls/ 缺文件时置灰（点了会报 MissingTargetDlls）。
                 enabled: enabled && input.dlls_present,
             }
         } else {
@@ -242,7 +239,6 @@ fn update_vm(input: &MainPageInput, busy: bool) -> UpdateVm {
     } else {
         UpdateKind::Check
     };
-    // 检查中 / 下载中不携带结论（结果在 flow 内部，完成后再派生，ADR-0008）。
     let note = if checking || downloading {
         None
     } else {
@@ -255,7 +251,6 @@ fn update_vm(input: &MainPageInput, busy: bool) -> UpdateVm {
     }
 }
 
-// 图标：程序化几何绘制（spec §36 定稿，统一 stroke 笔宽与 logical 尺寸）。
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum IconKind {
@@ -318,8 +313,6 @@ pub fn paint_icon(
             painter.add(Shape::convex_polygon(pts, color, Stroke::NONE));
         }
         IconKind::Restart => {
-            // 原型几何（与 download/uninstall 不同构）：顶部起弧经右侧扫到右下（约 158°），
-            // 弧起点处两条短边构成箭头（对应原型 restart path）。
             arc(
                 painter,
                 unit(center, size, 9.5, 10.0),
@@ -344,8 +337,6 @@ pub fn paint_icon(
             );
         }
         IconKind::Refresh => {
-            // 循环双箭头（sync 构型）：两段约 126° 的圆弧 + 两个实心三角箭头，绕中心 180° 对称；
-            // 箭头基准沿半径横跨弧内外，尖端切向指向逆时针，读作「重新检查」。
             let stroke = Stroke::new(ICON_STROKE, color);
             let r = 5.6 * size / 20.0;
             arc(painter, center, r, 126.0, 0.0, 20, stroke);
@@ -475,7 +466,6 @@ pub fn paint_icon(
             );
         }
         IconKind::Spinner => {
-            // 不确定进度：旋转圆弧（phase 由调用方按帧推进；图标运动不造假百分比，§29）。
             arc(
                 painter,
                 center,

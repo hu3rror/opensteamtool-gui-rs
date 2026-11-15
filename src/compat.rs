@@ -230,7 +230,6 @@ fn probe_one(
     } else if cached {
         ProbeStatus::CompatibleOffline
     } else if verified.get(&target).is_some_and(|v| v == &sha) {
-        // 验证缓存命中：上次已确认上游适配（哈希未变，结论仍成立）。
         ProbeStatus::RemoteAvailable { cached: true }
     } else {
         ProbeStatus::RemoteAvailable { cached: false }
@@ -328,7 +327,6 @@ pub fn probe_all_refresh(steam_dir: &Path) -> OverallHealthReport {
         true,
         &verified,
     );
-    // 网络确认 Found 的项持久化为验证缓存；写失败静默（不阻塞 UI 刷新）。
     let entries = verified_from_report(&report);
     let _ = write_verified(&tool_cache_dir(), &entries);
     report

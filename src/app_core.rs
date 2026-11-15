@@ -240,7 +240,6 @@ impl AppCore {
             confirm: None,
             notice: None,
             steam_running,
-            // 启动注入值也归一到 trim（与 CommitPath 同一视界：快照恒干净，ADR-0020）。
             steam_path: steam_path.trim().to_string(),
             facts,
             patch_source: PatchSource::Upstream,
@@ -271,14 +270,11 @@ impl AppCore {
             AppEvent::WorkflowDone { action, result } => {
                 self.gate.clear();
                 self.notice = Some(Notice::WorkflowDone(action, result.clone()));
-                // RescanSteam 合成隐窗：工作流结束后若 Steam 仍在运行则隐窗一次——置待决标志，
-                // 由下个 SteamRunningChanged 观察结果决定（Steam 已退出则自然不隐）。
                 self.pending_auto_hide = true;
                 let mut effects = Vec::new();
                 if result.is_ok() {
                     effects.push(AppEffect::RefreshFacts);
                 }
-                // 无论成败都重读运行状态：Steam 在工作流后仍在运行则隐窗（WorkflowDone 反馈回环的末环）。
                 effects.push(AppEffect::RescanSteam);
                 return effects;
             }
@@ -308,9 +304,7 @@ impl AppCore {
                 }];
             }
             AppEvent::ActionConfirmed(action) => {
-                // 弹窗只在卸载类动作且 Steam 运行时出现（§20.3）；确认后必须落下，避免悬挂。
                 self.confirm = None;
-                // 确认框只承载 asks_to_close_steam 动作：同意即带 kill_first 执行。
                 return vec![AppEffect::RunPlan {
                     action,
                     kill_first: true,
@@ -325,8 +319,6 @@ impl AppCore {
                     return Vec::new();
                 }
                 self.update_flow.check_started();
-                // 以当前磁盘为基准：文件在发起时若已缺失（如外部删除 dlls/），派生将反映为
-                // NewVersion + 可下载（修复动作），不会落在陈旧快照上误报「已是最新」（ADR-0011/#26）。
                 return vec![AppEffect::RefreshFacts, AppEffect::SpawnUpdateCheck];
             }
             AppEvent::Download => {
@@ -351,7 +343,7 @@ impl AppCore {
                 return vec![AppEffect::SpawnUpdateDownload { info }];
             }
             AppEvent::PlanOk { action, ops } => {
-                self.confirm = None; // 无论门禁是否放行都收掉确认弹窗，避免悬挂。
+                self.confirm = None;
                 let first_phase = ops.first().expect("plan never returns empty").phase();
                 if !self.gate.start(first_phase) {
                     return Vec::new();
@@ -365,7 +357,6 @@ impl AppCore {
             AppEvent::PlanRejected(precheck) => {
                 self.confirm = None;
                 self.notice = Some(Notice::Precheck(precheck));
-                // plan 拒绝是「快照过期」信号（如补丁文件被外部删除）：刷新事实，按钮立即归灰。
                 return vec![AppEffect::RefreshFacts];
             }
             AppEvent::FactsRefreshed(facts) => self.facts = facts,
@@ -380,8 +371,6 @@ impl AppCore {
             }
             AppEvent::SteamRunningChanged(running) => {
                 self.steam_running = running;
-                // 隐窗是一次性合成动作：待决（WorkflowDone 后重读运行状态）且窗口仍可见时才产出一次；
-                // Steam 已退出或窗口已隐藏则仅清待决。
                 if self.pending_auto_hide && running && self.window_visible {
                     self.pending_auto_hide = false;
                     return vec![AppEffect::SetWindowVisible(false)];
@@ -400,10 +389,8 @@ impl AppCore {
                     return vec![AppEffect::SetWindowVisible(true)];
                 }
             }
-            // 镜像同步事件：存态即可（幂等；不产效果防回环）。
             AppEvent::WindowVisibleChanged(visible) => self.window_visible = visible,
             AppEvent::CommitPath(p) => {
-                // 唯一写入点：trim 单一职责归此（ADR-0020）。
                 self.steam_path = p.trim().to_string();
                 return vec![
                     AppEffect::RefreshFacts,

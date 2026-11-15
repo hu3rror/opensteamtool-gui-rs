@@ -115,7 +115,6 @@ impl CompatFlow {
         if self.path.as_deref() == Some(path.as_str()) {
             return Vec::new();
         }
-        // 路径变更推进代数：新会话重置全部状态（在途旧结果靠代数丢弃）。
         self.epoch.0 += 1;
         self.path = Some(path.clone());
         self.report = None;
@@ -138,7 +137,6 @@ impl CompatFlow {
         self.checking = false;
         self.report = Some(report.clone());
         let mut effects = Vec::new();
-        // 每代数一次网络刷新：含短路/乐观项且本代数尚未刷新才产出；产出后置位。
         if needs_network_refresh(&report) && !self.network_refreshed {
             self.network_refreshed = true;
             if let Some(path) = self.path.clone() {
@@ -161,7 +159,6 @@ impl CompatFlow {
         if epoch != self.epoch {
             return Vec::new();
         }
-        // 合并报告；不触碰预热标志与提示（刷新与预热并行、在途独立）。
         self.report = Some(report);
         Vec::new()
     }
@@ -177,7 +174,6 @@ impl CompatFlow {
             Ok(()) => {
                 self.precache_done = true;
                 self.precache_error = None;
-                // 复检：同代数快速体检（刷新预算已消耗 → 不再触发网络刷新）。
                 self.checking = true;
                 self.report = None;
                 let Some(path) = self.path.clone() else {
@@ -189,7 +185,6 @@ impl CompatFlow {
                 }]
             }
             Err(e) => {
-                // 自动失败静默（徽章保持 Online、手动入口保留）；手动失败就地显示。
                 if !was_auto {
                     self.precache_error = Some(e);
                 }
