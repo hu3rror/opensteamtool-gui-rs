@@ -66,7 +66,3 @@ The policy above is the baseline. The rules below make it concrete for this repo
 - Never delete load-bearing contracts: `SAFETY:` notes on `unsafe` blocks, decision tables/matrices, `panic`/error/idempotency semantics, compatibility and fallback constraints (`空串 = 未设置`, `缺省启用`), and ADR/issue/GLOSSARY pointers.
 - When trimming history (`此前…`, `#NN 回归修复` labels), drop the narration but keep the constraint and the pointer it carried.
 - A comment-cleanup diff touches comments only: no code edits and no reformatting of neighboring code.
-
-### Language
-
-- Comments and doc comments in this repo are written in Chinese — the established repo convention, which takes precedence over the English-comments default in the global `AGENTS.md`. Identifiers, CLI output, and commit messages stay in English.
