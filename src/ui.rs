@@ -57,7 +57,6 @@ const R_CTA: u8 = 10;
 const R_ROW: u8 = 10;
 const R_SMALL: u8 = 7;
 
-
 /// 图标+标签按钮的层级（几何表一行；数值与出处见父票 #54 决策 2；禁删，五行为定稿）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum ButtonTier {

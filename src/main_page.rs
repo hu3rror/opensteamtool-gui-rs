@@ -251,7 +251,6 @@ fn update_vm(input: &MainPageInput, busy: bool) -> UpdateVm {
     }
 }
 
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum IconKind {
     Play,
