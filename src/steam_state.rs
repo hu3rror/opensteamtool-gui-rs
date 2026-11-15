@@ -56,15 +56,15 @@ impl SteamState {
         {
             let mut sys = self.sys.lock().unwrap();
             refresh(&mut sys);
-            if !any_group_member(&sys, &dir) {
-                return Ok(());
-            }
             let pids: Vec<sysinfo::Pid> = sys
                 .processes()
                 .iter()
-                .filter(|(pid, p)| **pid != self_pid && is_group_member(p.name(), p.exe(), &dir))
+                .filter(|(pid, p)| **pid != self_pid && is_kill_target(p.name(), p.exe(), &dir))
                 .map(|(pid, _)| *pid)
                 .collect();
+            if pids.is_empty() {
+                return Ok(());
+            }
             for pid in pids {
                 if let Some(proc) = sys.process(pid) {
                     proc.kill();
@@ -101,7 +101,7 @@ impl SteamState {
         sys.processes().values().any(|p| {
             p.name().eq_ignore_ascii_case(STEAM_PROC)
                 && p.exe()
-                    .is_some_and(|path| is_group_member(p.name(), Some(path), &dir))
+                    .is_some_and(|path| is_group_member(p.name(), path, &dir))
         })
     }
 }
@@ -111,31 +111,32 @@ fn refresh(sys: &mut System) {
 }
 
 fn any_group_member(sys: &System, dir: &Path) -> bool {
-    sys.processes()
-        .values()
-        .any(|p| is_group_member(p.name(), p.exe(), dir))
+    sys.processes().values().any(|p| {
+        p.exe()
+            .is_some_and(|path| is_group_member(p.name(), path, dir))
+    })
 }
 
-/// exe 路径不可用时退回主进程名（steam.exe）匹配，避免误杀未知进程。
-fn is_group_member(
-    name: impl AsRef<std::ffi::OsStr>,
-    exe: Option<&Path>,
-    steam_dir: &Path,
-) -> bool {
+/// 路径前缀判定（`group_running` / `steam_exe_running` 口径）：`exe` 不可解析的实例不算本目录成员。
+fn is_group_member(name: impl AsRef<std::ffi::OsStr>, exe: &Path, steam_dir: &Path) -> bool {
     let name = name.as_ref();
     if name.eq_ignore_ascii_case(STEAM_EXCLUDED_PROC) {
         return false;
     }
+    let dir = steam_dir.to_string_lossy().to_lowercase();
+    let dir = dir.trim_end_matches('\\');
+    if is_drive_root(dir) {
+        return false;
+    }
+    let exe = exe.to_string_lossy().to_lowercase();
+    exe == dir || exe.starts_with(&format!("{dir}\\"))
+}
+
+/// 终止目标（`kill` 口径）：`exe` 不可解析时按主进程名回退，避免留下路径读不到的 Steam 实例。
+fn is_kill_target(name: impl AsRef<std::ffi::OsStr>, exe: Option<&Path>, steam_dir: &Path) -> bool {
+    let name = name.as_ref();
     match exe {
-        Some(path) => {
-            let dir = steam_dir.to_string_lossy().to_lowercase();
-            let dir = dir.trim_end_matches('\\');
-            if is_drive_root(dir) {
-                return false;
-            }
-            let exe = path.to_string_lossy().to_lowercase();
-            exe == dir || exe.starts_with(&format!("{dir}\\"))
-        }
+        Some(path) => is_group_member(name, path, steam_dir),
         None => name.eq_ignore_ascii_case(STEAM_PROC),
     }
 }
@@ -169,41 +170,37 @@ mod tests {
         let steam = Path::new(r"C:\Program Files (x86)\Steam");
         assert!(is_group_member(
             "steam.exe",
-            Some(Path::new(r"C:\Program Files (x86)\Steam\steam.exe")),
+            Path::new(r"C:\Program Files (x86)\Steam\steam.exe"),
             steam,
         ));
         assert!(is_group_member(
             "steamwebhelper.exe",
-            Some(Path::new(
-                r"C:\Program Files (x86)\Steam\steamwebhelper.exe"
-            )),
+            Path::new(r"C:\Program Files (x86)\Steam\steamwebhelper.exe"),
             steam,
         ));
         assert!(is_group_member(
             "crashhandler.exe",
-            Some(Path::new(
-                r"C:\Program Files (x86)\Steam\bin\cef\crashhandler.exe"
-            )),
+            Path::new(r"C:\Program Files (x86)\Steam\bin\cef\crashhandler.exe"),
             steam,
         ));
         assert!(is_group_member(
             "steam.exe",
-            Some(Path::new(r"c:\program files (x86)\steam\steam.exe")),
+            Path::new(r"c:\program files (x86)\steam\steam.exe"),
             steam,
         ));
         assert!(!is_group_member(
             "steam.exe",
-            Some(Path::new(r"C:\Program Files (x86)\SteamLibrary\steam.exe")),
+            Path::new(r"C:\Program Files (x86)\SteamLibrary\steam.exe"),
             steam,
         ));
         assert!(!is_group_member(
             "notepad.exe",
-            Some(Path::new(r"C:\Windows\System32\notepad.exe")),
+            Path::new(r"C:\Windows\System32\notepad.exe"),
             steam,
         ));
         assert!(!is_group_member(
             "foo.exe",
-            Some(Path::new(r"C:\Program Files (x86)\Steam1\foo.exe")),
+            Path::new(r"C:\Program Files (x86)\Steam1\foo.exe"),
             steam,
         ));
     }
@@ -213,25 +210,26 @@ mod tests {
         let steam = Path::new(r"C:\Program Files (x86)\Steam");
         assert!(!is_group_member(
             "steamservice.exe",
-            Some(Path::new(
-                r"C:\Program Files (x86)\Steam\bin\steamservice.exe"
-            )),
+            Path::new(r"C:\Program Files (x86)\Steam\bin\steamservice.exe"),
             steam,
         ));
         assert!(!is_group_member(
             "STEAMSERVICE.EXE",
-            Some(Path::new(
-                r"C:\Program Files (x86)\Steam\bin\steamservice.exe"
-            )),
+            Path::new(r"C:\Program Files (x86)\Steam\bin\steamservice.exe"),
             steam,
         ));
     }
 
     #[test]
-    fn group_member_fallback_to_name() {
+    fn kill_target_falls_back_to_name() {
         let steam = Path::new(r"C:\Program Files (x86)\Steam");
-        assert!(is_group_member("steam.exe", None, steam));
-        assert!(!is_group_member("steamwebhelper.exe", None, steam));
+        assert!(is_kill_target("steam.exe", None, steam));
+        assert!(!is_kill_target("steamwebhelper.exe", None, steam));
+        assert!(!is_kill_target(
+            "steam.exe",
+            Some(Path::new(r"D:\Other\Steam\steam.exe")),
+            steam,
+        ));
     }
 
     #[test]
@@ -239,14 +237,12 @@ mod tests {
         let root = Path::new(r"C:\");
         assert!(!is_group_member(
             "steam.exe",
-            Some(Path::new(r"C:\Windows\System32\notepad.exe")),
+            Path::new(r"C:\Windows\System32\notepad.exe"),
             root,
         ));
         assert!(!is_group_member(
             "steamwebhelper.exe",
-            Some(Path::new(
-                r"C:\Program Files (x86)\Steam\steamwebhelper.exe"
-            )),
+            Path::new(r"C:\Program Files (x86)\Steam\steamwebhelper.exe"),
             root,
         ));
     }

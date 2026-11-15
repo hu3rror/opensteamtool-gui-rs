@@ -210,11 +210,23 @@ mod tests {
     }
 
     #[cfg(windows)]
+    fn wait_group_running(steam: &SteamState, dir: &Path) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !steam.group_running(dir) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "进程组应在窗口内被识别"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    #[cfg(windows)]
     #[test]
     fn close_steam_falls_back_to_kill_when_graceful_shutdown_fails() {
         let (mut child, dir) = spawn_fake_steam("steam.exe");
         let steam = SteamState::new();
-        assert!(steam.group_running(&dir), "前置：进程组应在运行");
+        wait_group_running(&steam, &dir);
 
         close_steam_with_budget(&steam, &dir, Duration::from_millis(50)).unwrap();
 
@@ -230,7 +242,7 @@ mod tests {
         let (mut child_a, dir_a) = spawn_fake_steam("steamwebhelper.exe");
         let steam = SteamState::new();
         assert!(steam.alive(), "前置：系统内确有 steam.exe（在 dir_b）");
-        assert!(steam.group_running(&dir_a), "前置：dir_a 有孤儿进程在跑");
+        wait_group_running(&steam, &dir_a);
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while !steam.steam_exe_running(&dir_b) {
             assert!(
