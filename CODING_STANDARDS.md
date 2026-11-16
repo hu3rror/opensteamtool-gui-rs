@@ -66,3 +66,11 @@ The policy above is the baseline. The rules below make it concrete for this repo
 - Never delete load-bearing contracts: `SAFETY:` notes on `unsafe` blocks, decision tables/matrices, `panic`/error/idempotency semantics, compatibility and fallback constraints (`空串 = 未设置`, `缺省启用`), and ADR/issue/GLOSSARY pointers.
 - When trimming history (`此前…`, `#NN 回归修复` labels), drop the narration but keep the constraint and the pointer it carried.
 - A comment-cleanup diff touches comments only: no code edits and no reformatting of neighboring code.
+
+## Branch names
+
+`<type>/<topic>`: `type` is `feat`, `fix`, `refactor`, `chore` or `docs`; `topic` is lowercase kebab-case and names the change, not a person, an issue id or a date.
+
+- `feat/onlinefix-preset`, `fix/steam-group-membership`, `refactor/updater-split`.
+- One branch carries one change, so the type stays true; delete the branch when its work lands.
+- Throwaway work uses `prototype/<topic>` (`prototype/theme-palette`); prototype branches are never merged and stay local.
